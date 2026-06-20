@@ -13,7 +13,7 @@ import {
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
-import { buildPageView, type PageViewHandle } from "./viewer/PageView.ts";
+import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import { getZoom, resetZoom, setZoom, zoomIn, zoomOut } from "./zoom.ts";
 
@@ -119,7 +119,7 @@ fileInput.addEventListener("change", async () => {
   }
 });
 
-let mounted: PageViewHandle[] = [];
+let pageList: PageListHandle | null = null;
 
 function pushViewportSize(): void {
   setViewport(viewer.clientWidth, viewer.clientHeight);
@@ -133,8 +133,10 @@ async function renderDocument(
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
-  for (const h of mounted) h.dispose();
-  mounted = [];
+  if (pageList) {
+    pageList.dispose();
+    pageList = null;
+  }
   viewer.innerHTML = "";
 
   let dims: DocumentDimensions;
@@ -150,16 +152,15 @@ async function renderDocument(
   setDocumentBounds(maxWidthPt, maxHeightPt);
   pushViewportSize();
 
-  for (const pageDim of dims.pages) {
-    const handle = buildPageView(meta, pageDim.page, pageDim);
-    mounted.push(handle);
-    viewer.appendChild(handle.element);
-  }
+  pageList = buildPageList(meta, dims.pages, viewer);
+  viewer.appendChild(pageList.element);
 }
 
 async function showLibrary(): Promise<void> {
-  for (const h of mounted) h.dispose();
-  mounted = [];
+  if (pageList) {
+    pageList.dispose();
+    pageList = null;
+  }
   clearDocument();
   viewer.innerHTML = "";
   const library = await buildLibrary((doc) => {
