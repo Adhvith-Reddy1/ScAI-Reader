@@ -10,10 +10,17 @@ import {
   type PageText,
   type Rect,
 } from "../api.ts";
+import {
+  getQuery as getFindQuery,
+  registerPageAdapter,
+  subscribeQuery as subscribeFindQuery,
+  unregisterPage,
+} from "../findState.ts";
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
+import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
 import {
   buildLiveSelectionLayer,
   registerLiveSelection,
@@ -35,6 +42,7 @@ interface PageState {
   annotationLayer: SVGSVGElement | null;
   mouseupWired: boolean;
   currentDpi: number;
+  findHits: HTMLElement[];
 }
 
 export interface PageViewHandle {
@@ -68,6 +76,7 @@ export function buildPageView(
     annotationLayer: null,
     mouseupWired: false,
     currentDpi: 0,
+    findHits: [],
   };
 
   const applyDisplay = (): void => {
@@ -124,6 +133,9 @@ export function buildPageView(
       wireHighlightOnSelection(meta, pageNumber, wrap, state);
       state.mouseupWired = true;
     }
+
+    // Re-apply the current find query against the freshly-built text layer.
+    refreshFindMatches(pageNumber, wrap, state);
   };
 
   const init = async (): Promise<void> => {
@@ -153,14 +165,45 @@ export function buildPageView(
     applyDisplay();
     if (state.text) layout();
   });
+  const unsubFind = subscribeFindQuery(() => {
+    refreshFindMatches(pageNumber, wrap, state);
+  });
 
   return {
     element: wrap,
     dispose: () => {
       unsubZoom();
       unsubFit();
+      unsubFind();
+      unregisterPage(pageNumber);
     },
   };
+}
+
+function refreshFindMatches(
+  pageNumber: number,
+  wrap: HTMLElement,
+  state: PageState,
+): void {
+  const textLayer = wrap.querySelector<HTMLElement>(".text-layer");
+  if (!textLayer) return;
+  const hits = applyFindToTextLayer(textLayer, getFindQuery());
+  state.findHits = hits;
+  registerPageAdapter({
+    page: pageNumber,
+    count: hits.length,
+    scrollToMatchAndMark: (inPageIndex: number) => {
+      const span = state.findHits[inPageIndex];
+      if (!span) return;
+      markCurrent(span);
+      span.scrollIntoView({ block: "center", behavior: "auto" });
+    },
+    clearActiveMark: () => {
+      // Removing only THIS page's current mark; markCurrent(null) elsewhere
+      // would clear the new one we're about to set. So scope to our hits.
+      for (const span of state.findHits) span.classList.remove("find-match-current");
+    },
+  });
 }
 
 async function refreshAnnotations(

@@ -10,6 +10,7 @@ import {
   setDocumentBounds,
   setViewport,
 } from "./fit.ts";
+import { buildFindBar } from "./FindBar.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
@@ -51,6 +52,16 @@ buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
 
+const findBar = buildFindBar();
+viewer.appendChild(findBar.element);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && findBar.isOpen()) {
+    e.preventDefault();
+    findBar.hide();
+  }
+});
+
 subscribeHighlightMode((s) => {
   document.documentElement.dataset.highlightActive = String(s.active);
 });
@@ -64,6 +75,13 @@ window.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() === "s") {
     e.preventDefault();
     toast("Highlights save automatically — no manual save needed.");
+    return;
+  }
+
+  // Cmd/Ctrl+F: open the find bar (Chrome/Edge style in-page find).
+  if (e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    findBar.show();
     return;
   }
 

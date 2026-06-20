@@ -504,6 +504,69 @@ html[data-highlight-active="true"] .text-column {
   margin: 8px 4px;
 }
 
+/* Floating find-in-page bar (Cmd-F). Sticks to the top-right corner of the
+   viewer; doesn't push content. Hidden by default; toggled via FindBar.show/hide. */
+.find-bar {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  width: max-content;
+  /* Pull right so it floats in the top-right of the viewer's scrolling area. */
+  float: right;
+}
+.find-bar[hidden] { display: none; }
+.find-bar-input {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  outline: none;
+  min-width: 180px;
+}
+.find-bar-input::-webkit-search-cancel-button { display: none; }
+.find-bar-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+  text-align: right;
+}
+.find-bar button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.find-bar button:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.find-bar-step { font-size: 18px; line-height: 1; }
+.find-bar-close { font-size: 18px; line-height: 1; }
+
+/* Find matches: every span containing the query gets .find-match; the one
+   the user is currently navigating to gets .find-match-current. Backgrounds
+   sit behind the transparent text so the rasterized page text shows through. */
+.text-run.find-match {
+  background: rgba(255, 235, 59, 0.45);
+}
+.text-run.find-match-current {
+  background: rgba(255, 152, 0, 0.65);
+  outline: 1px solid rgba(0, 0, 0, 0.2);
+}
+
 /* Toast for transient feedback (Cmd-S intercept, future "Saved" messages). */
 .toast {
   position: fixed;
