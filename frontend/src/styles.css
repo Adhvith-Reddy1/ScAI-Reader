@@ -102,6 +102,58 @@ body {
 }
 .sidebar-panel[hidden] { display: none; }
 
+/* Outline panel — recursive tree of bookmarks. */
+.outline-panel {
+  padding: 8px 4px;
+  font-size: 13px;
+}
+.outline-empty {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  margin: 24px 12px;
+}
+.outline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 4px;
+  color: var(--text);
+}
+.outline-row-clickable { cursor: pointer; }
+.outline-row-clickable:hover { background: rgba(255, 255, 255, 0.06); }
+.outline-row-inert { color: var(--muted); }
+.outline-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 10px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.outline-toggle:hover { color: var(--text); }
+.outline-toggle-placeholder { cursor: default; visibility: hidden; }
+.outline-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outline-page {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.outline-children[hidden] { display: none; }
+
 .empty { color: var(--muted); margin: 80px auto 0; font-size: 14px; text-align: center; }
 
 /* Width and height are set inline by PageView (per-page, derived from

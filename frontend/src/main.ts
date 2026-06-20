@@ -13,9 +13,10 @@ import {
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
+import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
-import { initSidebar } from "./sidebar.ts";
+import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import {
@@ -39,6 +40,7 @@ const sidebar = document.getElementById("sidebar") as HTMLElement;
 
 initViewerZoom(viewer);
 initSidebar(sidebar);
+mountSidebarPanel("outline", "Outline", buildOutlinePanel());
 
 buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
@@ -217,7 +219,7 @@ async function renderDocument(
 
   pageList = buildPageList(meta, dims.pages, viewer);
   viewer.appendChild(pageList.element);
-  setActivePageList(pageList, meta.page_count);
+  setActivePageList(pageList, meta.page_count, meta.id);
 }
 
 async function showLibrary(): Promise<void> {

@@ -131,6 +131,19 @@ export async function listAnnotations(
   return r.json() as Promise<Annotation[]>;
 }
 
+export interface OutlineNode {
+  title: string;
+  page: number | null;
+  children: OutlineNode[];
+}
+
+export async function fetchOutline(docId: string): Promise<OutlineNode[]> {
+  const r = await fetch(`/documents/${docId}/outline`);
+  if (!r.ok) throw new Error(`outline fetch failed (${r.status})`);
+  const body = (await r.json()) as { doc_id: string; nodes: OutlineNode[] };
+  return body.nodes;
+}
+
 export async function deleteAnnotation(
   docId: string,
   annotationId: string,

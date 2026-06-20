@@ -38,21 +38,21 @@ afterEach(() => {
 
 describe("pageNav state machine", () => {
   it("notifies subscribers on activate and on currentPage emit", () => {
-    const seen: ({ current: number; total: number } | null)[] = [];
+    const seen: ({ doc_id: string; current: number; total: number } | null)[] = [];
     subscribePageInfo((info) => seen.push(info));
 
     const list = fakePageList(1);
-    setActivePageList(list, 10);
-    expect(seen[seen.length - 1]).toEqual({ current: 1, total: 10 });
+    setActivePageList(list, 10, "doc1");
+    expect(seen[seen.length - 1]).toEqual({ doc_id: "doc1", current: 1, total: 10 });
 
     list.emitCurrent(4);
-    expect(seen[seen.length - 1]).toEqual({ current: 4, total: 10 });
+    expect(seen[seen.length - 1]).toEqual({ doc_id: "doc1", current: 4, total: 10 });
   });
 
   it("emits null on clear", () => {
-    const seen: ({ current: number; total: number } | null)[] = [];
+    const seen: ({ doc_id: string; current: number; total: number } | null)[] = [];
     subscribePageInfo((info) => seen.push(info));
-    setActivePageList(fakePageList(), 3);
+    setActivePageList(fakePageList(), 3, "doc1");
     setActivePageList(null);
     expect(seen[seen.length - 1]).toBe(null);
   });
