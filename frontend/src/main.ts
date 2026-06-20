@@ -17,7 +17,14 @@ import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
-import { getZoom, resetZoom, setZoom, zoomIn, zoomOut } from "./zoom.ts";
+import {
+  initViewerZoom,
+  resetZoomAtViewerCenter,
+  zoomAroundClientPoint,
+  zoomInAtViewerCenter,
+  zoomOutAtViewerCenter,
+} from "./viewerZoom.ts";
+import { getZoom, setZoom } from "./zoom.ts";
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const viewer = document.getElementById("viewer") as HTMLElement;
@@ -27,6 +34,8 @@ const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
 const pageIndicatorSlot = document.getElementById(
   "page-indicator-slot",
 ) as HTMLElement;
+
+initViewerZoom(viewer);
 
 buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
@@ -48,16 +57,18 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Edge-style zoom shortcuts: Cmd/Ctrl + +, =, -, _, 0.
+  // Edge-style zoom shortcuts: Cmd/Ctrl + +, =, -, _, 0. All anchored at
+  // the viewer center so the visible content stays put across zoom steps —
+  // without this, on a 5M-px doc a single +/− shifts the view by 100+ pages.
   if (e.key === "+" || e.key === "=") {
     e.preventDefault();
-    zoomIn();
+    zoomInAtViewerCenter();
   } else if (e.key === "-" || e.key === "_") {
     e.preventDefault();
-    zoomOut();
+    zoomOutAtViewerCenter();
   } else if (e.key === "0") {
     e.preventDefault();
-    resetZoom();
+    resetZoomAtViewerCenter();
   }
 });
 
@@ -77,50 +88,6 @@ let pendingPinchZoom: number | null = null;
 let currentGestureAnchor: { clientX: number; clientY: number } | null = null;
 let gestureEndTimer: ReturnType<typeof setTimeout> | null = null;
 const GESTURE_END_MS = 200;
-
-// Apply a zoom while keeping the document point currently under (clientX,
-// clientY) anchored there. Without this, the viewer scales from its top-left
-// origin and content visibly drifts up/left as you pinch in — which feels
-// like the page is scrolling away from the cursor.
-function zoomAroundClientPoint(
-  clientX: number,
-  clientY: number,
-  newZoom: number,
-): void {
-  const oldZoom = getZoom();
-  const rect = viewer.getBoundingClientRect();
-
-  // Clamp the anchor to the viewer's visible area. The pinch event's
-  // clientX/Y is just the cursor position — which may be over the toolbar
-  // (e.g., the user just pressed Enter in the page-jump input). Anchoring
-  // to a point above the viewer is mathematically valid but visually wrong:
-  // at scrollTop ≈ 1.5M (page 1000 of a textbook), a 50px negative offset
-  // pulls the view dozens of pixels per tick. Clamping snaps the anchor
-  // back into the visible content area.
-  const offsetX = clamp(clientX - rect.left, 0, viewer.clientWidth);
-  const offsetY = clamp(clientY - rect.top, 0, viewer.clientHeight);
-  const contentX = viewer.scrollLeft + offsetX;
-  const contentY = viewer.scrollTop + offsetY;
-
-  setZoom(newZoom);
-  // setZoom clamps to [MIN_ZOOM, MAX_ZOOM]; use the actual applied factor so
-  // a no-op zoom (already at the cap) doesn't move the scroll position.
-  const ratio = oldZoom === 0 ? 1 : getZoom() / oldZoom;
-
-  // Read scrollHeight/scrollWidth — this forces a layout flush so the
-  // dimensions reflect the just-zoomed page sizes, AND gives us the precise
-  // max scroll values to clamp against. The browser's own clamp can be
-  // off by a few pixels per tick on long docs (it uses the pre-zoom
-  // scrollHeight if we let it write before reading), so we clamp ourselves.
-  const maxScrollLeft = Math.max(0, viewer.scrollWidth - viewer.clientWidth);
-  const maxScrollTop = Math.max(0, viewer.scrollHeight - viewer.clientHeight);
-  viewer.scrollLeft = clamp(contentX * ratio - offsetX, 0, maxScrollLeft);
-  viewer.scrollTop = clamp(contentY * ratio - offsetY, 0, maxScrollTop);
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
-}
 
 const applyPendingPinchZoom = () => {
   if (pendingPinchZoom == null) return;
@@ -180,13 +147,24 @@ window.addEventListener("gesturestart", (e) => {
   (e as Event).preventDefault();
   gestureStartZoom = getZoom();
 });
+let safariGestureAnchor: { clientX: number; clientY: number } | null = null;
 window.addEventListener("gesturechange", (e) => {
   (e as Event).preventDefault();
   const ge = e as unknown as { scale: number; clientX: number; clientY: number };
   if (typeof ge.scale !== "number" || !isFinite(ge.scale) || ge.scale <= 0) return;
-  zoomAroundClientPoint(ge.clientX, ge.clientY, gestureStartZoom * ge.scale);
+  if (safariGestureAnchor == null) {
+    safariGestureAnchor = { clientX: ge.clientX, clientY: ge.clientY };
+  }
+  zoomAroundClientPoint(
+    safariGestureAnchor.clientX,
+    safariGestureAnchor.clientY,
+    gestureStartZoom * ge.scale,
+  );
 });
-window.addEventListener("gestureend", (e) => (e as Event).preventDefault());
+window.addEventListener("gestureend", (e) => {
+  (e as Event).preventDefault();
+  safariGestureAnchor = null;
+});
 
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
