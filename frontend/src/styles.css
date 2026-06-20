@@ -361,6 +361,24 @@ html[data-highlight-active="true"] .text-column {
   cursor: cell;
 }
 
+/* Erase mode: let clicks pass through the text layer to the annotation layer
+   beneath. Otherwise the text-column (pointer-events: auto, for selection)
+   intercepts every click on top of a highlight and the eraser silently does
+   nothing. Also disable user-select so drag-erasing doesn't accidentally
+   start a text selection. */
+html[data-erase-active="true"] .text-column {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+html[data-erase-active="true"] .annotation-layer .annotation {
+  cursor: crosshair;
+}
+html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
+  stroke: rgba(244, 67, 54, 0.9);
+  stroke-width: 2;
+}
+
 /* Erase button — same shape as highlight, no popover. */
 .erase-button {
   display: inline-flex;
