@@ -61,6 +61,15 @@ const applyPendingPinchZoom = () => {
   setZoom(pendingPinchZoom);
   pendingPinchZoom = null;
 };
+const scheduleZoomApply = (): void => {
+  // rAF is paused on hidden tabs. Fall back to setTimeout so a pinch begun
+  // just before the user switches tabs still applies.
+  if (document.visibilityState === "visible") {
+    requestAnimationFrame(applyPendingPinchZoom);
+  } else {
+    setTimeout(applyPendingPinchZoom, 16);
+  }
+};
 window.addEventListener(
   "wheel",
   (e) => {
