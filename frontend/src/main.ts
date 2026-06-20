@@ -79,7 +79,7 @@ window.addEventListener(
     // setZoom call so we rebuild text/annotation layers at most once per frame.
     const factor = Math.exp(-e.deltaY / 150);
     const target = (pendingPinchZoom ?? getZoom()) * factor;
-    if (pendingPinchZoom == null) requestAnimationFrame(applyPendingPinchZoom);
+    if (pendingPinchZoom == null) scheduleZoomApply();
     pendingPinchZoom = target;
   },
   { passive: false },
