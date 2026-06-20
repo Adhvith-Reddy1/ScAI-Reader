@@ -69,10 +69,45 @@ window.addEventListener("keydown", (e) => {
 // `passive: false` is required so preventDefault() can suppress the browser's
 // own page-zoom on the pinch.
 let pendingPinchZoom: number | null = null;
+let pendingPinchAnchor: { clientX: number; clientY: number } | null = null;
+
+// Apply a zoom while keeping the document point currently under (clientX,
+// clientY) anchored there. Without this, the viewer scales from its top-left
+// origin and content visibly drifts up/left as you pinch in — which feels
+// like the page is scrolling away from the cursor.
+function zoomAroundClientPoint(
+  clientX: number,
+  clientY: number,
+  newZoom: number,
+): void {
+  const oldZoom = getZoom();
+  const rect = viewer.getBoundingClientRect();
+  const offsetX = clientX - rect.left;
+  const offsetY = clientY - rect.top;
+  const contentX = viewer.scrollLeft + offsetX;
+  const contentY = viewer.scrollTop + offsetY;
+
+  setZoom(newZoom);
+  // setZoom clamps to [MIN_ZOOM, MAX_ZOOM]; use the actual applied factor so
+  // a no-op zoom (already at the cap) doesn't move the scroll position.
+  const ratio = oldZoom === 0 ? 1 : getZoom() / oldZoom;
+  viewer.scrollLeft = contentX * ratio - offsetX;
+  viewer.scrollTop = contentY * ratio - offsetY;
+}
+
 const applyPendingPinchZoom = () => {
   if (pendingPinchZoom == null) return;
-  setZoom(pendingPinchZoom);
+  if (pendingPinchAnchor) {
+    zoomAroundClientPoint(
+      pendingPinchAnchor.clientX,
+      pendingPinchAnchor.clientY,
+      pendingPinchZoom,
+    );
+  } else {
+    setZoom(pendingPinchZoom);
+  }
   pendingPinchZoom = null;
+  pendingPinchAnchor = null;
 };
 const scheduleZoomApply = (): void => {
   // rAF is paused on hidden tabs. Fall back to setTimeout so a pinch begun
@@ -94,6 +129,9 @@ window.addEventListener(
     const target = (pendingPinchZoom ?? getZoom()) * factor;
     if (pendingPinchZoom == null) scheduleZoomApply();
     pendingPinchZoom = target;
+    // Capture the latest cursor position; the most recent one before the rAF
+    // fires is the right anchor.
+    pendingPinchAnchor = { clientX: e.clientX, clientY: e.clientY };
   },
   { passive: false },
 );
@@ -107,9 +145,9 @@ window.addEventListener("gesturestart", (e) => {
 });
 window.addEventListener("gesturechange", (e) => {
   (e as Event).preventDefault();
-  const scale = (e as unknown as { scale: number }).scale;
-  if (typeof scale !== "number" || !isFinite(scale) || scale <= 0) return;
-  setZoom(gestureStartZoom * scale);
+  const ge = e as unknown as { scale: number; clientX: number; clientY: number };
+  if (typeof ge.scale !== "number" || !isFinite(ge.scale) || ge.scale <= 0) return;
+  zoomAroundClientPoint(ge.clientX, ge.clientY, gestureStartZoom * ge.scale);
 });
 window.addEventListener("gestureend", (e) => (e as Event).preventDefault());
 
