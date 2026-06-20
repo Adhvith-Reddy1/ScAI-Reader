@@ -56,19 +56,42 @@ export function zoomAroundClientPoint(
   const insideY = rawOffsetY >= 0 && rawOffsetY <= viewer.clientHeight;
   const offsetX = insideX && insideY ? rawOffsetX : viewer.clientWidth / 2;
   const offsetY = insideX && insideY ? rawOffsetY : viewer.clientHeight / 2;
-  const contentX = viewer.scrollLeft + offsetX;
-  const contentY = viewer.scrollTop + offsetY;
+
+  // Anchor by preserving the cursor's FRACTION through the scrollable area
+  // rather than its absolute content position. This is exact across zoom
+  // in/out cycles regardless of how much of the scrollHeight is taken up
+  // by non-scaling content (32px page gaps, 24px viewer padding) — they
+  // make up ~3% of scrollHeight on a long doc, and the absolute-position
+  // formula treats them as scaling, drifting the anchor by 0.6+ pages
+  // per zoom step.
+  //
+  // scrollHeight and scrollWidth must be read BEFORE setZoom (for the old
+  // fraction) and AFTER (for the new target position).
+  const oldScrollHeight = viewer.scrollHeight;
+  const oldScrollWidth = viewer.scrollWidth;
+  const fracY = oldScrollHeight > 0
+    ? (viewer.scrollTop + offsetY) / oldScrollHeight
+    : 0;
+  const fracX = oldScrollWidth > 0
+    ? (viewer.scrollLeft + offsetX) / oldScrollWidth
+    : 0;
 
   setZoom(newZoom);
-  const ratio = oldZoom === 0 ? 1 : getZoom() / oldZoom;
 
-  // Read scrollHeight/scrollWidth — this forces a layout flush so the
-  // dimensions reflect the just-zoomed page sizes, AND gives us precise
-  // max scroll values to clamp against.
-  const maxScrollLeft = Math.max(0, viewer.scrollWidth - viewer.clientWidth);
-  const maxScrollTop = Math.max(0, viewer.scrollHeight - viewer.clientHeight);
-  viewer.scrollLeft = clamp(contentX * ratio - offsetX, 0, maxScrollLeft);
-  viewer.scrollTop = clamp(contentY * ratio - offsetY, 0, maxScrollTop);
+  // Touch scrollHeight to force layout, then clamp the assignment ourselves
+  // (the browser's clamp can be off by a few px on long docs when scrollTop
+  // is written before layout settles).
+  const newScrollHeight = viewer.scrollHeight;
+  const newScrollWidth = viewer.scrollWidth;
+  const maxScrollLeft = Math.max(0, newScrollWidth - viewer.clientWidth);
+  const maxScrollTop = Math.max(0, newScrollHeight - viewer.clientHeight);
+  viewer.scrollLeft = clamp(fracX * newScrollWidth - offsetX, 0, maxScrollLeft);
+  viewer.scrollTop = clamp(fracY * newScrollHeight - offsetY, 0, maxScrollTop);
+
+  // oldZoom is read just to allow callers to detect a no-op zoom; setZoom
+  // already clamped to [MIN, MAX], so if newZoom was out of range we still
+  // adjusted scroll for whatever zoom actually applied.
+  void oldZoom;
 }
 
 export function zoomAroundViewerCenter(newZoom: number): void {
