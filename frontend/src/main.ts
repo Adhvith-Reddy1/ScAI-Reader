@@ -91,6 +91,12 @@ function zoomAroundClientPoint(
   // setZoom clamps to [MIN_ZOOM, MAX_ZOOM]; use the actual applied factor so
   // a no-op zoom (already at the cap) doesn't move the scroll position.
   const ratio = oldZoom === 0 ? 1 : getZoom() / oldZoom;
+  // Force layout to commit so scrollHeight reflects the new (zoomed) sizes
+  // before we assign scrollTop. Without this, the browser clamps our target
+  // against the stale pre-zoom scrollHeight on very long docs (2500+ pages)
+  // and the view ends up a few hundred pixels higher than it should — looks
+  // like the page is "scrolling up" mid-pinch.
+  void viewer.scrollHeight;
   viewer.scrollLeft = contentX * ratio - offsetX;
   viewer.scrollTop = contentY * ratio - offsetY;
 }

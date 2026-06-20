@@ -49,6 +49,11 @@ body {
   flex: 1;
   overflow: auto;
   padding: 24px;
+  /* Disable the browser's "keep visible content stable" heuristic. We do our
+     own scroll anchoring in zoomAroundClientPoint, and the heuristic fights
+     it (drifts the page up) on very long documents when many off-screen
+     placeholders resize at once. */
+  overflow-anchor: none;
 }
 
 .empty { color: var(--muted); margin: 80px auto 0; font-size: 14px; text-align: center; }
