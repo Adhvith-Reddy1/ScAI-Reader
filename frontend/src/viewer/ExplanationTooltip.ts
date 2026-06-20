@@ -133,6 +133,14 @@ function position(anchorRect: DOMRect): void {
 
   el.style.left = `${x + window.scrollX}px`;
   el.style.top = `${y + window.scrollY}px`;
+  console.log("[explain] tooltip positioned", {
+    left: el.style.left,
+    top: el.style.top,
+    width: el.style.width,
+    display: el.style.display,
+    classList: el.className,
+    bodyText: bodyEl?.textContent?.slice(0, 80),
+  });
 }
 
 function render(annotationId: string): void {
@@ -218,6 +226,11 @@ function setupWrapListeners(wrap: HTMLElement): WrapState {
     const hitId = hit?.annotationId ?? null;
 
     if (hitId === pendingAnnotationId) return; // unchanged
+    console.log("[explain] hover change", {
+      hitId,
+      cursor: { x: e.clientX, y: e.clientY },
+      registered: [...state.registrations.keys()],
+    });
     pendingAnnotationId = hitId;
 
     if (hit) {
@@ -229,8 +242,10 @@ function setupWrapListeners(wrap: HTMLElement): WrapState {
       }
       const reg = hit;
       const anchorRect = reg.group.getBoundingClientRect();
+      console.log("[explain] dwell start", { id: reg.annotationId, anchorRect });
       dwellTimer = window.setTimeout(() => {
         dwellTimer = null;
+        console.log("[explain] dwell fired, showing tooltip");
         void show(reg, anchorRect);
       }, DWELL_MS);
     } else {
@@ -273,12 +288,14 @@ export function bindBlueAnnotation(
   text: string | null,
 ): () => void {
   const wrap = group.closest<HTMLElement>(".page-wrap");
+  console.log("[explain] bindBlueAnnotation", { annotationId, wrap, text });
   if (!wrap) return () => {};
 
   let state = wrapStates.get(wrap);
   if (!state) {
     state = setupWrapListeners(wrap);
     wrapStates.set(wrap, state);
+    console.log("[explain] wrap listeners attached");
   }
   state.registrations.set(annotationId, { group, doc, annotationId, text });
 
