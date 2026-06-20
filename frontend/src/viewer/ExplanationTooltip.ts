@@ -20,7 +20,7 @@ import {
   subscribeExplanation,
 } from "../explanationStore.ts";
 
-const DWELL_MS = 500;
+const DWELL_MS = 200;
 const GAP_PX = 8;
 const TOOLTIP_WIDTH_PX = 360;
 
