@@ -17,6 +17,7 @@ backend/.benchmarks/
 # Frontend
 frontend/dist/
 frontend/.vite/
+frontend/tsconfig.tsbuildinfo
 
 # Test artifacts (diff images on failures)
 backend/tests/_failures/

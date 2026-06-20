@@ -13,6 +13,8 @@ import {
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
+import { buildPageIndicator } from "./PageIndicator.ts";
+import { setActivePageList } from "./pageNav.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import { getZoom, resetZoom, setZoom, zoomIn, zoomOut } from "./zoom.ts";
@@ -22,9 +24,13 @@ const viewer = document.getElementById("viewer") as HTMLElement;
 const docInfo = document.getElementById("doc-info") as HTMLElement;
 const buttonSlot = document.getElementById("highlight-button-slot") as HTMLElement;
 const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
+const pageIndicatorSlot = document.getElementById(
+  "page-indicator-slot",
+) as HTMLElement;
 
 buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
+pageIndicatorSlot.appendChild(buildPageIndicator());
 
 subscribeHighlightMode((s) => {
   document.documentElement.dataset.highlightActive = String(s.active);
@@ -137,6 +143,7 @@ async function renderDocument(
     pageList.dispose();
     pageList = null;
   }
+  setActivePageList(null);
   viewer.innerHTML = "";
 
   let dims: DocumentDimensions;
@@ -154,6 +161,7 @@ async function renderDocument(
 
   pageList = buildPageList(meta, dims.pages, viewer);
   viewer.appendChild(pageList.element);
+  setActivePageList(pageList, meta.page_count);
 }
 
 async function showLibrary(): Promise<void> {
@@ -161,6 +169,7 @@ async function showLibrary(): Promise<void> {
     pageList.dispose();
     pageList = null;
   }
+  setActivePageList(null);
   clearDocument();
   viewer.innerHTML = "";
   const library = await buildLibrary((doc) => {
