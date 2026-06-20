@@ -1,16 +1,30 @@
 # ScAI-Reader
 
-A Python PDF reader, written from scratch — eventually. **Phase 1 ships a working web viewer** (FastAPI backend + TypeScript/Vite frontend) backed by `pypdfium2` (the same PDFium engine Chrome and Edge use). Future phases progressively replace pieces of the backend with from-scratch implementations, validated against the same contract test suite.
+**An AI-augmented PDF reader for academic papers.** FastAPI backend + TypeScript/Vite frontend, `pypdfium2` for rendering, Claude wired in for in-context understanding. The goal is to keep you *in* the paper: instead of bouncing to Google every time an unfamiliar term or a dense passage shows up, the model answers in a tooltip from inside the document, with the full paper as context.
 
-Plan: [`/Users/areddy/.claude/plans/i-want-to-build-snoopy-hippo.md`](../.claude/plans/i-want-to-build-snoopy-hippo.md)
+## What it does today
+
+- **Library + persistent state** — uploads keyed by SHA-256; highlights and AI explanations survive close/reopen and re-uploads.
+- **Five-color highlight palette** with column-aware drag selection, zoom anchoring, and an erase mode.
+- **Outline sidebar** — closable tabbed shell driven by the PDF's own outline.
+- **Find-in-page** — Cmd-F bar with prev/next navigation across loaded pages (SQLite FTS5 on the backend).
+- **AI hover explanations on blue highlights:**
+  - Highlight a short term → Claude Sonnet 4.6 returns a tight definition (term first, then a clause of paper-specific context only if needed).
+  - Highlight a sentence → Claude Opus 4.7 returns a two-sentence plain-language restatement.
+  - Routing is server-side: a word-count + terminal-punctuation heuristic picks definition vs. explanation.
+  - Streamed over SSE so the tooltip fills in live; cached in SQLite so every later hover is free (zero LLM calls).
+  - The PDF is sent with `cache_control: ephemeral`, so prompt caching makes the 2nd+ call per document cheap.
 
 ## Run it
+
+The AI features need an `ANTHROPIC_API_KEY`. Everything else (highlights, outline, find) works without one.
 
 ```bash
 # Backend
 cd backend
 python3.12 -m venv .venv
 .venv/bin/pip install -e ".[test]"
+export ANTHROPIC_API_KEY=sk-ant-...
 .venv/bin/uvicorn app.main:app --reload --port 8000
 
 # Frontend (separate shell)
@@ -19,54 +33,64 @@ npm install
 npm run dev     # http://localhost:5173
 ```
 
-The Vite dev server proxies `/documents` and `/healthz` to the backend on `:8000`.
-
-## Run the tests
-
-```bash
-./scripts/ci.sh                           # everything
-cd backend && .venv/bin/pytest            # backend only
-cd backend && .venv/bin/pytest --update-goldens   # refresh visual goldens
-```
-
-42 tests across four layers — see Testing below.
+The Vite dev server proxies `/documents`, `/healthz`, and the SSE endpoints to the backend on `:8000`.
 
 ## Architecture
 
 ```
-Browser ◄──── HTTP ────► FastAPI ────► PdfBackend (interface)
-                            │                │
-                            ▼                ▼
-                         SQLite     PdfiumBackend (v1, pypdfium2)
-                                            │
-                                            └─► (future) CustomBackend
-                                                tokenizer → renderer
+                          Anthropic API
+                              ▲
+                              │ messages.stream (SSE)
+                              │ PDF + cache_control=ephemeral
+                              │
+Browser ◄──── HTTP ────► FastAPI ────► PdfiumBackend (pypdfium2)
+                              │
+                              ▼
+                            SQLite
+                            ├── documents       (SHA-256 keyed)
+                            ├── annotations      (highlights)
+                            ├── explanations     (AI cache, FK→annotation)
+                            ├── page_dimensions  (zoom/layout)
+                            └── pages_fts         (find-in-page, FTS5)
 ```
 
-Everything touching PDF internals goes through `app.pdf.backend.PdfBackend`. The single most important file in the repo is `backend/tests/contract/test_backend_contract.py` — it parametrizes over every backend implementation and locks behavior, so the hybrid replacement path stays honest.
+PDF internals go through `app.pdf.backend.PdfBackend` so an alternate backend can slot in behind the same contract tests.
 
-## Testing — no human in the loop
+### Key flow: blue highlight → AI explanation
 
-| Layer | Where | What it asserts |
+1. Drag-select in blue mode. `PageView.maybeAutoSaveHighlight` captures the selection text and `POST`s the highlight (`color: blue` + text).
+2. On success it fires `POST /documents/{id}/annotations/{ann_id}/explain`. The server classifies definition vs. explanation, opens a stream to Claude with the PDF attached, and relays tokens as `data: {"type":"delta",...}` SSE frames.
+3. On `done`, the server writes `status="complete"` + the text into `explanations`.
+4. Hovering for 200ms anchors a tooltip above the highlight. Its content is pre-seeded into `explanationStore` from the inline `explanation` field on `GET /annotations` — so reopens cost zero LLM calls and zero extra requests.
+
+## Tests
+
+```bash
+./scripts/ci.sh                                    # everything
+cd backend && .venv/bin/pytest                     # backend
+cd backend && .venv/bin/pytest --update-goldens    # refresh visual goldens
+cd frontend && npm test                            # vitest
+```
+
+| Layer | Where | Asserts |
 |---|---|---|
-| Unit | `backend/tests/unit/`, `frontend/src/*.test.ts` (later) | Pure logic |
-| Contract | `backend/tests/contract/test_backend_contract.py` | The `PdfBackend` interface spec — runs against every backend |
-| Visual golden | `backend/tests/contract/test_visual_goldens.py` + `tests/goldens/` | Rendered PNGs match committed baselines via SHA-256 → pixel-perfect → SSIM ladder |
-| Integration | `backend/tests/integration/` | Full FastAPI stack via TestClient with isolated tmp dirs |
-| (Phase 5+) E2E | Playwright | Browser-driven user flows |
-| (Phase 7) Perf | pytest-benchmark | Latency thresholds |
-| (Phase 7) Fuzz | nightly | Crash/hang/leak detection on bad-PDF corpus |
+| Unit (backend) | `backend/tests/unit/` | Column detection, outline tree, storage paths |
+| Unit (frontend) | `frontend/src/**/*.test.ts` | Selection geometry, coord transforms, sidebar/highlight/erase/find state |
+| Contract | `backend/tests/contract/test_backend_contract.py` | The `PdfBackend` interface spec, run against every backend |
+| Visual golden | `backend/tests/contract/test_visual_goldens.py` | Rendered PNGs vs. baselines (SHA-256 → pixel → SSIM ladder) |
+| Integration | `backend/tests/integration/` | FastAPI stack: annotations, documents, search, outline, concurrent renders |
 
-Goldens are regenerated explicitly with `pytest --update-goldens` — drift is never silent.
+The AI path is not yet covered end-to-end (would need a live key in CI). The classifier heuristic, SSE framing, and persistence are each testable in isolation and worth adding.
 
-## Phase 1 status: complete
+## Configuration
 
-- [x] `PdfBackend` abstract interface + types
-- [x] `PdfiumBackend` implementation (page_count, metadata, render_page, get_page_text, get_outline)
-- [x] SQLite storage + SHA-256-keyed file cache + render cache
-- [x] FastAPI routes: `POST /documents`, `GET /documents`, `GET /documents/{id}`, `GET /documents/{id}/pages/{n}.png?dpi=…`, `GET /healthz`
-- [x] Minimal frontend: upload PDF, view all pages
-- [x] Contract suite (14 tests), visual goldens (8 tests, 12 PNGs), integration (10 tests), unit (10 tests)
-- [x] CI script that runs everything
+| Env var | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Required for `/explain`. Without it the SSE stream emits one error event and the tooltip shows "Explanation unavailable". |
+| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, and the render cache. Defaults to `./data`. |
 
-Next: Phase 2 — virtualized scroll + zoom + multi-page navigation.
+## Roadmap
+
+- **Figure explanations** — double-click a figure → concise AI walkthrough (next up; under design).
+- Methods-aware explanations that pull in the relevant methods section.
+- Automated coverage for the AI explanation path.

@@ -31,10 +31,16 @@ MODEL_EXPLANATION = "claude-opus-4-7"
 
 SYSTEM_DEFINITION = (
     "You are a glossary tooltip inside an academic PDF reader. The user "
-    "highlighted a short term. Give the single most useful sentence "
-    "defining that term as used in this paper. Hard limit: 25 words, one "
-    "sentence, no preamble, no examples, no qualifiers. Assume a "
-    "technically literate reader. The tooltip is a glance — not a read."
+    "highlighted a term. Your job is to define the term — not to describe "
+    "how the paper uses it. Lead with what the term itself means, in the "
+    "general technical sense. Only after the definition is clear should "
+    "you add a short clause connecting it to the paper's usage, and only "
+    "if that connection is non-obvious. If the term has no general meaning "
+    "and is paper-specific (e.g. a coined name like 'Virtual Lab'), say "
+    "so and define it from the paper. Hard limit: 35 words, 1-2 sentences, "
+    "no preamble. Assume a technically literate reader. A reader who "
+    "doesn't know the term should walk away knowing it; a reader who does "
+    "should learn nothing new from the first clause and that is fine."
 )
 
 SYSTEM_EXPLANATION = (
