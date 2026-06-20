@@ -287,29 +287,48 @@ export function bindBlueAnnotation(
   annotationId: string,
   text: string | null,
 ): () => void {
-  const wrap = group.closest<HTMLElement>(".page-wrap");
-  console.log("[explain] bindBlueAnnotation", { annotationId, wrap, text });
-  if (!wrap) return () => {};
+  // The caller (AnnotationLayer) appends `group` to a freshly-created SVG
+  // and only attaches that SVG to the DOM after returning. So at this
+  // moment `group.closest('.page-wrap')` returns null. Defer to the next
+  // microtask so the lookup runs after the SVG is in the document.
+  let cancelled = false;
+  let resolvedCleanup: (() => void) | null = null;
 
-  let state = wrapStates.get(wrap);
-  if (!state) {
-    state = setupWrapListeners(wrap);
-    wrapStates.set(wrap, state);
-    console.log("[explain] wrap listeners attached");
-  }
-  state.registrations.set(annotationId, { group, doc, annotationId, text });
+  queueMicrotask(() => {
+    if (cancelled) return;
+    const wrap = group.closest<HTMLElement>(".page-wrap");
+    console.log("[explain] bindBlueAnnotation (deferred)", {
+      annotationId,
+      wrap,
+      text,
+    });
+    if (!wrap) return;
+
+    let state = wrapStates.get(wrap);
+    if (!state) {
+      state = setupWrapListeners(wrap);
+      wrapStates.set(wrap, state);
+      console.log("[explain] wrap listeners attached");
+    }
+    state.registrations.set(annotationId, { group, doc, annotationId, text });
+
+    resolvedCleanup = () => {
+      const s = wrapStates.get(wrap);
+      if (!s) return;
+      s.registrations.delete(annotationId);
+      if (activeAnnotationId === annotationId) hide();
+      if (pendingAnnotationId === annotationId) pendingAnnotationId = null;
+      if (s.registrations.size === 0) {
+        wrap.removeEventListener("mousemove", s.onMove);
+        wrap.removeEventListener("mouseleave", s.onLeave);
+        wrapStates.delete(wrap);
+      }
+    };
+  });
 
   return () => {
-    const s = wrapStates.get(wrap);
-    if (!s) return;
-    s.registrations.delete(annotationId);
-    if (activeAnnotationId === annotationId) hide();
-    if (pendingAnnotationId === annotationId) pendingAnnotationId = null;
-    if (s.registrations.size === 0) {
-      wrap.removeEventListener("mousemove", s.onMove);
-      wrap.removeEventListener("mouseleave", s.onLeave);
-      wrapStates.delete(wrap);
-    }
+    cancelled = true;
+    if (resolvedCleanup) resolvedCleanup();
   };
 }
 
