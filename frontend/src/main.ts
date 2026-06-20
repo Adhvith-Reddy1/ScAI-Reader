@@ -48,17 +48,48 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// Ctrl/Cmd + wheel = zoom. Steps proportionally so a small scroll = one step.
-viewer.addEventListener(
+// Trackpad pinch zoom — Chrome/Edge/Firefox on macOS deliver pinch as a wheel
+// event with synthetic `ctrlKey: true`. Cmd/Ctrl + scroll wheel is the same
+// path. Listening on `window` (instead of `viewer`) keeps the gesture working
+// even when the cursor is over the toolbar or empty page background.
+//
+// `passive: false` is required so preventDefault() can suppress the browser's
+// own page-zoom on the pinch.
+let pendingPinchZoom: number | null = null;
+const applyPendingPinchZoom = () => {
+  if (pendingPinchZoom == null) return;
+  setZoom(pendingPinchZoom);
+  pendingPinchZoom = null;
+};
+window.addEventListener(
   "wheel",
   (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
-    const factor = Math.exp(-e.deltaY / 300);
-    setZoom(getZoom() * factor);
+    // Continuous trackpad pinch fires ~60Hz; rAF-throttle the (expensive)
+    // setZoom call so we rebuild text/annotation layers at most once per frame.
+    const factor = Math.exp(-e.deltaY / 150);
+    const target = (pendingPinchZoom ?? getZoom()) * factor;
+    if (pendingPinchZoom == null) requestAnimationFrame(applyPendingPinchZoom);
+    pendingPinchZoom = target;
   },
   { passive: false },
 );
+
+// Safari's trackpad pinch — non-standard GestureEvents. `event.scale` is a
+// cumulative multiplier across the gesture (resets to 1 on gesturestart).
+let gestureStartZoom = 1;
+window.addEventListener("gesturestart", (e) => {
+  (e as Event).preventDefault();
+  gestureStartZoom = getZoom();
+});
+window.addEventListener("gesturechange", (e) => {
+  (e as Event).preventDefault();
+  const scale = (e as unknown as { scale: number }).scale;
+  if (typeof scale !== "number" || !isFinite(scale) || scale <= 0) return;
+  setZoom(gestureStartZoom * scale);
+});
+window.addEventListener("gestureend", (e) => (e as Event).preventDefault());
 
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
