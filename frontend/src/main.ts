@@ -16,12 +16,8 @@ import { buildLibrary } from "./Library.ts";
 import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
-import {
-  buildSearchPanel,
-  focusSearchInput,
-  setActiveSearchDoc,
-} from "./SearchPanel.ts";
 import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
+import { buildSidebarToggle } from "./SidebarToggle.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import {
@@ -45,9 +41,12 @@ const sidebar = document.getElementById("sidebar") as HTMLElement;
 
 initViewerZoom(viewer);
 initSidebar(sidebar);
-const searchPanel = mountSidebarPanel("search", "Search", buildSearchPanel());
 mountSidebarPanel("outline", "Outline", buildOutlinePanel());
 
+const sidebarToggleSlot = document.getElementById(
+  "sidebar-toggle-slot",
+) as HTMLElement;
+sidebarToggleSlot.appendChild(buildSidebarToggle());
 buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
@@ -65,14 +64,6 @@ window.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() === "s") {
     e.preventDefault();
     toast("Highlights save automatically — no manual save needed.");
-    return;
-  }
-
-  // Cmd/Ctrl+F: open the search panel and focus its input.
-  if (e.key.toLowerCase() === "f") {
-    e.preventDefault();
-    searchPanel.show();
-    focusSearchInput();
     return;
   }
 
@@ -234,7 +225,6 @@ async function renderDocument(
   pageList = buildPageList(meta, dims.pages, viewer);
   viewer.appendChild(pageList.element);
   setActivePageList(pageList, meta.page_count, meta.id);
-  setActiveSearchDoc(meta.id);
 }
 
 async function showLibrary(): Promise<void> {
@@ -243,7 +233,6 @@ async function showLibrary(): Promise<void> {
     pageList = null;
   }
   setActivePageList(null);
-  setActiveSearchDoc(null);
   clearDocument();
   viewer.innerHTML = "";
   const library = await buildLibrary((doc) => {

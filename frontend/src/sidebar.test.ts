@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   _resetForTest,
   initSidebar,
+  isSidebarVisible,
   mountSidebarPanel,
+  setSidebarVisible,
+  subscribeSidebarVisibility,
+  toggleSidebar,
 } from "./sidebar.ts";
 
 function makeSidebarEl(): HTMLElement {
@@ -95,5 +99,43 @@ describe("sidebar shell", () => {
     expect(() =>
       mountSidebarPanel("search", "Search 2", document.createElement("div")),
     ).toThrow();
+  });
+
+  it("close button hides the sidebar, preserves the user's choice", () => {
+    const el = makeSidebarEl();
+    initSidebar(el);
+    mountSidebarPanel("outline", "Outline", document.createElement("div"));
+    expect(el.hidden).toBe(false);
+    (el.querySelector(".sidebar-close") as HTMLButtonElement).click();
+    expect(el.hidden).toBe(true);
+    expect(isSidebarVisible()).toBe(false);
+
+    // Mounting another panel should NOT re-show the sidebar — the user
+    // explicitly closed it.
+    mountSidebarPanel("search", "Search", document.createElement("div"));
+    expect(el.hidden).toBe(true);
+  });
+
+  it("toggleSidebar / setSidebarVisible flip the user-visibility state", () => {
+    const el = makeSidebarEl();
+    initSidebar(el);
+    mountSidebarPanel("outline", "Outline", document.createElement("div"));
+    expect(el.hidden).toBe(false);
+    toggleSidebar();
+    expect(el.hidden).toBe(true);
+    setSidebarVisible(true);
+    expect(el.hidden).toBe(false);
+  });
+
+  it("subscribeSidebarVisibility fires on state change only", () => {
+    initSidebar(makeSidebarEl());
+    mountSidebarPanel("outline", "Outline", document.createElement("div"));
+    const seen: boolean[] = [];
+    subscribeSidebarVisibility((v) => seen.push(v));
+    setSidebarVisible(true); // no-op (already visible)
+    setSidebarVisible(false);
+    setSidebarVisible(false); // no-op
+    setSidebarVisible(true);
+    expect(seen).toEqual([false, true]);
   });
 });

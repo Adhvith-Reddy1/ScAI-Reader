@@ -14,6 +14,10 @@ let sidebarEl: HTMLElement | null = null;
 let tabsEl: HTMLElement | null = null;
 let panelsEl: HTMLElement | null = null;
 let active: string | null = null;
+// User intent — independent of whether any panels are mounted. False means the
+// user explicitly closed it; we don't reopen on subsequent mounts.
+let userVisible = true;
+const visibilitySubs = new Set<(v: boolean) => void>();
 
 interface PanelEntry {
   label: string;
@@ -34,10 +38,47 @@ export function initSidebar(el: HTMLElement): void {
   el.innerHTML = "";
   tabsEl = document.createElement("div");
   tabsEl.className = "sidebar-tabs";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "sidebar-close";
+  closeBtn.title = "Close sidebar";
+  closeBtn.setAttribute("aria-label", "Close sidebar");
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", () => setSidebarVisible(false));
+  tabsEl.appendChild(closeBtn);
+
   panelsEl = document.createElement("div");
   panelsEl.className = "sidebar-panels";
   el.append(tabsEl, panelsEl);
-  el.hidden = true;
+  applyVisibility();
+}
+
+export function setSidebarVisible(visible: boolean): void {
+  if (userVisible === visible) return;
+  userVisible = visible;
+  applyVisibility();
+  for (const cb of visibilitySubs) cb(visible);
+}
+
+export function isSidebarVisible(): boolean {
+  return userVisible && panels.size > 0;
+}
+
+export function toggleSidebar(): void {
+  setSidebarVisible(!userVisible);
+}
+
+export function subscribeSidebarVisibility(cb: (visible: boolean) => void): () => void {
+  visibilitySubs.add(cb);
+  return () => {
+    visibilitySubs.delete(cb);
+  };
+}
+
+function applyVisibility(): void {
+  if (!sidebarEl) return;
+  sidebarEl.hidden = !(userVisible && panels.size > 0);
 }
 
 export function mountSidebarPanel(
@@ -59,14 +100,16 @@ export function mountSidebarPanel(
   tab.dataset.panel = name;
   tab.setAttribute("aria-selected", "false");
   tab.addEventListener("click", () => show());
-  tabsEl.appendChild(tab);
+  // Insert before the close button so close stays on the right.
+  const closeBtn = tabsEl.querySelector(".sidebar-close");
+  tabsEl.insertBefore(tab, closeBtn);
 
   element.classList.add("sidebar-panel");
   element.hidden = true;
   panelsEl.appendChild(element);
 
   panels.set(name, { label, element, tab });
-  sidebarEl.hidden = false;
+  applyVisibility();
 
   const show = (): void => {
     active = name;
@@ -87,7 +130,7 @@ export function mountSidebarPanel(
     tab.remove();
     element.remove();
     if (active === name) active = null;
-    if (panels.size === 0 && sidebarEl) sidebarEl.hidden = true;
+    applyVisibility();
   };
 
   // First-mounted panel becomes the active tab so the sidebar isn't blank.
@@ -103,4 +146,6 @@ export function _resetForTest(): void {
   sidebarEl = null;
   tabsEl = null;
   panelsEl = null;
+  userVisible = true;
+  visibilitySubs.clear();
 }

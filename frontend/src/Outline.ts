@@ -85,19 +85,27 @@ function buildNode(node: OutlineNode, depth: number): HTMLElement {
   toggle.className = "outline-toggle";
   const hasChildren = node.children.length > 0;
 
-  let expanded = true;
+  // Top-level chapters render expanded so the user sees the table of contents
+  // at a glance; deeper levels (sections/subsections) start collapsed so a
+  // textbook with hundreds of nested entries isn't a wall of text.
+  let expanded = depth === 0;
   const childList = document.createElement("div");
   childList.className = "outline-children";
+  childList.hidden = !expanded;
+
+  const setExpanded = (v: boolean): void => {
+    expanded = v;
+    childList.hidden = !expanded;
+    toggle.textContent = expanded ? "▾" : "▸";
+    toggle.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+    toggle.setAttribute("aria-expanded", String(expanded));
+  };
 
   if (hasChildren) {
-    toggle.textContent = "▾"; // ▾
-    toggle.setAttribute("aria-label", "Collapse");
+    setExpanded(expanded);
     toggle.addEventListener("click", (e) => {
       e.stopPropagation();
-      expanded = !expanded;
-      childList.hidden = !expanded;
-      toggle.textContent = expanded ? "▾" : "▸"; // ▾ : ▸
-      toggle.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+      setExpanded(!expanded);
     });
   } else {
     // Keep a same-width placeholder so titles align across rows.
@@ -117,12 +125,18 @@ function buildNode(node: OutlineNode, depth: number): HTMLElement {
   page.textContent = node.page == null ? "" : String(node.page);
   row.appendChild(page);
 
-  if (node.page != null) {
-    row.classList.add("outline-row-clickable");
-    row.addEventListener("click", () => {
-      if (node.page != null) jumpToPage(node.page);
-    });
-  }
+  // Row click behavior: jump if the node has a destination; else (or in
+  // addition, for nodes without a page) toggle expand/collapse so the user
+  // doesn't have to hit the tiny caret target.
+  row.addEventListener("click", () => {
+    if (node.page != null) {
+      jumpToPage(node.page);
+    } else if (hasChildren) {
+      setExpanded(!expanded);
+    }
+  });
+  if (node.page != null) row.classList.add("outline-row-clickable");
+  else if (hasChildren) row.classList.add("outline-row-clickable");
 
   if (hasChildren) {
     for (const child of node.children) {
