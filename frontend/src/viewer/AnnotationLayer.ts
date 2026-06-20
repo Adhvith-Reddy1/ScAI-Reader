@@ -7,6 +7,7 @@
  */
 
 import type { Annotation, HighlightColor } from "../api.ts";
+import { getEraseMode } from "../eraseMode.ts";
 import { pageBBoxToViewport, type PageGeometry } from "./coords.ts";
 import { mergeAdjacentLineRects } from "./selection.ts";
 
@@ -53,7 +54,11 @@ export function buildAnnotationLayer(
 
     group.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (window.confirm("Delete this highlight?")) {
+      // Erase mode (Edge-style): one click deletes, no confirm dialog.
+      // Otherwise fall back to the confirm-and-delete flow.
+      if (getEraseMode().active) {
+        onDelete(ann.id);
+      } else if (window.confirm("Delete this highlight?")) {
         onDelete(ann.id);
       }
     });
