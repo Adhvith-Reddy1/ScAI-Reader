@@ -28,6 +28,26 @@ CREATE TABLE IF NOT EXISTS annotations (
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
     ON annotations(doc_id, page_index);
 
+CREATE TABLE IF NOT EXISTS page_dimensions (
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_index   INTEGER NOT NULL,
+    width_pt     REAL NOT NULL,
+    height_pt    REAL NOT NULL,
+    PRIMARY KEY (doc_id, page_index)
+);
+
+-- FTS5 virtual table for full-text search across page text. `page_index` here
+-- is 1-indexed (client-friendly) so the search route can return it verbatim.
+-- We don't FK to documents(id) because FTS5 virtual tables can't carry foreign
+-- keys; the search route deletes rows by doc_id on re-upload to keep them in
+-- sync.
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+    doc_id      UNINDEXED,
+    page_index  UNINDEXED,
+    text,
+    tokenize = "unicode61 remove_diacritics 2"
+);
+
 CREATE TABLE IF NOT EXISTS explanations (
     annotation_id TEXT PRIMARY KEY
                   REFERENCES annotations(id) ON DELETE CASCADE,

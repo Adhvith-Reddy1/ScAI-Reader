@@ -7,7 +7,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import annotations, documents, explanations, pages, text
+from .routes import (
+    annotations,
+    documents,
+    explanations,
+    outline,
+    pages,
+    search,
+    text,
+)
 from .routes.deps import get_settings
 from .storage import db
 
@@ -35,6 +43,8 @@ def create_app() -> FastAPI:
     app.include_router(text.router)
     app.include_router(annotations.router)
     app.include_router(explanations.router)
+    app.include_router(outline.router)
+    app.include_router(search.router)
 
     @app.get("/healthz")
     def health() -> dict:

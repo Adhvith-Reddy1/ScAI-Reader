@@ -12,7 +12,13 @@ export const MAX_ZOOM = 4.0;
 
 const ZOOM_STEPS = [
   0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0,
-];
+] as const;
+
+// Re-exported for [[viewerZoom]] so it can step the ladder while still
+// routing the apply through anchored zoom. Keeps the ladder definition in
+// one place.
+export const ZOOM_STEPS_FOR_NEXT_PREV = ZOOM_STEPS;
+export type ZoomStep = (typeof ZOOM_STEPS)[number];
 
 let current = 1.0;
 const subscribers = new Set<(zoom: number) => void>();

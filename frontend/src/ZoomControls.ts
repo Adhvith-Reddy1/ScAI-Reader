@@ -6,12 +6,11 @@
  */
 
 import {
-  getZoom,
-  resetZoom,
-  subscribeZoom,
-  zoomIn,
-  zoomOut,
-} from "./zoom.ts";
+  resetZoomAtViewerCenter,
+  zoomInAtViewerCenter,
+  zoomOutAtViewerCenter,
+} from "./viewerZoom.ts";
+import { getZoom, subscribeZoom } from "./zoom.ts";
 
 export function buildZoomControls(): HTMLElement {
   const root = document.createElement("div");
@@ -23,14 +22,14 @@ export function buildZoomControls(): HTMLElement {
   minus.textContent = "−";
   minus.title = "Zoom out (Ctrl/Cmd −)";
   minus.setAttribute("aria-label", "Zoom out");
-  minus.addEventListener("click", () => zoomOut());
+  minus.addEventListener("click", () => zoomOutAtViewerCenter());
 
   const label = document.createElement("button");
   label.type = "button";
   label.className = "zoom-label";
   label.title = "Reset zoom (Ctrl/Cmd 0)";
   label.setAttribute("aria-label", "Reset zoom");
-  label.addEventListener("click", () => resetZoom());
+  label.addEventListener("click", () => resetZoomAtViewerCenter());
 
   const plus = document.createElement("button");
   plus.type = "button";
@@ -38,7 +37,7 @@ export function buildZoomControls(): HTMLElement {
   plus.textContent = "+";
   plus.title = "Zoom in (Ctrl/Cmd +)";
   plus.setAttribute("aria-label", "Zoom in");
-  plus.addEventListener("click", () => zoomIn());
+  plus.addEventListener("click", () => zoomInAtViewerCenter());
 
   root.append(minus, label, plus);
 

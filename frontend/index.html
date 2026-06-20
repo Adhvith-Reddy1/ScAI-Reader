@@ -8,18 +8,24 @@
   </head>
   <body>
     <header class="toolbar">
+      <div id="sidebar-toggle-slot"></div>
       <span class="brand">ScAI-Reader</span>
       <label class="upload">
         <input type="file" id="file" accept="application/pdf" hidden />
         <span>Open PDF…</span>
       </label>
       <div id="highlight-button-slot"></div>
+      <div id="erase-button-slot"></div>
       <div id="zoom-controls-slot"></div>
+      <div id="page-indicator-slot"></div>
       <span id="doc-info" class="info"></span>
     </header>
-    <main id="viewer" class="viewer">
-      <p class="empty">Loading library…</p>
-    </main>
+    <div class="main-area">
+      <aside id="sidebar" class="sidebar" hidden></aside>
+      <main id="viewer" class="viewer">
+        <p class="empty">Loading library…</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

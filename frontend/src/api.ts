@@ -37,6 +37,25 @@ export function pageImageUrl(docId: string, pageNumber: number, dpi = 150): stri
   return `/documents/${docId}/pages/${pageNumber}.png?dpi=${dpi}`;
 }
 
+export interface PageDimension {
+  page: number;
+  width_pt: number;
+  height_pt: number;
+}
+
+export interface DocumentDimensions {
+  doc_id: string;
+  pages: PageDimension[];
+}
+
+export async function fetchDocumentDimensions(
+  docId: string,
+): Promise<DocumentDimensions> {
+  const r = await fetch(`/documents/${docId}/dimensions`);
+  if (!r.ok) throw new Error(`dimensions fetch failed (${r.status})`);
+  return r.json() as Promise<DocumentDimensions>;
+}
+
 export interface PageRun {
   text: string;
   bbox: { x0: number; y0: number; x1: number; y1: number };
@@ -64,6 +83,28 @@ export async function fetchPageText(
     throw new Error(`text fetch failed (${r.status})`);
   }
   return r.json() as Promise<PageText>;
+}
+
+export interface SearchResult {
+  page: number;
+  /** HTML snippet — matched terms wrapped in <mark>…</mark> by the server. */
+  snippet: string;
+}
+
+export interface SearchResponse {
+  doc_id: string;
+  query: string;
+  results: SearchResult[];
+}
+
+export async function fetchSearchResults(
+  docId: string,
+  query: string,
+): Promise<SearchResponse> {
+  const url = `/documents/${docId}/search?q=${encodeURIComponent(query)}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`search failed (${r.status})`);
+  return r.json() as Promise<SearchResponse>;
 }
 
 export const HIGHLIGHT_COLORS = ["yellow", "blue", "red", "green", "pink"] as const;
@@ -112,6 +153,19 @@ export async function listAnnotations(
   const r = await fetch(url);
   if (!r.ok) throw new Error(`list annotations failed (${r.status})`);
   return r.json() as Promise<Annotation[]>;
+}
+
+export interface OutlineNode {
+  title: string;
+  page: number | null;
+  children: OutlineNode[];
+}
+
+export async function fetchOutline(docId: string): Promise<OutlineNode[]> {
+  const r = await fetch(`/documents/${docId}/outline`);
+  if (!r.ok) throw new Error(`outline fetch failed (${r.status})`);
+  const body = (await r.json()) as { doc_id: string; nodes: OutlineNode[] };
+  return body.nodes;
 }
 
 export async function deleteAnnotation(

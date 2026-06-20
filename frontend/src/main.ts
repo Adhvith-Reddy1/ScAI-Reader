@@ -1,26 +1,76 @@
 import {
+  fetchDocumentDimensions,
   uploadDocument,
+  type DocumentDimensions,
   type DocumentMeta,
   type LibraryDocument,
 } from "./api.ts";
+import {
+  clearDocument,
+  setDocumentBounds,
+  setViewport,
+} from "./fit.ts";
+import { buildEraseButton } from "./EraseButton.ts";
+import { subscribeEraseMode } from "./eraseMode.ts";
+import { buildFindBar } from "./FindBar.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
-import { buildPageView } from "./viewer/PageView.ts";
+import { buildOutlinePanel } from "./Outline.ts";
+import { buildPageIndicator } from "./PageIndicator.ts";
+import { setActivePageList } from "./pageNav.ts";
+import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
+import { buildSidebarToggle } from "./SidebarToggle.ts";
+import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
-import { getZoom, resetZoom, setZoom, zoomIn, zoomOut } from "./zoom.ts";
+import {
+  initViewerZoom,
+  resetZoomAtViewerCenter,
+  zoomAroundClientPoint,
+  zoomInAtViewerCenter,
+  zoomOutAtViewerCenter,
+} from "./viewerZoom.ts";
+import { getZoom, setZoom } from "./zoom.ts";
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const viewer = document.getElementById("viewer") as HTMLElement;
 const docInfo = document.getElementById("doc-info") as HTMLElement;
 const buttonSlot = document.getElementById("highlight-button-slot") as HTMLElement;
+const eraseSlot = document.getElementById("erase-button-slot") as HTMLElement;
 const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
+const pageIndicatorSlot = document.getElementById(
+  "page-indicator-slot",
+) as HTMLElement;
+const sidebar = document.getElementById("sidebar") as HTMLElement;
 
+initViewerZoom(viewer);
+initSidebar(sidebar);
+mountSidebarPanel("outline", "Outline", buildOutlinePanel());
+
+const sidebarToggleSlot = document.getElementById(
+  "sidebar-toggle-slot",
+) as HTMLElement;
+sidebarToggleSlot.appendChild(buildSidebarToggle());
 buttonSlot.appendChild(buildHighlightButton());
+eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
+pageIndicatorSlot.appendChild(buildPageIndicator());
+
+const findBar = buildFindBar();
+viewer.appendChild(findBar.element);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && findBar.isOpen()) {
+    e.preventDefault();
+    findBar.hide();
+  }
+});
 
 subscribeHighlightMode((s) => {
   document.documentElement.dataset.highlightActive = String(s.active);
+});
+subscribeEraseMode((s) => {
+  document.documentElement.dataset.eraseActive = String(s.active);
 });
 
 window.addEventListener("keydown", (e) => {
@@ -35,16 +85,25 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Edge-style zoom shortcuts: Cmd/Ctrl + +, =, -, _, 0.
+  // Cmd/Ctrl+F: open the find bar (Chrome/Edge style in-page find).
+  if (e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    findBar.show();
+    return;
+  }
+
+  // Edge-style zoom shortcuts: Cmd/Ctrl + +, =, -, _, 0. All anchored at
+  // the viewer center so the visible content stays put across zoom steps —
+  // without this, on a 5M-px doc a single +/− shifts the view by 100+ pages.
   if (e.key === "+" || e.key === "=") {
     e.preventDefault();
-    zoomIn();
+    zoomInAtViewerCenter();
   } else if (e.key === "-" || e.key === "_") {
     e.preventDefault();
-    zoomOut();
+    zoomOutAtViewerCenter();
   } else if (e.key === "0") {
     e.preventDefault();
-    resetZoom();
+    resetZoomAtViewerCenter();
   }
 });
 
@@ -56,10 +115,29 @@ window.addEventListener("keydown", (e) => {
 // `passive: false` is required so preventDefault() can suppress the browser's
 // own page-zoom on the pinch.
 let pendingPinchZoom: number | null = null;
+// Anchor for the current gesture. Captured on the FIRST wheel event of a
+// gesture and reused for every tick until the gesture ends (no wheel for
+// ~200ms). Using a per-tick anchor lets cursor drift during the pinch (your
+// fingers spread, the OS reports a slightly-moved "center") propagate into
+// scroll, which looks exactly like the page scrolling during zoom.
+let currentGestureAnchor: { clientX: number; clientY: number } | null = null;
+let gestureEndTimer: ReturnType<typeof setTimeout> | null = null;
+const GESTURE_END_MS = 200;
+
 const applyPendingPinchZoom = () => {
   if (pendingPinchZoom == null) return;
-  setZoom(pendingPinchZoom);
+  if (currentGestureAnchor) {
+    zoomAroundClientPoint(
+      currentGestureAnchor.clientX,
+      currentGestureAnchor.clientY,
+      pendingPinchZoom,
+    );
+  } else {
+    setZoom(pendingPinchZoom);
+  }
   pendingPinchZoom = null;
+  // Note: do NOT clear currentGestureAnchor here — it persists for the
+  // duration of the gesture. The end-timer below clears it.
 };
 const scheduleZoomApply = (): void => {
   // rAF is paused on hidden tabs. Fall back to setTimeout so a pinch begun
@@ -75,6 +153,18 @@ window.addEventListener(
   (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
+    // First wheel of a gesture: lock the anchor here. Subsequent wheels in
+    // the same gesture reuse it, so finger drift on the trackpad doesn't
+    // pull the scroll position with it.
+    if (currentGestureAnchor == null) {
+      currentGestureAnchor = { clientX: e.clientX, clientY: e.clientY };
+    }
+    if (gestureEndTimer != null) clearTimeout(gestureEndTimer);
+    gestureEndTimer = setTimeout(() => {
+      currentGestureAnchor = null;
+      gestureEndTimer = null;
+    }, GESTURE_END_MS);
+
     // Continuous trackpad pinch fires ~60Hz; rAF-throttle the (expensive)
     // setZoom call so we rebuild text/annotation layers at most once per frame.
     const factor = Math.exp(-e.deltaY / 150);
@@ -92,13 +182,24 @@ window.addEventListener("gesturestart", (e) => {
   (e as Event).preventDefault();
   gestureStartZoom = getZoom();
 });
+let safariGestureAnchor: { clientX: number; clientY: number } | null = null;
 window.addEventListener("gesturechange", (e) => {
   (e as Event).preventDefault();
-  const scale = (e as unknown as { scale: number }).scale;
-  if (typeof scale !== "number" || !isFinite(scale) || scale <= 0) return;
-  setZoom(gestureStartZoom * scale);
+  const ge = e as unknown as { scale: number; clientX: number; clientY: number };
+  if (typeof ge.scale !== "number" || !isFinite(ge.scale) || ge.scale <= 0) return;
+  if (safariGestureAnchor == null) {
+    safariGestureAnchor = { clientX: ge.clientX, clientY: ge.clientY };
+  }
+  zoomAroundClientPoint(
+    safariGestureAnchor.clientX,
+    safariGestureAnchor.clientY,
+    gestureStartZoom * ge.scale,
+  );
 });
-window.addEventListener("gestureend", (e) => (e as Event).preventDefault());
+window.addEventListener("gestureend", (e) => {
+  (e as Event).preventDefault();
+  safariGestureAnchor = null;
+});
 
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
@@ -106,25 +207,62 @@ fileInput.addEventListener("change", async () => {
   docInfo.textContent = "Uploading…";
   try {
     const meta = await uploadDocument(file);
-    renderDocument(meta);
+    await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
   }
 });
 
-function renderDocument(meta: DocumentMeta | LibraryDocument): void {
+let pageList: PageListHandle | null = null;
+
+function pushViewportSize(): void {
+  setViewport(viewer.clientWidth, viewer.clientHeight);
+}
+pushViewportSize();
+window.addEventListener("resize", pushViewportSize);
+
+async function renderDocument(
+  meta: DocumentMeta | LibraryDocument,
+): Promise<void> {
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
-  viewer.innerHTML = "";
-  for (let i = 1; i <= meta.page_count; i++) {
-    viewer.appendChild(buildPageView(meta, i));
+  if (pageList) {
+    pageList.dispose();
+    pageList = null;
   }
+  setActivePageList(null);
+  viewer.innerHTML = "";
+
+  let dims: DocumentDimensions;
+  try {
+    dims = await fetchDocumentDimensions(meta.id);
+  } catch (err) {
+    docInfo.textContent = `Error loading document: ${(err as Error).message}`;
+    return;
+  }
+
+  const maxWidthPt = Math.max(...dims.pages.map((p) => p.width_pt));
+  const maxHeightPt = Math.max(...dims.pages.map((p) => p.height_pt));
+  setDocumentBounds(maxWidthPt, maxHeightPt);
+  pushViewportSize();
+
+  pageList = buildPageList(meta, dims.pages, viewer);
+  viewer.appendChild(pageList.element);
+  setActivePageList(pageList, meta.page_count, meta.id);
 }
 
 async function showLibrary(): Promise<void> {
+  if (pageList) {
+    pageList.dispose();
+    pageList = null;
+  }
+  setActivePageList(null);
+  clearDocument();
   viewer.innerHTML = "";
-  const library = await buildLibrary((doc) => renderDocument(doc));
+  const library = await buildLibrary((doc) => {
+    void renderDocument(doc);
+  });
   viewer.appendChild(library);
 }
 
