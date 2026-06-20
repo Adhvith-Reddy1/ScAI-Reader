@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS page_dimensions (
     height_pt    REAL NOT NULL,
     PRIMARY KEY (doc_id, page_index)
 );
+
+-- FTS5 virtual table for full-text search across page text. `page_index` here
+-- is 1-indexed (client-friendly) so the search route can return it verbatim.
+-- We don't FK to documents(id) because FTS5 virtual tables can't carry foreign
+-- keys; the search route deletes rows by doc_id on re-upload to keep them in
+-- sync.
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+    doc_id      UNINDEXED,
+    page_index  UNINDEXED,
+    text,
+    tokenize = "unicode61 remove_diacritics 2"
+);
 """
 
 

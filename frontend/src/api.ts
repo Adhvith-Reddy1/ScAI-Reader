@@ -85,6 +85,28 @@ export async function fetchPageText(
   return r.json() as Promise<PageText>;
 }
 
+export interface SearchResult {
+  page: number;
+  /** HTML snippet — matched terms wrapped in <mark>…</mark> by the server. */
+  snippet: string;
+}
+
+export interface SearchResponse {
+  doc_id: string;
+  query: string;
+  results: SearchResult[];
+}
+
+export async function fetchSearchResults(
+  docId: string,
+  query: string,
+): Promise<SearchResponse> {
+  const url = `/documents/${docId}/search?q=${encodeURIComponent(query)}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`search failed (${r.status})`);
+  return r.json() as Promise<SearchResponse>;
+}
+
 export const HIGHLIGHT_COLORS = ["yellow", "blue", "red", "green", "pink"] as const;
 export type HighlightColor = typeof HIGHLIGHT_COLORS[number];
 
