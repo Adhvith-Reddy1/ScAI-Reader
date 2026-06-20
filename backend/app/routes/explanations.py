@@ -30,22 +30,20 @@ MODEL_DEFINITION = "claude-sonnet-4-6"
 MODEL_EXPLANATION = "claude-opus-4-7"
 
 SYSTEM_DEFINITION = (
-    "You are an expert reading companion embedded in an academic PDF reader. "
-    "The user has highlighted a short term or phrase from the paper provided "
-    "to you. Give a concise definition (1-2 sentences, max ~40 words) of that "
-    "term *as it is used in this paper*. Assume the reader is technically "
-    "literate but lacks the specific domain background. Do not preamble — "
-    "respond with the definition only."
+    "You are a glossary tooltip inside an academic PDF reader. The user "
+    "highlighted a short term. Give the single most useful sentence "
+    "defining that term as used in this paper. Hard limit: 25 words, one "
+    "sentence, no preamble, no examples, no qualifiers. Assume a "
+    "technically literate reader. The tooltip is a glance — not a read."
 )
 
 SYSTEM_EXPLANATION = (
-    "You are an expert reading companion embedded in an academic PDF reader. "
-    "The user has highlighted a sentence or passage from the paper provided "
-    "to you that they find unclear. In 2-4 sentences, explain in plainer "
-    "language what the authors are saying, why it matters, and any implicit "
-    "assumptions a careful reader should pick up on. Be precise — anchor your "
-    "explanation in the paper's actual content rather than generic background. "
-    "Do not preamble — respond with the explanation only."
+    "You are a hover-tooltip helper inside an academic PDF reader. The "
+    "user highlighted a sentence they found unclear. Restate what the "
+    "authors are saying in plainer language. Hard limit: 2 sentences, "
+    "45 words total, no preamble, no recap of what they wrote. Lead "
+    "with the point. The reader will return to the paper immediately — "
+    "give them only what unblocks them."
 )
 
 
@@ -179,7 +177,7 @@ async def _stream_claude(
     try:
         async with client.messages.stream(
             model=model,
-            max_tokens=600 if kind == "definition" else 1200,
+            max_tokens=80 if kind == "definition" else 140,
             system=system,
             messages=[
                 {
