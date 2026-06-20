@@ -69,7 +69,14 @@ window.addEventListener("keydown", (e) => {
 // `passive: false` is required so preventDefault() can suppress the browser's
 // own page-zoom on the pinch.
 let pendingPinchZoom: number | null = null;
-let pendingPinchAnchor: { clientX: number; clientY: number } | null = null;
+// Anchor for the current gesture. Captured on the FIRST wheel event of a
+// gesture and reused for every tick until the gesture ends (no wheel for
+// ~200ms). Using a per-tick anchor lets cursor drift during the pinch (your
+// fingers spread, the OS reports a slightly-moved "center") propagate into
+// scroll, which looks exactly like the page scrolling during zoom.
+let currentGestureAnchor: { clientX: number; clientY: number } | null = null;
+let gestureEndTimer: ReturnType<typeof setTimeout> | null = null;
+const GESTURE_END_MS = 200;
 
 // Apply a zoom while keeping the document point currently under (clientX,
 // clientY) anchored there. Without this, the viewer scales from its top-left
@@ -117,17 +124,18 @@ function clamp(v: number, lo: number, hi: number): number {
 
 const applyPendingPinchZoom = () => {
   if (pendingPinchZoom == null) return;
-  if (pendingPinchAnchor) {
+  if (currentGestureAnchor) {
     zoomAroundClientPoint(
-      pendingPinchAnchor.clientX,
-      pendingPinchAnchor.clientY,
+      currentGestureAnchor.clientX,
+      currentGestureAnchor.clientY,
       pendingPinchZoom,
     );
   } else {
     setZoom(pendingPinchZoom);
   }
   pendingPinchZoom = null;
-  pendingPinchAnchor = null;
+  // Note: do NOT clear currentGestureAnchor here — it persists for the
+  // duration of the gesture. The end-timer below clears it.
 };
 const scheduleZoomApply = (): void => {
   // rAF is paused on hidden tabs. Fall back to setTimeout so a pinch begun
@@ -143,15 +151,24 @@ window.addEventListener(
   (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
+    // First wheel of a gesture: lock the anchor here. Subsequent wheels in
+    // the same gesture reuse it, so finger drift on the trackpad doesn't
+    // pull the scroll position with it.
+    if (currentGestureAnchor == null) {
+      currentGestureAnchor = { clientX: e.clientX, clientY: e.clientY };
+    }
+    if (gestureEndTimer != null) clearTimeout(gestureEndTimer);
+    gestureEndTimer = setTimeout(() => {
+      currentGestureAnchor = null;
+      gestureEndTimer = null;
+    }, GESTURE_END_MS);
+
     // Continuous trackpad pinch fires ~60Hz; rAF-throttle the (expensive)
     // setZoom call so we rebuild text/annotation layers at most once per frame.
     const factor = Math.exp(-e.deltaY / 150);
     const target = (pendingPinchZoom ?? getZoom()) * factor;
     if (pendingPinchZoom == null) scheduleZoomApply();
     pendingPinchZoom = target;
-    // Capture the latest cursor position; the most recent one before the rAF
-    // fires is the right anchor.
-    pendingPinchAnchor = { clientX: e.clientX, clientY: e.clientY };
   },
   { passive: false },
 );
