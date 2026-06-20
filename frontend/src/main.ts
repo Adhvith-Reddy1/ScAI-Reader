@@ -82,8 +82,16 @@ function zoomAroundClientPoint(
 ): void {
   const oldZoom = getZoom();
   const rect = viewer.getBoundingClientRect();
-  const offsetX = clientX - rect.left;
-  const offsetY = clientY - rect.top;
+
+  // Clamp the anchor to the viewer's visible area. The pinch event's
+  // clientX/Y is just the cursor position — which may be over the toolbar
+  // (e.g., the user just pressed Enter in the page-jump input). Anchoring
+  // to a point above the viewer is mathematically valid but visually wrong:
+  // at scrollTop ≈ 1.5M (page 1000 of a textbook), a 50px negative offset
+  // pulls the view dozens of pixels per tick. Clamping snaps the anchor
+  // back into the visible content area.
+  const offsetX = clamp(clientX - rect.left, 0, viewer.clientWidth);
+  const offsetY = clamp(clientY - rect.top, 0, viewer.clientHeight);
   const contentX = viewer.scrollLeft + offsetX;
   const contentY = viewer.scrollTop + offsetY;
 
@@ -91,14 +99,20 @@ function zoomAroundClientPoint(
   // setZoom clamps to [MIN_ZOOM, MAX_ZOOM]; use the actual applied factor so
   // a no-op zoom (already at the cap) doesn't move the scroll position.
   const ratio = oldZoom === 0 ? 1 : getZoom() / oldZoom;
-  // Force layout to commit so scrollHeight reflects the new (zoomed) sizes
-  // before we assign scrollTop. Without this, the browser clamps our target
-  // against the stale pre-zoom scrollHeight on very long docs (2500+ pages)
-  // and the view ends up a few hundred pixels higher than it should — looks
-  // like the page is "scrolling up" mid-pinch.
-  void viewer.scrollHeight;
-  viewer.scrollLeft = contentX * ratio - offsetX;
-  viewer.scrollTop = contentY * ratio - offsetY;
+
+  // Read scrollHeight/scrollWidth — this forces a layout flush so the
+  // dimensions reflect the just-zoomed page sizes, AND gives us the precise
+  // max scroll values to clamp against. The browser's own clamp can be
+  // off by a few pixels per tick on long docs (it uses the pre-zoom
+  // scrollHeight if we let it write before reading), so we clamp ourselves.
+  const maxScrollLeft = Math.max(0, viewer.scrollWidth - viewer.clientWidth);
+  const maxScrollTop = Math.max(0, viewer.scrollHeight - viewer.clientHeight);
+  viewer.scrollLeft = clamp(contentX * ratio - offsetX, 0, maxScrollLeft);
+  viewer.scrollTop = clamp(contentY * ratio - offsetY, 0, maxScrollTop);
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 const applyPendingPinchZoom = () => {
