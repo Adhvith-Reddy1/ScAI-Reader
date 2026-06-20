@@ -125,6 +125,13 @@ export interface Annotation {
   rects: Rect[];
   text: string | null;
   created_at: string;
+  /**
+   * Server-side cached explanation, included only for blue highlights that
+   * have a `status: "complete"` row in the explanations table. Frontend
+   * seeds explanationStore from this so the first hover renders instantly
+   * with no follow-up network call.
+   */
+  explanation?: { kind: ExplanationKind; content: string };
 }
 
 export async function createHighlight(

@@ -91,26 +91,35 @@ def list_annotations(
         raise HTTPException(status_code=404, detail="document not found")
 
     with db.connect(settings.db_path) as conn:
+        # LEFT JOIN so highlights without an explanation still come back.
+        # Frontend uses this to seed its explanation cache so the tooltip
+        # opens instantly on hover instead of doing a follow-up GET.
+        base_select = (
+            "SELECT a.id, a.page_index, a.kind, a.payload, a.created_at, "
+            "       e.kind AS exp_kind, e.content AS exp_content, "
+            "       e.status AS exp_status "
+            "FROM annotations a "
+            "LEFT JOIN explanations e ON e.annotation_id = a.id "
+        )
         if page is None:
             rows = conn.execute(
-                "SELECT id, page_index, kind, payload, created_at "
-                "FROM annotations WHERE doc_id = ? ORDER BY created_at ASC",
+                base_select + "WHERE a.doc_id = ? ORDER BY a.created_at ASC",
                 (doc_id,),
             ).fetchall()
         else:
             if page < 1:
                 raise HTTPException(status_code=400, detail="page must be >= 1")
             rows = conn.execute(
-                "SELECT id, page_index, kind, payload, created_at "
-                "FROM annotations WHERE doc_id = ? AND page_index = ? "
-                "ORDER BY created_at ASC",
+                base_select
+                + "WHERE a.doc_id = ? AND a.page_index = ? "
+                "ORDER BY a.created_at ASC",
                 (doc_id, page - 1),
             ).fetchall()
 
     out: list[dict] = []
     for r in rows:
         payload = json.loads(r["payload"])
-        out.append({
+        entry: dict = {
             "id": r["id"],
             "page": r["page_index"] + 1,
             "kind": r["kind"],
@@ -118,7 +127,15 @@ def list_annotations(
             "rects": payload.get("rects", []),
             "text": payload.get("text"),
             "created_at": r["created_at"],
-        })
+        }
+        # Only attach a non-null explanation when one's fully cached.
+        # Pending/errored rows fall back to the existing on-hover flow.
+        if r["exp_status"] == "complete" and r["exp_content"]:
+            entry["explanation"] = {
+                "kind": r["exp_kind"],
+                "content": r["exp_content"],
+            }
+        out.append(entry)
     return out
 
 

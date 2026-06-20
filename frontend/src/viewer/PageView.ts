@@ -18,7 +18,7 @@ import {
 } from "../findState.ts";
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
-import { startExplanation } from "../explanationStore.ts";
+import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
@@ -219,6 +219,15 @@ async function refreshAnnotations(
     annotations = await listAnnotations(meta.id, pageNumber);
   } catch {
     annotations = [];
+  }
+
+  // Prime the explanation store with whatever the server has cached for
+  // these highlights. Hovering won't hit the network — the tooltip pops
+  // straight to the ready state.
+  for (const ann of annotations) {
+    if (ann.explanation) {
+      seedExplanation(ann.id, ann.explanation.kind, ann.explanation.content);
+    }
   }
 
   if (state.annotationLayer) state.annotationLayer.remove();

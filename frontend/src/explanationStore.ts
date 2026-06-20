@@ -60,6 +60,23 @@ export function getExplanationState(annotationId: string): ExplanationState {
 }
 
 /**
+ * Seed the store with a server-cached explanation. No-op if an entry is
+ * already in `loading` or `ready` state — we never want to overwrite a
+ * fresher local stream with a stale server payload.
+ */
+export function seedExplanation(
+  annotationId: string,
+  kind: ExplanationKind,
+  content: string,
+): void {
+  const entry = ensureEntry(annotationId);
+  if (entry.state.status === "loading" || entry.state.status === "ready") {
+    return;
+  }
+  setState(entry, { status: "ready", content, kind });
+}
+
+/**
  * Kick off an explanation stream and broadcast progress to subscribers.
  * If one is already in flight or completed, this is a no-op.
  */
