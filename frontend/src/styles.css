@@ -45,6 +45,12 @@ body {
 
 .info { color: var(--muted); font-size: 13px; }
 
+.main-area {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .viewer {
   flex: 1;
   overflow: auto;
@@ -55,6 +61,46 @@ body {
      placeholders resize at once. */
   overflow-anchor: none;
 }
+
+/* Left-side panels (search, outline) plug in via mountSidebarPanel. */
+.sidebar {
+  width: 320px;
+  background: var(--surface);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar[hidden] { display: none; }
+
+.sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.sidebar-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.sidebar-tab:hover { color: var(--text); }
+.sidebar-tab[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.sidebar-panels {
+  flex: 1;
+  overflow: auto;
+}
+.sidebar-panel[hidden] { display: none; }
 
 .empty { color: var(--muted); margin: 80px auto 0; font-size: 14px; text-align: center; }
 

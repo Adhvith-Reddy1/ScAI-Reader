@@ -15,6 +15,7 @@ import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
+import { initSidebar } from "./sidebar.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import {
@@ -34,8 +35,10 @@ const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
 const pageIndicatorSlot = document.getElementById(
   "page-indicator-slot",
 ) as HTMLElement;
+const sidebar = document.getElementById("sidebar") as HTMLElement;
 
 initViewerZoom(viewer);
+initSidebar(sidebar);
 
 buttonSlot.appendChild(buildHighlightButton());
 zoomSlot.appendChild(buildZoomControls());
