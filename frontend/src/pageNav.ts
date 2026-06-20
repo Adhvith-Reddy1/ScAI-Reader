@@ -9,6 +9,7 @@
 import type { PageListHandle } from "./viewer/PageList.ts";
 
 export interface PageInfo {
+  doc_id: string;
   current: number;
   total: number;
 }
@@ -20,6 +21,7 @@ const subs = new Set<(info: PageInfo | null) => void>();
 export function setActivePageList(
   handle: PageListHandle | null,
   total = 0,
+  doc_id = "",
 ): void {
   unsubCurrent?.();
   unsubCurrent = null;
@@ -30,10 +32,10 @@ export function setActivePageList(
     return;
   }
 
-  const initial: PageInfo = { current: handle.getCurrentPage(), total };
+  const initial: PageInfo = { doc_id, current: handle.getCurrentPage(), total };
   emit(initial);
   unsubCurrent = handle.subscribeCurrentPage((current) => {
-    emit({ current, total });
+    emit({ doc_id, current, total });
   });
 }
 
