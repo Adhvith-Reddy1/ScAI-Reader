@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/areddy/Downloads/Custom_PDF_Reader/.claude && ls /Users/areddy/Downloads/Custom_PDF_Reader/.claude)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:58570/)",
+      "Bash(curl -sS http://localhost:5173/)",
+      "Bash(curl -sS http://localhost:5173/documents)",
+      "Bash(curl -sS -w \"\\\\n[status: %{http_code}]\\\\n\" http://localhost:5173/documents)",
+      "Bash(curl -sS -w \"\\\\n[status: %{http_code}]\\\\n\" http://localhost:8000/documents)",
+      "Bash(.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level info)",
+      "Bash(curl -sS -w \"[%{http_code}]\\\\n\" http://localhost:8000/healthz)",
+      "Bash(curl -sS -w \"\\\\n[%{http_code}]\\\\n\" http://localhost:8000/healthz)",
+      "Bash(curl -sS -w \"\\\\n[%{http_code}]\\\\n\" http://localhost:8000/documents)",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code} %{size_download}B %{time_total}s\\\\n\" \"http://localhost:8000/documents/d518e7dc45d2e3fd33a65041474cc59c25d348f37e902d91ed9af1b0eb8855a8/pages/1.png?dpi=150\")",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(ls /Applications/ 2>/dev/null | grep -i \"github\" ; echo \"---\" ; du -sh /Users/areddy/Downloads/Custom_PDF_Reader 2>/dev/null ; echo \"--- large items ---\" ; du -sh /Users/areddy/Downloads/Custom_PDF_Reader/* /Users/areddy/Downloads/Custom_PDF_Reader/.[^.]* 2>/dev/null | sort -h | tail -10)"
+    ]
+  }
+}

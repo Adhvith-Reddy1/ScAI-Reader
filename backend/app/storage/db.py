@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS documents (
+    id           TEXT PRIMARY KEY,            -- sha256 of file bytes
+    filename     TEXT NOT NULL,
+    page_count   INTEGER NOT NULL,
+    title        TEXT,
+    author       TEXT,
+    size_bytes   INTEGER NOT NULL,
+    uploaded_at  TEXT NOT NULL                -- ISO-8601
+);
+
+CREATE TABLE IF NOT EXISTS annotations (
+    id           TEXT PRIMARY KEY,
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_index   INTEGER NOT NULL,
+    kind         TEXT NOT NULL,               -- highlight | note | ink
+    payload      TEXT NOT NULL,               -- JSON
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
+    ON annotations(doc_id, page_index);
+"""
+
+
+def init_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(SCHEMA)
+
+
+@contextmanager
+def connect(path: Path) -> Iterator[sqlite3.Connection]:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

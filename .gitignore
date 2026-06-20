@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+node_modules/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# Runtime data (uploaded PDFs, render cache, SQLite db)
+backend/data/
+backend/.benchmarks/
+
+# Frontend
+frontend/dist/
+frontend/.vite/
+
+# Test artifacts (diff images on failures)
+backend/tests/_failures/
