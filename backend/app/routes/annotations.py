@@ -33,6 +33,7 @@ class CreateHighlight(BaseModel):
     page: int = Field(ge=1, description="1-indexed page number")
     color: HighlightColor
     rects: list[Rect]
+    text: str | None = Field(default=None, max_length=4000)
 
 
 @router.post("")
@@ -51,6 +52,8 @@ def create_annotation(
         "color": body.color,
         "rects": [r.model_dump() for r in body.rects],
     }
+    if body.text:
+        payload["text"] = body.text
     now = datetime.now(timezone.utc).isoformat()
 
     with db.connect(settings.db_path) as conn:
@@ -73,6 +76,7 @@ def create_annotation(
         "kind": "highlight",
         "color": body.color,
         "rects": payload["rects"],
+        "text": payload.get("text"),
         "created_at": now,
     }
 
@@ -112,6 +116,7 @@ def list_annotations(
             "kind": r["kind"],
             "color": payload.get("color"),
             "rects": payload.get("rects", []),
+            "text": payload.get("text"),
             "created_at": r["created_at"],
         })
     return out

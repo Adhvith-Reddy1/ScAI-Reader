@@ -355,3 +355,54 @@ html[data-highlight-active="true"] .text-column {
 .toast.toast-out {
   opacity: 0;
 }
+
+/* AI explanation tooltip (blue highlights). Anchors near a highlight on
+   500ms dwell; updates live while the model is streaming. */
+.explanation-tooltip {
+  position: absolute;
+  z-index: 200;
+  background: #1f242c;
+  color: #e6e8eb;
+  border: 1px solid rgba(33, 150, 243, 0.55);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+  line-height: 1.45;
+  pointer-events: auto;
+  max-width: 360px;
+}
+.explanation-tooltip-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(120, 180, 255, 0.95);
+  margin-bottom: 6px;
+}
+.explanation-tooltip-body {
+  white-space: pre-wrap;
+}
+.explanation-tooltip.is-loading .explanation-tooltip-body::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: rgba(120, 180, 255, 0.85);
+  animation: explanation-shimmer 1s infinite;
+}
+.explanation-tooltip.is-error {
+  border-color: rgba(244, 67, 54, 0.6);
+}
+.explanation-tooltip.is-error .explanation-tooltip-title {
+  color: rgba(255, 138, 128, 0.95);
+}
+.explanation-tooltip.is-empty {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+@keyframes explanation-shimmer {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}

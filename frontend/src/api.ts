@@ -82,6 +82,7 @@ export interface Annotation {
   kind: "highlight";
   color: HighlightColor;
   rects: Rect[];
+  text: string | null;
   created_at: string;
 }
 
@@ -90,11 +91,12 @@ export async function createHighlight(
   page: number,
   color: HighlightColor,
   rects: Rect[],
+  text?: string,
 ): Promise<Annotation> {
   const r = await fetch(`/documents/${docId}/annotations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page, color, rects }),
+    body: JSON.stringify({ page, color, rects, text }),
   });
   if (!r.ok) throw new Error(`save highlight failed (${r.status})`);
   return r.json() as Promise<Annotation>;
@@ -122,4 +124,125 @@ export async function deleteAnnotation(
   if (!r.ok && r.status !== 204) {
     throw new Error(`delete annotation failed (${r.status})`);
   }
+}
+
+export type ExplanationKind = "definition" | "explanation";
+export type ExplanationStatus = "pending" | "complete" | "error";
+
+export interface Explanation {
+  annotation_id: string;
+  kind: ExplanationKind;
+  text: string;
+  content: string | null;
+  status: ExplanationStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getExplanation(
+  docId: string,
+  annotationId: string,
+): Promise<Explanation | null> {
+  const r = await fetch(
+    `/documents/${docId}/annotations/${annotationId}/explanation`,
+  );
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`get explanation failed (${r.status})`);
+  return r.json() as Promise<Explanation>;
+}
+
+export interface ExplainCallbacks {
+  onMeta?: (kind: ExplanationKind, cached: boolean) => void;
+  onDelta: (chunk: string) => void;
+  onDone: (full: string) => void;
+  onError: (message: string) => void;
+}
+
+/**
+ * Streams an explanation from the backend via Server-Sent Events.
+ * Returns an abort function so callers can cancel if the user navigates away.
+ */
+export function streamExplanation(
+  docId: string,
+  annotationId: string,
+  text: string,
+  callbacks: ExplainCallbacks,
+): () => void {
+  const ctrl = new AbortController();
+
+  void (async () => {
+    let r: Response;
+    try {
+      r = await fetch(
+        `/documents/${docId}/annotations/${annotationId}/explain`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: ctrl.signal,
+        },
+      );
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        callbacks.onError((e as Error).message);
+      }
+      return;
+    }
+
+    if (!r.ok || !r.body) {
+      callbacks.onError(`explain failed (${r.status})`);
+      return;
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") {
+          callbacks.onError((e as Error).message);
+        }
+        return;
+      }
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+
+      // SSE frames are separated by double newlines.
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const event = JSON.parse(payload) as
+              | { type: "meta"; kind: ExplanationKind; cached: boolean }
+              | { type: "delta"; text: string }
+              | { type: "done"; text: string }
+              | { type: "error"; message: string };
+            if (event.type === "meta") {
+              callbacks.onMeta?.(event.kind, event.cached);
+            } else if (event.type === "delta") {
+              callbacks.onDelta(event.text);
+            } else if (event.type === "done") {
+              callbacks.onDone(event.text);
+            } else if (event.type === "error") {
+              callbacks.onError(event.message);
+            }
+          } catch {
+            // ignore malformed frame
+          }
+        }
+      }
+    }
+  })();
+
+  return () => ctrl.abort();
 }

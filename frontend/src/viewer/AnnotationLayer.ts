@@ -6,9 +6,10 @@
  * annotations change, rather than mutating in place.
  */
 
-import type { Annotation, HighlightColor } from "../api.ts";
+import type { Annotation, DocumentMeta, HighlightColor } from "../api.ts";
 import { pageBBoxToViewport, type PageGeometry } from "./coords.ts";
 import { mergeAdjacentLineRects } from "./selection.ts";
+import { bindBlueAnnotation } from "./ExplanationTooltip.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -24,6 +25,7 @@ export function buildAnnotationLayer(
   annotations: Annotation[],
   geom: PageGeometry,
   onDelete: (annotationId: string) => void,
+  doc?: DocumentMeta,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("class", "annotation-layer");
@@ -58,6 +60,11 @@ export function buildAnnotationLayer(
       }
     });
     svg.appendChild(group);
+
+    // Blue highlights get the AI-explanation hover tooltip.
+    if (ann.color === "blue" && doc) {
+      bindBlueAnnotation(group, doc, ann.id, ann.text ?? null);
+    }
   }
   return svg;
 }

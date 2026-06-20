@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS annotations (
 
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
     ON annotations(doc_id, page_index);
+
+CREATE TABLE IF NOT EXISTS explanations (
+    annotation_id TEXT PRIMARY KEY
+                  REFERENCES annotations(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL,               -- definition | explanation
+    text          TEXT NOT NULL,               -- the highlighted text
+    content       TEXT,                        -- AI response (null while pending)
+    status        TEXT NOT NULL,               -- pending | complete | error
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 """
 
 

@@ -10,6 +10,7 @@ dependencies = [
     "pypdf>=5.0",
     "Pillow>=10.4",
     "python-multipart>=0.0.12",
+    "anthropic>=0.80",
 ]
 
 [project.optional-dependencies]

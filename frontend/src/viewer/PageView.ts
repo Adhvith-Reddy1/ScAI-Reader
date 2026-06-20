@@ -10,6 +10,7 @@ import {
   type Rect,
 } from "../api.ts";
 import { getHighlightMode } from "../highlightMode.ts";
+import { startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import {
@@ -166,6 +167,7 @@ async function refreshAnnotations(
       }
       await refreshAnnotations(meta, pageNumber, wrap, state);
     },
+    meta,
   );
   const textLayer = wrap.querySelector(".text-layer");
   if (textLayer) {
@@ -214,11 +216,28 @@ async function maybeAutoSaveHighlight(
   const merged = mergeAdjacentLineRects(viewportRects);
   const pageRects: Rect[] = rectsToPageSpace(merged, state.geom);
 
+  // Capture the selection text BEFORE we clear it — needed for AI
+  // explanations on blue highlights.
+  const selectedText = sel.toString().trim();
+
+  let saved;
   try {
-    await createHighlight(meta.id, pageNumber, mode.color, pageRects);
+    saved = await createHighlight(
+      meta.id,
+      pageNumber,
+      mode.color,
+      pageRects,
+      selectedText || undefined,
+    );
   } catch {
     return;
   }
   sel.removeAllRanges();
   await refreshAnnotations(meta, pageNumber, wrap, state);
+
+  // Blue highlights eagerly generate an AI definition/explanation so that
+  // by the time the user hovers, the response is partially or fully ready.
+  if (saved && mode.color === "blue" && selectedText) {
+    startExplanation(meta.id, saved.id, selectedText);
+  }
 }

@@ -21,6 +21,7 @@ function ann(
     kind: "highlight",
     color,
     rects,
+    text: null,
     created_at: "2026-06-18T00:00:00Z",
   };
 }
