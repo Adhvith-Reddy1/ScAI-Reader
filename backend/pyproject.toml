@@ -39,3 +39,6 @@ addopts = "-ra --strict-markers"
 [tool.coverage.run]
 source = ["app"]
 branch = true
+
+[tool.setuptools.packages.find]
+include = ["app*"]
