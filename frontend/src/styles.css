@@ -361,6 +361,48 @@ html[data-highlight-active="true"] .text-column {
   cursor: cell;
 }
 
+/* Erase button — same shape as highlight, no popover. */
+.erase-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.erase-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.erase-button[data-active="true"] {
+  background: rgba(244, 67, 54, 0.18);
+  border-color: rgba(244, 67, 54, 0.7);
+  box-shadow: 0 0 0 1px rgba(244, 67, 54, 0.4) inset;
+}
+.erase-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.erase-label {
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+
+/* In erase mode, cursor over text and over annotations signals "click to
+   delete". `crosshair` is a reasonable stand-in for an eraser cursor. */
+html[data-erase-active="true"] .text-column,
+html[data-erase-active="true"] .annotation-layer .annotation {
+  cursor: crosshair;
+}
+html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
+  stroke: rgba(244, 67, 54, 0.9);
+  stroke-width: 2;
+}
+
 /* Zoom controls in the toolbar. */
 .zoom-controls {
   display: inline-flex;

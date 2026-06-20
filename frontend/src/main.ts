@@ -10,6 +10,8 @@ import {
   setDocumentBounds,
   setViewport,
 } from "./fit.ts";
+import { buildEraseButton } from "./EraseButton.ts";
+import { subscribeEraseMode } from "./eraseMode.ts";
 import { buildFindBar } from "./FindBar.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
@@ -34,6 +36,7 @@ const fileInput = document.getElementById("file") as HTMLInputElement;
 const viewer = document.getElementById("viewer") as HTMLElement;
 const docInfo = document.getElementById("doc-info") as HTMLElement;
 const buttonSlot = document.getElementById("highlight-button-slot") as HTMLElement;
+const eraseSlot = document.getElementById("erase-button-slot") as HTMLElement;
 const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
 const pageIndicatorSlot = document.getElementById(
   "page-indicator-slot",
@@ -49,6 +52,7 @@ const sidebarToggleSlot = document.getElementById(
 ) as HTMLElement;
 sidebarToggleSlot.appendChild(buildSidebarToggle());
 buttonSlot.appendChild(buildHighlightButton());
+eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
 
@@ -64,6 +68,9 @@ window.addEventListener("keydown", (e) => {
 
 subscribeHighlightMode((s) => {
   document.documentElement.dataset.highlightActive = String(s.active);
+});
+subscribeEraseMode((s) => {
+  document.documentElement.dataset.eraseActive = String(s.active);
 });
 
 window.addEventListener("keydown", (e) => {
