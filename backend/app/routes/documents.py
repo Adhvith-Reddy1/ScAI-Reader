@@ -7,8 +7,22 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.pdfium_backend import PdfiumBackend
+from ..pdf.types import PageText
 from ..storage import db, files
 from .deps import get_settings
+
+
+def _flatten_page_text(page: PageText) -> str:
+    """One whitespace-separated string per page, in reading order. The FTS5
+    tokenizer splits on whitespace and punctuation so the exact joiner doesn't
+    affect matchable tokens, but a space keeps snippets readable."""
+    parts: list[str] = []
+    for col in page.columns:
+        for run in col.runs:
+            t = run.text.strip()
+            if t:
+                parts.append(t)
+    return " ".join(parts)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -30,6 +44,13 @@ async def upload_document(
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
             meta = backend.metadata()
             dims = [backend.page_dimensions(i) for i in range(meta.page_count)]
+            # Concatenated per-page text for the FTS index. Done inside the
+            # PDFium context so we open the document once. Slow on large docs;
+            # that's accepted — the search wouldn't work otherwise.
+            page_texts = [
+                _flatten_page_text(backend.get_page_text(i))
+                for i in range(meta.page_count)
+            ]
     except PdfError as e:
         files.pdf_path(settings, doc_id).unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"invalid PDF: {e}") from e
@@ -67,6 +88,14 @@ async def upload_document(
             "INSERT OR IGNORE INTO page_dimensions "
             "(doc_id, page_index, width_pt, height_pt) VALUES (?, ?, ?, ?)",
             [(doc_id, i, d.width_pt, d.height_pt) for i, d in enumerate(dims)],
+        )
+        # FTS5 doesn't support ON CONFLICT; doc_id is SHA-keyed so content is
+        # identical on re-upload. Delete-then-insert keeps the index in sync
+        # without growing duplicate rows.
+        conn.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
+        conn.executemany(
+            "INSERT INTO pages_fts (doc_id, page_index, text) VALUES (?, ?, ?)",
+            [(doc_id, i + 1, text) for i, text in enumerate(page_texts)],
         )
 
     return {

@@ -442,3 +442,71 @@ html[data-highlight-active="true"] .text-column {
 .toast.toast-out {
   opacity: 0;
 }
+
+/* Sidebar search panel — full-text search within the active document. */
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px;
+  gap: 8px;
+}
+.search-input {
+  width: 100%;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  outline: none;
+}
+.search-input:focus {
+  border-color: var(--accent);
+}
+.search-status {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 2px;
+}
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.search-result {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.search-result:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: var(--accent);
+}
+.search-result-page {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.search-result-snippet {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  /* Long snippets fold rather than scroll horizontally. */
+  word-break: break-word;
+}
+.search-result-snippet mark {
+  background: rgba(255, 235, 59, 0.35);
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
