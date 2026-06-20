@@ -44,13 +44,18 @@ export function zoomAroundClientPoint(
   const oldZoom = getZoom();
   const rect = viewer.getBoundingClientRect();
 
-  // Clamp the anchor to the viewer's visible area. clientX/Y may be over the
-  // toolbar (cursor after pressing Enter in the page-jump input) or below
-  // the viewer (cursor near the bottom of the window). Anchoring outside
-  // the viewer is mathematically valid but at large scrollTop pulls the
-  // view by dozens of px per tick.
-  const offsetX = clamp(clientX - rect.left, 0, viewer.clientWidth);
-  const offsetY = clamp(clientY - rect.top, 0, viewer.clientHeight);
+  // If the cursor is OUTSIDE the viewer (over the toolbar, the page-jump
+  // input, the browser chrome, an empty area to the side, etc.) the cursor
+  // is not a meaningful anchor — clamping to the nearest viewer edge would
+  // anchor to top/bottom/left/right of the viewer, which on a fit-width doc
+  // produces the "zoom into bottom-left of the page" effect. Fall back to
+  // the viewer center so the visible content stays roughly put.
+  const rawOffsetX = clientX - rect.left;
+  const rawOffsetY = clientY - rect.top;
+  const insideX = rawOffsetX >= 0 && rawOffsetX <= viewer.clientWidth;
+  const insideY = rawOffsetY >= 0 && rawOffsetY <= viewer.clientHeight;
+  const offsetX = insideX && insideY ? rawOffsetX : viewer.clientWidth / 2;
+  const offsetY = insideX && insideY ? rawOffsetY : viewer.clientHeight / 2;
   const contentX = viewer.scrollLeft + offsetX;
   const contentY = viewer.scrollTop + offsetY;
 
