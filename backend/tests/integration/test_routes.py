@@ -121,6 +121,56 @@ def test_get_document_metadata(app_client, simple_pdf):
 
 
 @pytest.mark.integration
+def test_dimensions_endpoint_returns_per_page_sizes(app_client, simple_pdf):
+    with simple_pdf.open("rb") as f:
+        doc_id = app_client.post(
+            "/documents", files={"file": ("s.pdf", f, "application/pdf")}
+        ).json()["id"]
+
+    r = app_client.get(f"/documents/{doc_id}/dimensions")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["doc_id"] == doc_id
+    assert len(body["pages"]) == 2
+    assert body["pages"][0]["page"] == 1
+    assert body["pages"][0]["width_pt"] > 0
+    assert body["pages"][0]["height_pt"] > 0
+
+
+@pytest.mark.integration
+def test_dimensions_endpoint_404_on_unknown_doc(app_client):
+    r = app_client.get("/documents/deadbeef/dimensions")
+    assert r.status_code == 404
+
+
+@pytest.mark.integration
+def test_dimensions_lazy_populates_for_legacy_docs(app_client, simple_pdf, tmp_settings):
+    """Docs uploaded before the dimensions table existed have no cached rows.
+    The endpoint must still answer correctly by computing on demand."""
+    from app.storage import db
+
+    with simple_pdf.open("rb") as f:
+        doc_id = app_client.post(
+            "/documents", files={"file": ("s.pdf", f, "application/pdf")}
+        ).json()["id"]
+
+    # Simulate a pre-upgrade doc by wiping the cached rows.
+    with db.connect(tmp_settings.db_path) as conn:
+        conn.execute("DELETE FROM page_dimensions WHERE doc_id = ?", (doc_id,))
+
+    r = app_client.get(f"/documents/{doc_id}/dimensions")
+    assert r.status_code == 200
+    assert len(r.json()["pages"]) == 2
+
+    # And now the rows should be backfilled.
+    with db.connect(tmp_settings.db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM page_dimensions WHERE doc_id = ?", (doc_id,)
+        ).fetchone()["n"]
+    assert count == 2
+
+
+@pytest.mark.integration
 def test_duplicate_upload_is_idempotent(app_client, simple_pdf):
     """SHA-keyed storage means the same bytes always resolve to the same id."""
     with simple_pdf.open("rb") as f:

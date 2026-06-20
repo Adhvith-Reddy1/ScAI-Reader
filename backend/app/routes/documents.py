@@ -29,6 +29,7 @@ async def upload_document(
     try:
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
             meta = backend.metadata()
+            dims = [backend.page_dimensions(i) for i in range(meta.page_count)]
     except PdfError as e:
         files.pdf_path(settings, doc_id).unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"invalid PDF: {e}") from e
@@ -59,6 +60,13 @@ async def upload_document(
                 len(data),
                 now,
             ),
+        )
+        # Dimensions are stable for a given (SHA-keyed) doc — INSERT OR IGNORE
+        # leaves any previously cached rows alone on re-upload.
+        conn.executemany(
+            "INSERT OR IGNORE INTO page_dimensions "
+            "(doc_id, page_index, width_pt, height_pt) VALUES (?, ?, ?, ?)",
+            [(doc_id, i, d.width_pt, d.height_pt) for i, d in enumerate(dims)],
         )
 
     return {
@@ -91,3 +99,56 @@ def get_document(doc_id: str, settings: Settings = Depends(get_settings)) -> dic
     if row is None:
         raise HTTPException(status_code=404, detail="document not found")
     return dict(row)
+
+
+@router.get("/{doc_id}/dimensions")
+def get_dimensions(doc_id: str, settings: Settings = Depends(get_settings)) -> dict:
+    """Per-page sizes in PDF points. Used by the frontend to reserve scroll
+    space for unrendered pages — the virtualizer needs an honest total height
+    before any page raster has loaded."""
+    with db.connect(settings.db_path) as conn:
+        doc = conn.execute(
+            "SELECT page_count FROM documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="document not found")
+
+        rows = conn.execute(
+            "SELECT page_index, width_pt, height_pt FROM page_dimensions "
+            "WHERE doc_id = ? ORDER BY page_index",
+            (doc_id,),
+        ).fetchall()
+
+    # Lazy populate: docs uploaded before this endpoint existed have no rows.
+    if len(rows) != doc["page_count"]:
+        pdf_path = files.pdf_path(settings, doc_id)
+        if not pdf_path.exists():
+            raise HTTPException(status_code=404, detail="document file missing")
+        try:
+            with PdfiumBackend.open(pdf_path) as backend:
+                computed = [
+                    backend.page_dimensions(i) for i in range(doc["page_count"])
+                ]
+        except PdfError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        with db.connect(settings.db_path) as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO page_dimensions "
+                "(doc_id, page_index, width_pt, height_pt) VALUES (?, ?, ?, ?)",
+                [(doc_id, i, d.width_pt, d.height_pt) for i, d in enumerate(computed)],
+            )
+        pages = [
+            {"page": i + 1, "width_pt": d.width_pt, "height_pt": d.height_pt}
+            for i, d in enumerate(computed)
+        ]
+    else:
+        pages = [
+            {
+                "page": r["page_index"] + 1,
+                "width_pt": r["width_pt"],
+                "height_pt": r["height_pt"],
+            }
+            for r in rows
+        ]
+
+    return {"doc_id": doc_id, "pages": pages}

@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS annotations (
 
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
     ON annotations(doc_id, page_index);
+
+CREATE TABLE IF NOT EXISTS page_dimensions (
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_index   INTEGER NOT NULL,
+    width_pt     REAL NOT NULL,
+    height_pt    REAL NOT NULL,
+    PRIMARY KEY (doc_id, page_index)
+);
 """
 
 
