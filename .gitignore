@@ -21,3 +21,6 @@ frontend/tsconfig.tsbuildinfo
 
 # Test artifacts (diff images on failures)
 backend/tests/_failures/
+
+# Claude Code agent worktrees (per-session, tooling state)
+.claude/worktrees/
