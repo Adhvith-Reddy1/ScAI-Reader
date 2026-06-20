@@ -6,9 +6,11 @@ import {
   pageImageUrl,
   type Annotation,
   type DocumentMeta,
+  type PageDimension,
   type PageText,
   type Rect,
 } from "../api.ts";
+import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
@@ -24,8 +26,7 @@ import {
 } from "./selection.ts";
 import type { PageGeometry } from "./coords.ts";
 
-const BASE_DISPLAY_WIDTH = 900;
-const BASE_DPI = 150;
+const MIN_DPI = 150;
 const MAX_DPI = 300;
 
 interface PageState {
@@ -36,7 +37,16 @@ interface PageState {
   currentDpi: number;
 }
 
-export function buildPageView(meta: DocumentMeta, pageNumber: number): HTMLElement {
+export interface PageViewHandle {
+  element: HTMLElement;
+  dispose: () => void;
+}
+
+export function buildPageView(
+  meta: DocumentMeta,
+  pageNumber: number,
+  pageDim: PageDimension,
+): PageViewHandle {
   const wrap = document.createElement("div");
   wrap.className = "page-wrap";
 
@@ -60,17 +70,19 @@ export function buildPageView(meta: DocumentMeta, pageNumber: number): HTMLEleme
     currentDpi: 0,
   };
 
-  const applyZoom = (zoom: number) => {
-    const width = BASE_DISPLAY_WIDTH * zoom;
-    wrap.style.width = `${width}px`;
-    wrap.style.maxWidth = `${width}px`;
-    img.style.width = `${width}px`;
+  const applyDisplay = (): void => {
+    const effectiveScale = getBaseScale() * getZoom();
+    const widthPx = pageDim.width_pt * effectiveScale;
+    const heightPx = pageDim.height_pt * effectiveScale;
+    wrap.style.width = `${widthPx}px`;
+    wrap.style.height = `${heightPx}px`;
+    img.style.width = `${widthPx}px`;
+    img.style.height = `${heightPx}px`;
 
-    // Bump DPI when zoomed in so the raster stays sharp under upscaling.
-    // We snap to integer DPI and only re-request when the bucket changes —
-    // this lets the browser/disk cache do the heavy lifting on zoom-in/out.
-    const desired = Math.ceil(BASE_DPI * Math.max(1.0, zoom));
-    const dpi = Math.min(MAX_DPI, Math.max(BASE_DPI, desired));
+    // Pick a raster DPI that gives ≥1 source pixel per CSS pixel, snapped to
+    // an integer and clamped so cache buckets don't proliferate.
+    const desired = Math.ceil(effectiveScale * 72);
+    const dpi = Math.min(MAX_DPI, Math.max(MIN_DPI, desired));
     if (dpi !== state.currentDpi) {
       state.currentDpi = dpi;
       img.src = pageImageUrl(meta.id, pageNumber, dpi);
@@ -80,8 +92,9 @@ export function buildPageView(meta: DocumentMeta, pageNumber: number): HTMLEleme
   const layout = (): void => {
     if (!state.text) return;
     const text = state.text;
-    const widthCss = BASE_DISPLAY_WIDTH * getZoom();
-    const heightCss = widthCss * (text.page_height_pt / text.page_width_pt);
+    const effectiveScale = getBaseScale() * getZoom();
+    const widthCss = pageDim.width_pt * effectiveScale;
+    const heightCss = pageDim.height_pt * effectiveScale;
 
     const geom: PageGeometry = {
       pageWidthPt: text.page_width_pt,
@@ -124,7 +137,7 @@ export function buildPageView(meta: DocumentMeta, pageNumber: number): HTMLEleme
     layout();
   };
 
-  applyZoom(getZoom());
+  applyDisplay();
 
   if (img.complete && img.naturalWidth > 0) {
     void init();
@@ -132,12 +145,22 @@ export function buildPageView(meta: DocumentMeta, pageNumber: number): HTMLEleme
     img.addEventListener("load", () => void init(), { once: true });
   }
 
-  subscribeZoom((zoom) => {
-    applyZoom(zoom);
+  const unsubZoom = subscribeZoom(() => {
+    applyDisplay();
+    if (state.text) layout();
+  });
+  const unsubFit = subscribeFit(() => {
+    applyDisplay();
     if (state.text) layout();
   });
 
-  return wrap;
+  return {
+    element: wrap,
+    dispose: () => {
+      unsubZoom();
+      unsubFit();
+    },
+  };
 }
 
 async function refreshAnnotations(

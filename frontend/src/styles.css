@@ -53,9 +53,10 @@ body {
 
 .empty { color: var(--muted); margin: 80px auto 0; font-size: 14px; text-align: center; }
 
+/* Width and height are set inline by PageView (per-page, derived from
+   fit + zoom). Margin auto centers pages narrower than the viewport. */
 .page-wrap {
   position: relative;
-  width: 900px;
   margin: 0 auto;
 }
 /* Vertical gap between pages. Using a sibling selector instead of flex gap
@@ -68,8 +69,6 @@ body {
 .page {
   background: var(--page-bg);
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
-  width: 100%;
-  height: auto;
   display: block;
   border-radius: 2px;
 }

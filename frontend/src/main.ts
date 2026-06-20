@@ -1,12 +1,19 @@
 import {
+  fetchDocumentDimensions,
   uploadDocument,
+  type DocumentDimensions,
   type DocumentMeta,
   type LibraryDocument,
 } from "./api.ts";
+import {
+  clearDocument,
+  setDocumentBounds,
+  setViewport,
+} from "./fit.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
 import { buildLibrary } from "./Library.ts";
-import { buildPageView } from "./viewer/PageView.ts";
+import { buildPageView, type PageViewHandle } from "./viewer/PageView.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import { getZoom, resetZoom, setZoom, zoomIn, zoomOut } from "./zoom.ts";
 
@@ -106,25 +113,58 @@ fileInput.addEventListener("change", async () => {
   docInfo.textContent = "Uploading…";
   try {
     const meta = await uploadDocument(file);
-    renderDocument(meta);
+    await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
   }
 });
 
-function renderDocument(meta: DocumentMeta | LibraryDocument): void {
+let mounted: PageViewHandle[] = [];
+
+function pushViewportSize(): void {
+  setViewport(viewer.clientWidth, viewer.clientHeight);
+}
+pushViewportSize();
+window.addEventListener("resize", pushViewportSize);
+
+async function renderDocument(
+  meta: DocumentMeta | LibraryDocument,
+): Promise<void> {
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
+  for (const h of mounted) h.dispose();
+  mounted = [];
   viewer.innerHTML = "";
-  for (let i = 1; i <= meta.page_count; i++) {
-    viewer.appendChild(buildPageView(meta, i));
+
+  let dims: DocumentDimensions;
+  try {
+    dims = await fetchDocumentDimensions(meta.id);
+  } catch (err) {
+    docInfo.textContent = `Error loading document: ${(err as Error).message}`;
+    return;
+  }
+
+  const maxWidthPt = Math.max(...dims.pages.map((p) => p.width_pt));
+  const maxHeightPt = Math.max(...dims.pages.map((p) => p.height_pt));
+  setDocumentBounds(maxWidthPt, maxHeightPt);
+  pushViewportSize();
+
+  for (const pageDim of dims.pages) {
+    const handle = buildPageView(meta, pageDim.page, pageDim);
+    mounted.push(handle);
+    viewer.appendChild(handle.element);
   }
 }
 
 async function showLibrary(): Promise<void> {
+  for (const h of mounted) h.dispose();
+  mounted = [];
+  clearDocument();
   viewer.innerHTML = "";
-  const library = await buildLibrary((doc) => renderDocument(doc));
+  const library = await buildLibrary((doc) => {
+    void renderDocument(doc);
+  });
   viewer.appendChild(library);
 }
 

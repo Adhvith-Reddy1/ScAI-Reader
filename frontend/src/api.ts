@@ -37,6 +37,25 @@ export function pageImageUrl(docId: string, pageNumber: number, dpi = 150): stri
   return `/documents/${docId}/pages/${pageNumber}.png?dpi=${dpi}`;
 }
 
+export interface PageDimension {
+  page: number;
+  width_pt: number;
+  height_pt: number;
+}
+
+export interface DocumentDimensions {
+  doc_id: string;
+  pages: PageDimension[];
+}
+
+export async function fetchDocumentDimensions(
+  docId: string,
+): Promise<DocumentDimensions> {
+  const r = await fetch(`/documents/${docId}/dimensions`);
+  if (!r.ok) throw new Error(`dimensions fetch failed (${r.status})`);
+  return r.json() as Promise<DocumentDimensions>;
+}
+
 export interface PageRun {
   text: string;
   bbox: { x0: number; y0: number; x1: number; y1: number };
