@@ -6,6 +6,50 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Explanation latency: page-text context + faster models — 2026-06-21
+
+### Why
+
+First-hover explanations were slow. Root cause in `routes/explanations.py`:
+every `/explain` call base64-encoded and sent the **entire PDF** as a
+`document` block, so the model prefilled tens of thousands of tokens before
+emitting a 35-word definition. `cache_control` only helped repeat highlights
+within the 5-min TTL; the first call (and post-expiry) paid full prefill.
+Explanations also ran on Opus.
+
+### What changed (backend only)
+
+- **Definitions/explanations now send only the highlighted page's text**, not
+  the whole PDF. `_verify_ownership` returns the annotation's `page_index`;
+  `_page_text(settings, doc_id, page_index)` joins that page's runs
+  (`PdfiumBackend.get_page_text`) into ~a few hundred–2K tokens. `_stream_claude`
+  takes `page_text` (was `pdf_bytes`) and builds a plain-text prompt with a
+  `<page>…</page>` context block — no `document` block, no large prefill. Live
+  check: Animal_farm p3 → 3,175 chars vs the 121 KB PDF. Falls back to "" (model
+  answers generally) if extraction fails.
+- **Chat and refine still attach the full PDF** (`_pdf_document_block`) — they're
+  deliberate, less latency-sensitive, and benefit from whole-paper context.
+- **Models:** `MODEL_DEFINITION = claude-haiku-4-5` (was sonnet),
+  `MODEL_EXPLANATION = claude-sonnet-4-6` (was opus-4-7). Chat/refine inherit
+  these via the existing constants.
+
+### Tests (105 backend, +3)
+
+`test_explanation_chat.py`: explain page-text path streams the no-key error,
+explain 404 on unknown annotation, and `_page_text` returns non-empty content.
+Frontend unchanged — the `/explain` wire contract (`POST {text}` → SSE) is the
+same.
+
+### Notes / further levers (not done)
+
+- No `ANTHROPIC_API_KEY` here, so latency verified structurally (prefill size
+  cut), not wall-clock against a live model.
+- If quality on distant-context questions suffers, widen `_page_text` to ±1
+  page. Other untaken levers: `ttl:"1h"` + cache-warm on doc open (only matters
+  if we ever resend the PDF), Fast Mode (minor — output is ~100 tokens).
+
+---
+
 ## Explanation box: capped grow-then-scroll size — 2026-06-21
 
 The pinned box's `max-height` was `calc(100vh - 24px)` (≈ full screen), so a

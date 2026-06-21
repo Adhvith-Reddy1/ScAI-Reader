@@ -116,6 +116,45 @@ def test_refine_without_key_does_not_overwrite(app_client, simple_pdf):
 
 
 @pytest.mark.integration
+def test_explain_uses_page_text_path_and_streams_error(app_client, simple_pdf):
+    # Exercises the new page-text context path end to end: extract the page,
+    # then (no API key) emit the structured error.
+    doc_id = _upload(app_client, simple_pdf)
+    ann_id = _make_highlight(app_client, doc_id, color="blue")
+    r = app_client.post(
+        f"/documents/{doc_id}/annotations/{ann_id}/explain",
+        json={"text": "entropy"},
+    )
+    assert r.status_code == 200
+    body = _sse_text(r)
+    assert '"type": "meta"' in body
+    assert "ANTHROPIC_API_KEY not set" in body
+
+
+@pytest.mark.integration
+def test_explain_unknown_annotation_404(app_client, simple_pdf):
+    doc_id = _upload(app_client, simple_pdf)
+    r = app_client.post(
+        f"/documents/{doc_id}/annotations/missing/explain",
+        json={"text": "x"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.integration
+def test_page_text_extraction_returns_page_content(app_client, simple_pdf):
+    """The page-text helper should return the page's words for grounding."""
+    from app.routes import explanations
+    from app.routes.deps import get_settings
+
+    settings = app_client.app.dependency_overrides[get_settings]()
+    doc_id = _upload(app_client, simple_pdf)
+    text = explanations._page_text(settings, doc_id, 0)
+    assert isinstance(text, str)
+    assert len(text.strip()) > 0
+
+
+@pytest.mark.integration
 def test_save_refined_persists_and_is_served(tmp_settings):
     """The success branch of refine calls _save_refined; verify it upserts a
     complete explanation that the GET endpoint then returns."""

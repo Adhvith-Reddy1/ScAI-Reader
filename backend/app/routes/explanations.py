@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings
+from ..pdf.pdfium_backend import PdfiumBackend
 from ..storage import db, files
 from .deps import get_settings
 
@@ -25,9 +26,10 @@ router = APIRouter(
 
 ExplanationKind = Literal["definition", "explanation"]
 
-# Sonnet for short definitions, Opus for nuanced explanations — as requested.
-MODEL_DEFINITION = "claude-sonnet-4-6"
-MODEL_EXPLANATION = "claude-opus-4-7"
+# Fast tiers for short tooltips: Haiku for definitions, Sonnet for the slightly
+# more involved explanation/chat/refine work. (Was Sonnet/Opus.)
+MODEL_DEFINITION = "claude-haiku-4-5"
+MODEL_EXPLANATION = "claude-sonnet-4-6"
 
 SYSTEM_DEFINITION = (
     "You are a glossary tooltip inside an academic PDF reader. The user "
@@ -198,13 +200,38 @@ def _save_refined(
     )
 
 
-def _verify_ownership(conn, doc_id: str, annotation_id: str) -> None:
+def _verify_ownership(conn, doc_id: str, annotation_id: str) -> int:
+    """Confirm the annotation belongs to the document and return its 0-indexed
+    page. Callers that only need the existence check can ignore the result."""
     row = conn.execute(
-        "SELECT 1 FROM annotations WHERE id = ? AND doc_id = ?",
+        "SELECT page_index FROM annotations WHERE id = ? AND doc_id = ?",
         (annotation_id, doc_id),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="annotation not found")
+    return int(row["page_index"])
+
+
+def _page_text(settings: Settings, doc_id: str, page_index: int) -> str:
+    """Plain text of one page, in reading order. We send just this page as
+    context for definitions/explanations instead of the whole PDF — it slashes
+    prefill latency (a page is a few hundred tokens vs. the document's tens of
+    thousands) while still grounding the model in what the reader is looking at.
+    Returns "" if extraction fails; the model can still answer generally."""
+    pdf_path = files.pdf_path(settings, doc_id)
+    try:
+        with PdfiumBackend.open(pdf_path) as backend:
+            page = backend.get_page_text(page_index)
+    except Exception:  # noqa: BLE001
+        log.exception("page text extraction failed")
+        return ""
+    parts = [
+        run.text.strip()
+        for col in page.columns
+        for run in col.runs
+        if run.text.strip()
+    ]
+    return " ".join(parts)
 
 
 @router.get("/explanation")
@@ -279,29 +306,30 @@ async def _stream_anthropic(
 
 
 async def _stream_claude(
-    pdf_bytes: bytes,
+    page_text: str,
     text: str,
     kind: ExplanationKind,
 ) -> AsyncIterator[tuple[str, str]]:
     model = MODEL_DEFINITION if kind == "definition" else MODEL_EXPLANATION
     system = SYSTEM_DEFINITION if kind == "definition" else SYSTEM_EXPLANATION
-    instruction = (
-        f"Highlighted term: {text!r}\n\nDefine it concisely in the context "
-        "of this paper."
-        if kind == "definition"
-        else f"Highlighted passage:\n\n{text}\n\nExplain in clearer terms "
-        "what the authors are saying."
+    context = (
+        f"For context, here is the text of the page the reader is on:\n\n"
+        f"<page>\n{page_text}\n</page>\n\n"
+        if page_text
+        else ""
     )
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                _pdf_document_block(pdf_b64),
-                {"type": "text", "text": instruction},
-            ],
-        }
-    ]
+    instruction = (
+        context
+        + (
+            f"Highlighted term: {text!r}\n\nDefine it concisely in the context "
+            "of this paper."
+            if kind == "definition"
+            else f"Highlighted passage:\n\n{text}\n\nExplain in clearer terms "
+            "what the authors are saying."
+        )
+    )
+    # Plain text only — no PDF document block — so there's no large prefill.
+    messages = [{"role": "user", "content": instruction}]
     async for event in _stream_anthropic(
         model, system, messages, 80 if kind == "definition" else 140
     ):
@@ -321,11 +349,11 @@ async def explain(
 
     kind: ExplanationKind = body.kind or classify(body.text)
 
-    # Validate the annotation exists under this doc, then record the pending
-    # row. We hold the connection briefly; the streaming loop opens its own
-    # connection on finalize.
+    # Validate the annotation exists under this doc, capture its page, then
+    # record the pending row. We hold the connection briefly; the streaming
+    # loop opens its own connection on finalize.
     with db.connect(settings.db_path) as conn:
-        _verify_ownership(conn, doc_id, annotation_id)
+        page_index = _verify_ownership(conn, doc_id, annotation_id)
 
         cached = _load_explanation(conn, annotation_id)
         if (
@@ -349,14 +377,16 @@ async def explain(
 
         _upsert_pending(conn, annotation_id, kind, body.text)
 
-    pdf_bytes = pdf_path.read_bytes()
+    # Only the highlighted page's text is sent as context (not the whole PDF),
+    # which is what keeps the first explanation fast.
+    page_text = _page_text(settings, doc_id, page_index)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": kind, "cached": False})
         final_text: str | None = None
         error_text: str | None = None
         async for event_type, payload in _stream_claude(
-            pdf_bytes, body.text, kind
+            page_text, body.text, kind
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
