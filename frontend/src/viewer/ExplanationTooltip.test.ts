@@ -4,15 +4,24 @@ import {
   dismissExplanationFor,
   _resetForTest as _resetTooltip,
 } from "./ExplanationTooltip.ts";
-import type { DocumentMeta } from "../api.ts";
+import type { ChatStreamCallbacks, DocumentMeta } from "../api.ts";
 
-// The tooltip pulls cached content from the store; mock the network bits so
-// hydrate/start are inert and we drive state purely via seedExplanation.
+// Capture the stream callbacks so tests can complete a chat turn, and observe
+// refine kick-offs. hydrate/start are inert so state comes from seedExplanation.
+const streamChatMock = vi.fn(
+  (_d: string, _a: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
+);
+const streamRefineMock = vi.fn(
+  (_d: string, _a: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
+);
+
 vi.mock("../api.ts", () => ({
   getExplanation: vi.fn(async () => null),
   streamExplanation: vi.fn(() => () => {}),
-  streamChat: vi.fn(() => () => {}),
-  streamRefine: vi.fn(() => () => {}),
+  streamChat: (d: string, a: string, b: unknown, cb: ChatStreamCallbacks) =>
+    streamChatMock(d, a, b, cb) ?? (() => {}),
+  streamRefine: (d: string, a: string, b: unknown, cb: ChatStreamCallbacks) =>
+    streamRefineMock(d, a, b, cb) ?? (() => {}),
 }));
 
 import {
@@ -61,10 +70,10 @@ function buildBlueHighlight(): SVGGElement {
   return group;
 }
 
-function hoverInto(group: SVGGElement): void {
+function hoverInto(group: SVGGElement, x = 60, y = 46): void {
   const wrap = group.closest(".page-wrap")!;
   wrap.dispatchEvent(
-    new MouseEvent("mousemove", { clientX: 60, clientY: 46, bubbles: true }),
+    new MouseEvent("mousemove", { clientX: x, clientY: y, bubbles: true }),
   );
 }
 
@@ -79,11 +88,17 @@ async function openAndPin(group: SVGGElement): Promise<HTMLElement> {
   return tip;
 }
 
-describe("ExplanationTooltip pin / dismiss", () => {
+function lastChatCallbacks(): ChatStreamCallbacks {
+  return streamChatMock.mock.calls[streamChatMock.mock.calls.length - 1][3];
+}
+
+describe("ExplanationTooltip pin / chat / resize", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     _resetTooltip();
     _resetStore();
+    streamChatMock.mockReset().mockReturnValue(() => {});
+    streamRefineMock.mockReset().mockReturnValue(() => {});
     document.body.innerHTML = "";
   });
   afterEach(() => {
@@ -92,7 +107,7 @@ describe("ExplanationTooltip pin / dismiss", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens the chat when the follow-up affordance is clicked", async () => {
+  it("opens the chat and hides the footer (Delete) when pinned", async () => {
     seedExplanation("a", "definition", "A measure of disorder.");
     const group = buildBlueHighlight();
     bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
@@ -103,32 +118,67 @@ describe("ExplanationTooltip pin / dismiss", () => {
     expect(tip.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
       "flex",
     );
-    // Close button is now visible, footer affordance hidden.
+    // While chatting we assume no intent to delete: the footer is hidden.
     expect(
-      (tip.querySelector(".explanation-tooltip-close") as HTMLElement).style
-        .display,
-    ).toBe("block");
+      tip.querySelector<HTMLElement>(".explanation-tooltip-foot")!.style.display,
+    ).toBe("none");
   });
 
-  it("Delete button in the footer invokes the highlight's onDelete", async () => {
+  it("Delete in the collapsed footer invokes the highlight's onDelete", async () => {
     const onDelete = vi.fn();
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
     bindBlueAnnotation(group, DOC, "a", "entropy", onDelete);
-    // Hover (collapsed) is enough — the Delete button lives in the footer and
-    // is available without opening the chat.
     await Promise.resolve();
     hoverInto(group);
     vi.advanceTimersByTime(300);
     await Promise.resolve();
 
     const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
-    const del = tip.querySelector<HTMLButtonElement>(
-      ".explanation-tooltip-delete",
-    )!;
-    expect(del).not.toBeNull();
-    del.click();
+    expect(tip.querySelector<HTMLElement>(".explanation-tooltip-foot")!.style.display)
+      .not.toBe("none");
+    tip.querySelector<HTMLButtonElement>(".explanation-tooltip-delete")!.click();
     expect(onDelete).toHaveBeenCalledWith("a");
+  });
+
+  it("clicking outside the panel closes it", async () => {
+    seedExplanation("a", "definition", "x");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    const tip = await openAndPin(group);
+    expect(tip.style.display).toBe("flex");
+
+    document.body.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    expect(tip.style.display).toBe("none");
+  });
+
+  it("Update explanation closes the panel and refines in the background", async () => {
+    seedExplanation("a", "definition", "old");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    const tip = await openAndPin(group);
+
+    // Ask a follow-up, then complete the assistant reply so the conversation
+    // has content and the "Update explanation" button enables.
+    const input = tip.querySelector<HTMLInputElement>(".explanation-chat-input")!;
+    input.value = "why here?";
+    tip
+      .querySelector<HTMLFormElement>(".explanation-chat-form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    lastChatCallbacks().onDone("because reasons");
+
+    const apply = tip.querySelector<HTMLButtonElement>(
+      ".explanation-chat-apply",
+    )!;
+    expect(apply.disabled).toBe(false);
+    apply.click();
+
+    // Panel is gone immediately…
+    expect(tip.style.display).toBe("none");
+    // …and the rewrite was kicked off in the background.
+    expect(streamRefineMock).toHaveBeenCalledTimes(1);
   });
 
   it("dragging the SE handle resizes the panel", async () => {
@@ -137,7 +187,6 @@ describe("ExplanationTooltip pin / dismiss", () => {
     bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
     const tip = await openAndPin(group);
 
-    // Give the panel a known starting geometry for the resize math.
     stubRect(tip, {
       left: 100,
       top: 100,
@@ -158,12 +207,42 @@ describe("ExplanationTooltip pin / dismiss", () => {
     );
     window.dispatchEvent(new MouseEvent("pointerup", {}));
 
-    // +100 in each axis from the drag delta.
     expect(tip.style.width).toBe("480px");
     expect(tip.style.height).toBe("360px");
-    // SE drag leaves the top-left corner anchored.
     expect(tip.style.left).toBe("100px");
     expect(tip.style.top).toBe("100px");
+  });
+
+  it("remembers the resized size after close and reopen", async () => {
+    seedExplanation("a", "definition", "x");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    const tip = await openAndPin(group);
+
+    stubRect(tip, { width: 380, height: 260 });
+    const se = tip.querySelector<HTMLElement>(".resize-se")!;
+    se.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 0, clientY: 0, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 100, clientY: 100 }));
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+    expect(tip.style.width).toBe("480px"); // 380 + 100
+    expect(tip.style.height).toBe("360px"); // 260 + 100
+
+    // Close, then hover + pin again — the size should be restored.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(tip.style.display).toBe("none");
+
+    hoverInto(group, 500, 500); // move away to clear the pending hover
+    hoverInto(group); // back onto the highlight
+    vi.advanceTimersByTime(300);
+    await Promise.resolve();
+    document
+      .querySelector<HTMLButtonElement>(".explanation-chat-open")!
+      .click();
+
+    expect(tip.style.width).toBe("480px");
+    expect(tip.style.height).toBe("360px");
   });
 
   it("Escape closes a pinned conversation", async () => {
@@ -184,7 +263,6 @@ describe("ExplanationTooltip pin / dismiss", () => {
     const tip = await openAndPin(group);
     expect(tip.style.display).toBe("flex");
 
-    // A different highlight's deletion must NOT close this panel.
     dismissExplanationFor("some-other-id");
     expect(tip.style.display).toBe("flex");
 

@@ -6,6 +6,38 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Explanation box: chat-mode polish + persistent size — 2026-06-21
+
+Four follow-up tweaks to the pinnable explanation box (all in
+`ExplanationTooltip.ts` + a little CSS):
+
+- **No Delete while chatting.** The footer (Delete + "Ask a follow-up") shows
+  only in the collapsed hover state; opening the chat hides the whole footer —
+  if you're chatting, you're not deleting. `renderChat` now does
+  `footEl.style.display = pinned ? "none" : "flex"`.
+- **Click-outside closes.** A `document` `pointerdown` listener closes a pinned
+  panel when the target is outside it (resize handles and the chat are inside,
+  so they don't trigger it; the open-chat click fires while still unpinned).
+- **"Update explanation" closes immediately, refines in the background.** The
+  apply handler captures doc/id/text, calls `refineFromChat`, then `hide()`s
+  right away. The store keeps streaming the rewrite and lands it as `ready` (and
+  the server persists it), so the next hover shows the updated text — the reader
+  never waits on the model. A failed refine restores the original text.
+- **Persistent size.** Replaced the per-session `userSized` flag with
+  `savedSize` (persisted to `localStorage` key `scai.explanationBoxSize`) +
+  `pinnedPlaced`. Resizing records the size; `hide()` keeps it; `position()`
+  re-applies it (width + height) each time the panel is pinned, anchored to the
+  new highlight. Cleared only by `_resetForTest`.
+
+Tests: `ExplanationTooltip.test.ts` is now 8 — added footer-hidden-when-pinned,
+click-outside-closes, update-closes-and-refines-in-background, and
+size-persists-across-reopen. 135 frontend + 102 backend green.
+
+Still browser-unverified (no browser in container) — needs a live eyeball on
+the resize/scroll/persist feel.
+
+---
+
 ## Explanation box: bottom-left Delete, scrolling chat, resizable — 2026-06-21
 
 ### Why

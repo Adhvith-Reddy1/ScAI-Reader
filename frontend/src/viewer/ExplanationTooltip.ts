@@ -33,6 +33,7 @@ let tooltipEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
 let bodyEl: HTMLDivElement | null = null;
 let closeEl: HTMLButtonElement | null = null;
+let deleteEl: HTMLButtonElement | null = null;
 let chatEl: HTMLDivElement | null = null;
 let threadEl: HTMLDivElement | null = null;
 let chatErrorEl: HTMLDivElement | null = null;
@@ -57,9 +58,36 @@ let activeDoc: DocumentMeta | null = null;
 let activeText: string | null = null;
 let activeGroup: SVGGElement | null = null;
 let activeOnDelete: ((annotationId: string) => void) | null = null;
-// Once the reader drags a resize handle, we stop auto-positioning so their
-// chosen size/position sticks until the panel is closed.
-let userSized = false;
+// The reader's preferred panel size, remembered across opens (and reloads via
+// localStorage). Applied each time the panel is pinned.
+let savedSize: { width: number; height: number } | null = loadSavedSize();
+// Whether the pinned panel has been positioned for the current open session.
+// Once placed (or resized), re-renders leave its geometry alone.
+let pinnedPlaced = false;
+
+const SAVED_SIZE_KEY = "scai.explanationBoxSize";
+
+function loadSavedSize(): { width: number; height: number } | null {
+  try {
+    const raw = localStorage.getItem(SAVED_SIZE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (typeof o?.width === "number" && typeof o?.height === "number") {
+      return { width: o.width, height: o.height };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function persistSavedSize(): void {
+  try {
+    if (savedSize) localStorage.setItem(SAVED_SIZE_KEY, JSON.stringify(savedSize));
+  } catch {
+    /* ignore */
+  }
+}
 
 interface BlueRegistration {
   group: SVGGElement;
@@ -140,9 +168,16 @@ function ensureTooltip(): HTMLDivElement {
   apply.className = "explanation-chat-apply";
   apply.textContent = "Update explanation";
   apply.addEventListener("click", () => {
-    if (activeDoc && activeAnnotationId && activeText) {
-      refineFromChat(activeDoc.id, activeAnnotationId, activeText);
-    }
+    const doc = activeDoc;
+    const id = activeAnnotationId;
+    const text = activeText;
+    if (!doc || !id || !text) return;
+    // Kick the rewrite off in the background and close immediately so the
+    // reader can keep reading — the box text updates whenever the model
+    // finishes, ready for the next time they hover.
+    refineFromChat(doc.id, id, text);
+    pinned = false;
+    hide();
   });
   chat.appendChild(apply);
   el.appendChild(chat);
@@ -200,11 +235,21 @@ function ensureTooltip(): HTMLDivElement {
     }
   });
 
+  // Clicking anywhere outside the panel closes a pinned conversation.
+  document.addEventListener("pointerdown", (e) => {
+    if (!pinned || !tooltipEl) return;
+    if (!tooltipEl.contains(e.target as Node)) {
+      pinned = false;
+      hide();
+    }
+  });
+
   document.body.appendChild(el);
   tooltipEl = el;
   titleEl = title;
   bodyEl = body;
   closeEl = close;
+  deleteEl = del;
   chatEl = chat;
   threadEl = thread;
   chatErrorEl = chatError;
@@ -269,7 +314,10 @@ function startResize(dir: string, e: PointerEvent): void {
     el.style.height = `${h}px`;
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
-    userSized = true;
+    pinnedPlaced = true;
+    // Remember this size for the next time any explanation is opened.
+    savedSize = { width: w, height: h };
+    persistSavedSize();
   };
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
@@ -304,11 +352,13 @@ function hide(): void {
   activeText = null;
   activeGroup = null;
   activeOnDelete = null;
-  userSized = false;
+  // The panel must be re-placed next open, but the reader's chosen size is
+  // remembered (in savedSize) and re-applied then.
+  pinnedPlaced = false;
   if (tooltipEl) {
     tooltipEl.style.display = "none";
-    // Clear any manual resize so the next open auto-sizes from scratch.
-    tooltipEl.style.width = "";
+    // Drop the explicit height so a fresh collapsed hover sizes to content;
+    // the saved height is re-applied from savedSize when next pinned.
     tooltipEl.style.height = "";
   }
 }
@@ -328,16 +378,27 @@ function position(anchorRect: DOMRect): void {
   // collapsed hover tooltip is a plain block.
   el.style.display = pinned ? "flex" : "block";
 
-  // Once the reader has dragged the panel to their own size, leave its
-  // geometry alone — don't yank it back on every re-render.
-  if (pinned && userSized) return;
+  // The pinned panel is positioned (and sized) exactly once per open session.
+  // After that, re-renders and resize drags own its geometry — don't yank it.
+  if (pinned && pinnedPlaced) return;
 
   const margin = 12;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const target = pinned ? PINNED_WIDTH_PX : TOOLTIP_WIDTH_PX;
-  const width = Math.min(target, vw - margin * 2);
-  el.style.width = `${width}px`;
+
+  let width: number;
+  if (pinned) {
+    width = Math.min(savedSize?.width ?? PINNED_WIDTH_PX, vw - margin * 2);
+    el.style.width = `${width}px`;
+    // Apply the reader's remembered height if any; otherwise size to content.
+    if (savedSize?.height) {
+      el.style.height = `${Math.min(savedSize.height, vh - margin * 2)}px`;
+    }
+    pinnedPlaced = true;
+  } else {
+    width = Math.min(TOOLTIP_WIDTH_PX, vw - margin * 2);
+    el.style.width = `${width}px`;
+  }
 
   const tooltipHeight = el.offsetHeight;
 
@@ -396,12 +457,15 @@ function renderChat(annotationId: string, chatAvailable: boolean): void {
   const el = tooltipEl!;
   el.classList.toggle("is-pinned", pinned);
 
-  // Delete lives in the footer and is available in every state, so the footer
-  // is always shown. The "Ask a follow-up" affordance only appears collapsed
-  // and only when there's an explanation worth clarifying.
-  if (footEl) footEl.style.display = "flex";
+  // The footer (Delete + "Ask a follow-up") shows only in the collapsed hover
+  // state. Once the reader opens the chat we assume they don't want to delete,
+  // so the whole footer is hidden while pinned. Delete itself is available in
+  // every collapsed state (incl. error/empty); the follow-up affordance only
+  // when there's an explanation worth clarifying.
+  if (footEl) footEl.style.display = pinned ? "none" : "flex";
+  if (deleteEl) deleteEl.style.display = "inline-flex";
   if (openChatEl) {
-    openChatEl.style.display = !pinned && chatAvailable ? "inline-flex" : "none";
+    openChatEl.style.display = chatAvailable ? "inline-flex" : "none";
   }
   if (closeEl) closeEl.style.display = pinned ? "block" : "none";
   if (chatEl) chatEl.style.display = pinned ? "flex" : "none";
@@ -625,6 +689,8 @@ export function hideExplanationTooltip(): void {
 /** Test-only: tear down the singleton tooltip and reset module state. */
 export function _resetForTest(): void {
   pinned = false;
+  pinnedPlaced = false;
+  savedSize = null;
   if (currentUnsubscribe) currentUnsubscribe();
   currentUnsubscribe = null;
   if (dwellTimer != null) window.clearTimeout(dwellTimer);
@@ -636,6 +702,7 @@ export function _resetForTest(): void {
   activeDoc = null;
   activeText = null;
   activeGroup = null;
+  activeOnDelete = null;
   tooltipEl?.remove();
   tooltipEl = null;
 }
