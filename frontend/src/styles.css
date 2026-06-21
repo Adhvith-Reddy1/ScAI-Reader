@@ -344,10 +344,9 @@ body {
   left: 0;
   z-index: 50;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
   background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
@@ -356,45 +355,76 @@ body {
 .hl-popover[hidden] {
   display: none;
 }
-.hl-palette-tabs {
-  display: flex;
-  gap: 4px;
-}
-.hl-palette-tab {
-  flex: 1 1 auto;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--muted);
-  font-size: 11px;
-  padding: 3px 6px;
-  border-radius: 5px;
-  cursor: pointer;
-}
-.hl-palette-tab:hover {
-  color: var(--text);
-}
-.hl-palette-tab[data-selected="true"] {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.35);
-}
 .hl-swatches {
   display: flex;
+  align-items: center;
   gap: 6px;
-  justify-content: center;
 }
-.hl-popover .hl-explain {
-  background: rgba(33, 150, 243, 0.16);
-  border: 1px solid rgba(33, 150, 243, 0.55);
-  color: rgba(150, 195, 255, 0.95);
-  padding: 5px 10px;
+
+/* ⋮ palette menu (far left of the highlight popover). */
+.hl-palette-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.hl-palette-menu {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.hl-palette-menu:hover {
+  color: var(--text);
+}
+.hl-palette-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.hl-palette-dropdown[hidden] {
+  display: none;
+}
+.hl-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
   border-radius: 5px;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
 }
-.hl-popover .hl-explain:hover {
-  background: rgba(33, 150, 243, 0.28);
+.hl-palette-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.hl-palette-item[data-selected="true"] {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+}
+.hl-palette-item-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+.hl-palette-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 .hl-popover .swatch {
   width: 24px;

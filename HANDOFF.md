@@ -6,6 +6,31 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Reworked: separate Explain button + ⋮ palette menu — 2026-06-21
+
+The first palette pass (palette tabs stacked in the Highlight popover, fixed-blue
+Explain inside it) was too complex. Reworked to the requested shape:
+
+- **Explain is its own nav button** (`ExplainButton.ts`, slot `explain-button-slot`
+  between Highlight and Erase). Its popover shows the **current palette's**
+  swatches; picking one turns on highlight mode with `explain:true` in that color
+  — so Explain highlights can be **any color**. Quick-toggle off like Highlight.
+- **Highlight popover is back to the original simple row**: a **⋮ menu on the far
+  left** opens a dropdown of palettes (name + dot preview); the rest is the
+  palette's swatch row + Off. Picking a swatch makes a cosmetic highlight.
+- **Classic palette = yellow, blue, green, pink, red** (hex
+  `#FFEB3B/#2196F3/#4CAF50/#E91E63/#F44336`). Pastel/Vibrant/Earthy remain.
+- Persistence (`scai.highlightPrefs`) now carries `{paletteId, color,
+  explainColor}`; both buttons re-read the current palette when their popover
+  opens, so switching palette via ⋮ updates Explain's swatches too.
+- Data model unchanged from the prior commit: backend `explain` flag + hex/legacy
+  colors; `AnnotationLayer.isExplainHighlight = explain || color==="blue"`.
+
+Tests: rewrote `HighlightButton.test` (⋮ menu + swatches), added
+`ExplainButton.test`. 138 frontend + 107 backend green.
+
+---
+
 ## Highlight palettes + dedicated Explain highlight; nav-bar tweak — 2026-06-21
 
 ### Color palettes + free color choice (persisted)

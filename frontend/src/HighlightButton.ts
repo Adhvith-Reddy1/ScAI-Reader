@@ -1,19 +1,16 @@
 /**
- * Nav-bar Highlight button + color popover.
+ * Nav-bar Highlight button + color popover (cosmetic highlights only).
  *
- *   click button → popover opens
- *   pick a palette → swatches switch to that palette (persisted)
- *   click a swatch → highlight mode ON in that cosmetic color (persisted default)
- *   click "Explain ✨" → highlight mode ON as an AI "Explain" highlight
- *   click "Off" → highlight mode OFF
- *   click button while ON → quick toggle OFF
+ *   click button → popover with the current palette's swatches + "Off"
+ *   ⋮ (far left) → palette menu pops up; pick one to switch palettes
+ *   click a swatch → highlight mode ON in that color (persisted default)
+ *   "Off" / click button while ON → highlight mode OFF
  *
- * Cosmetic colors are purely visual; the AI explanation feature is triggered
- * only by the dedicated Explain highlight (see highlightMode `explain`).
+ * The AI explanation feature lives on a separate Explain button — this button
+ * only makes cosmetic highlights (explain = false).
  */
 
 import {
-  EXPLAIN_COLOR,
   PALETTES,
   loadHighlightPrefs,
   paletteById,
@@ -42,7 +39,7 @@ export function buildHighlightButton(): HTMLElement {
   label.textContent = "Highlight";
   button.append(indicator, label);
 
-  const popover = buildPopover(() => {
+  const { popover, refresh } = buildPopover(() => {
     popover.hidden = true;
   });
   popover.hidden = true;
@@ -50,10 +47,11 @@ export function buildHighlightButton(): HTMLElement {
 
   button.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (getHighlightMode().active) {
+    if (getHighlightMode().active && !getHighlightMode().explain) {
       setHighlightMode({ active: false });
       popover.hidden = true;
     } else {
+      refresh(); // re-read the current palette before showing
       popover.hidden = !popover.hidden;
     }
   });
@@ -63,84 +61,38 @@ export function buildHighlightButton(): HTMLElement {
   });
 
   subscribeHighlightMode((s) => {
-    button.dataset.active = String(s.active);
-    button.dataset.explain = String(s.explain);
+    const isCosmetic = s.active && !s.explain;
+    button.dataset.active = String(isCosmetic);
     button.dataset.color = s.color;
-    indicator.style.background = s.explain ? EXPLAIN_COLOR : s.color;
-    label.textContent = s.active && s.explain ? "Explain" : "Highlight";
+    if (isCosmetic) indicator.style.background = s.color;
   });
 
   return root;
 }
 
-function buildPopover(onPick: () => void): HTMLDivElement {
+function buildPopover(onPick: () => void): {
+  popover: HTMLDivElement;
+  refresh: () => void;
+} {
   const pop = document.createElement("div");
   pop.className = "hl-popover";
   pop.setAttribute("role", "menu");
 
-  let paletteId = loadHighlightPrefs().paletteId;
+  // ⋮ palette menu (far left).
+  const menuWrap = document.createElement("div");
+  menuWrap.className = "hl-palette-menu-wrap";
+  const menuBtn = document.createElement("button");
+  menuBtn.type = "button";
+  menuBtn.className = "hl-palette-menu";
+  menuBtn.setAttribute("aria-label", "Choose palette");
+  menuBtn.textContent = "⋮";
+  const dropdown = document.createElement("div");
+  dropdown.className = "hl-palette-dropdown";
+  dropdown.hidden = true;
+  menuWrap.append(menuBtn, dropdown);
 
-  // Palette switcher row.
-  const tabs = document.createElement("div");
-  tabs.className = "hl-palette-tabs";
   const swatchRow = document.createElement("div");
   swatchRow.className = "hl-swatches";
-
-  const renderSwatches = (): void => {
-    swatchRow.replaceChildren();
-    for (const color of paletteById(paletteId).colors) {
-      const sw = document.createElement("button");
-      sw.type = "button";
-      sw.className = "swatch";
-      sw.setAttribute("aria-label", color);
-      sw.setAttribute("data-color", color);
-      sw.style.background = color;
-      sw.addEventListener("mousedown", (e) => e.preventDefault());
-      sw.addEventListener("click", (e) => {
-        e.stopPropagation();
-        setHighlightMode({ active: true, explain: false, color });
-        saveHighlightPrefs({ paletteId, color });
-        onPick();
-      });
-      swatchRow.appendChild(sw);
-    }
-  };
-
-  const renderTabs = (): void => {
-    tabs.replaceChildren();
-    for (const p of PALETTES) {
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.className = "hl-palette-tab";
-      tab.textContent = p.name;
-      tab.dataset.palette = p.id;
-      tab.dataset.selected = String(p.id === paletteId);
-      tab.addEventListener("click", (e) => {
-        e.stopPropagation();
-        paletteId = p.id;
-        saveHighlightPrefs({ paletteId, color: loadHighlightPrefs().color });
-        renderTabs();
-        renderSwatches();
-      });
-      tabs.appendChild(tab);
-    }
-  };
-
-  renderTabs();
-  renderSwatches();
-  pop.append(tabs, swatchRow);
-
-  // Dedicated AI "Explain" highlight.
-  const explain = document.createElement("button");
-  explain.type = "button";
-  explain.className = "hl-explain";
-  explain.textContent = "Explain ✨";
-  explain.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setHighlightMode({ active: true, explain: true, color: EXPLAIN_COLOR });
-    onPick();
-  });
-  pop.appendChild(explain);
 
   const off = document.createElement("button");
   off.type = "button";
@@ -151,7 +103,70 @@ function buildPopover(onPick: () => void): HTMLDivElement {
     setHighlightMode({ active: false });
     onPick();
   });
-  pop.appendChild(off);
 
-  return pop;
+  const renderSwatches = (): void => {
+    swatchRow.replaceChildren();
+    for (const color of paletteById(loadHighlightPrefs().paletteId).colors) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "swatch";
+      sw.setAttribute("aria-label", color);
+      sw.dataset.color = color;
+      sw.style.background = color;
+      sw.addEventListener("mousedown", (e) => e.preventDefault());
+      sw.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setHighlightMode({ active: true, explain: false, color });
+        saveHighlightPrefs({ color });
+        onPick();
+      });
+      swatchRow.appendChild(sw);
+    }
+  };
+
+  const renderDropdown = (): void => {
+    dropdown.replaceChildren();
+    const current = loadHighlightPrefs().paletteId;
+    for (const p of PALETTES) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "hl-palette-item";
+      item.dataset.palette = p.id;
+      item.dataset.selected = String(p.id === current);
+      const dots = document.createElement("span");
+      dots.className = "hl-palette-item-swatches";
+      for (const c of p.colors) {
+        const dot = document.createElement("span");
+        dot.className = "hl-palette-dot";
+        dot.style.background = c;
+        dots.appendChild(dot);
+      }
+      const name = document.createElement("span");
+      name.textContent = p.name;
+      item.append(name, dots);
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        saveHighlightPrefs({ paletteId: p.id });
+        dropdown.hidden = true;
+        renderSwatches();
+      });
+      dropdown.appendChild(item);
+    }
+  };
+
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    renderDropdown();
+    dropdown.hidden = !dropdown.hidden;
+  });
+
+  pop.append(menuWrap, swatchRow, off);
+
+  return {
+    popover: pop,
+    refresh: () => {
+      dropdown.hidden = true;
+      renderSwatches();
+    },
+  };
 }
