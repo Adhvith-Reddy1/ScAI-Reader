@@ -1,15 +1,20 @@
 import {
   createHighlight,
   deleteAnnotation,
+  fetchPageFigures,
   fetchPageText,
   listAnnotations,
   pageImageUrl,
   type Annotation,
   type DocumentMeta,
   type PageDimension,
+  type PageFigure,
   type PageText,
   type Rect,
 } from "../api.ts";
+import { seedFigure } from "../figureStore.ts";
+import { showFigureCard } from "./FigureCard.ts";
+import { pageBBoxToViewport } from "./coords.ts";
 import {
   getQuery as getFindQuery,
   registerPageAdapter,
@@ -42,6 +47,8 @@ interface PageState {
   text: PageText | null;
   annotationLayer: SVGSVGElement | null;
   mouseupWired: boolean;
+  figuresWired: boolean;
+  figures: PageFigure[];
   currentDpi: number;
   findHits: HTMLElement[];
 }
@@ -76,6 +83,8 @@ export function buildPageView(
     text: null,
     annotationLayer: null,
     mouseupWired: false,
+    figuresWired: false,
+    figures: [],
     currentDpi: 0,
     findHits: [],
   };
@@ -133,6 +142,12 @@ export function buildPageView(
     if (!state.mouseupWired) {
       wireHighlightOnSelection(meta, pageNumber, wrap, state);
       state.mouseupWired = true;
+    }
+
+    if (!state.figuresWired) {
+      wireFigureDoubleClick(meta, wrap, state);
+      state.figuresWired = true;
+      void loadFigures(meta, pageNumber, state);
     }
 
     // Re-apply the current find query against the freshly-built text layer.
@@ -315,4 +330,68 @@ async function maybeAutoSaveHighlight(
   if (saved && mode.color === "blue" && selectedText) {
     startExplanation(meta.id, saved.id, selectedText);
   }
+}
+
+async function loadFigures(
+  meta: DocumentMeta,
+  pageNumber: number,
+  state: PageState,
+): Promise<void> {
+  try {
+    const resp = await fetchPageFigures(meta.id, pageNumber);
+    state.figures = resp.figures;
+    // Seed the store so re-opening doesn't re-stream.
+    for (const f of resp.figures) {
+      if (f.explanation) seedFigure(meta.id, f.figure_id, f.explanation.content);
+    }
+  } catch {
+    state.figures = [];
+  }
+}
+
+/**
+ * Double-click handler at the page-wrap level. We hit-test the cursor
+ * against the detected figure bboxes (in page-space, scaled to the
+ * current display). Text double-click — i.e. when the event target is
+ * a .text-run inside a column — is left alone for native word-select.
+ */
+function wireFigureDoubleClick(
+  meta: DocumentMeta,
+  wrap: HTMLElement,
+  state: PageState,
+): void {
+  wrap.addEventListener("dblclick", (e) => {
+    if (!state.geom) return;
+    if (state.figures.length === 0) return;
+
+    // Skip if the double-click hit text — native word-select is more useful.
+    const target = e.target as Element | null;
+    if (target && target.closest(".text-run")) return;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const xInWrap = e.clientX - wrapRect.left;
+    const yInWrap = e.clientY - wrapRect.top;
+
+    // Match against the (display-space) bbox of every figure on this page.
+    for (const fig of state.figures) {
+      const v = pageBBoxToViewport(fig.bbox, state.geom);
+      if (
+        xInWrap >= v.x0 &&
+        xInWrap <= v.x1 &&
+        yInWrap >= v.y0 &&
+        yInWrap <= v.y1
+      ) {
+        e.preventDefault();
+        // Convert back to a viewport-anchored rect for card positioning.
+        const figRect = new DOMRect(
+          wrapRect.left + v.x0,
+          wrapRect.top + v.y0,
+          v.x1 - v.x0,
+          v.y1 - v.y0,
+        );
+        showFigureCard(meta.id, fig, figRect);
+        return;
+      }
+    }
+  });
 }

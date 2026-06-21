@@ -220,6 +220,110 @@ export interface ExplainCallbacks {
   onError: (message: string) => void;
 }
 
+export interface FigureBBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface PageFigure {
+  figure_id: string;
+  label: string;
+  page: number;
+  bbox: FigureBBox;
+  caption_bbox: FigureBBox;
+  explanation?: { content: string };
+}
+
+export interface PageFiguresResponse {
+  doc_id: string;
+  page: number;
+  page_width_pt: number;
+  page_height_pt: number;
+  figures: PageFigure[];
+}
+
+export async function fetchPageFigures(
+  docId: string,
+  pageNumber: number,
+): Promise<PageFiguresResponse> {
+  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/figures`);
+  if (!r.ok) throw new Error(`figures fetch failed (${r.status})`);
+  return r.json() as Promise<PageFiguresResponse>;
+}
+
+export interface FigureExplainCallbacks {
+  onMeta?: (cached: boolean) => void;
+  onDelta: (chunk: string) => void;
+  onDone: (full: string) => void;
+  onError: (message: string) => void;
+}
+
+export function streamFigureExplanation(
+  docId: string,
+  figureId: string,
+  page: number,
+  label: string,
+  callbacks: FigureExplainCallbacks,
+): () => void {
+  const ctrl = new AbortController();
+  void (async () => {
+    let r: Response;
+    try {
+      r = await fetch(`/documents/${docId}/figures/${figureId}/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page, label }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") callbacks.onError((e as Error).message);
+      return;
+    }
+    if (!r.ok || !r.body) {
+      callbacks.onError(`figure explain failed (${r.status})`);
+      return;
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") callbacks.onError((e as Error).message);
+        return;
+      }
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const event = JSON.parse(payload) as
+              | { type: "meta"; cached: boolean }
+              | { type: "delta"; text: string }
+              | { type: "done"; text: string }
+              | { type: "error"; message: string };
+            if (event.type === "meta") callbacks.onMeta?.(event.cached);
+            else if (event.type === "delta") callbacks.onDelta(event.text);
+            else if (event.type === "done") callbacks.onDone(event.text);
+            else if (event.type === "error") callbacks.onError(event.message);
+          } catch { /* ignore malformed */ }
+        }
+      }
+    }
+  })();
+  return () => ctrl.abort();
+}
+
 /**
  * Streams an explanation from the backend via Server-Sent Events.
  * Returns an abort function so callers can cancel if the user navigates away.
