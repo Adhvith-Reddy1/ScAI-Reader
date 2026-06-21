@@ -165,6 +165,14 @@ function ensureTooltip(): HTMLDivElement {
   });
   el.addEventListener("mouseleave", () => scheduleHide());
 
+  // Escape closes a pinned conversation (standard for a focusable panel).
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && pinned) {
+      pinned = false;
+      hide();
+    }
+  });
+
   document.body.appendChild(el);
   tooltipEl = el;
   titleEl = title;
@@ -349,8 +357,10 @@ async function show(
   currentUnsubscribe = subscribeExplanation(annotationId, () => {
     if (activeAnnotationId !== annotationId) return;
     render(annotationId);
-    // Re-query rect each render so it tracks scroll/zoom.
-    position(registration.group.getBoundingClientRect());
+    // Re-query rect each render so it tracks scroll/zoom. Anchor to the
+    // *current* group (activeGroup), which re-binding swaps in when the page
+    // re-lays-out, rather than the possibly-detached one from this closure.
+    if (activeGroup) position(activeGroup.getBoundingClientRect());
   });
 
   render(annotationId);
@@ -468,6 +478,14 @@ export function bindBlueAnnotation(
     }
     state.registrations.set(annotationId, { group, doc, annotationId, text });
 
+    // If a pinned conversation is open for this highlight and the page just
+    // re-laid-out (zoom/scroll rebuilds the SVG), re-anchor to the new group
+    // so the panel tracks the highlight instead of stranding at (0,0).
+    if (pinned && activeAnnotationId === annotationId) {
+      activeGroup = group;
+      position(group.getBoundingClientRect());
+    }
+
     resolvedCleanup = () => {
       const s = wrapStates.get(wrap);
       if (!s) return;
@@ -490,5 +508,36 @@ export function bindBlueAnnotation(
 
 /** Public hide, for callers that want to dismiss explicitly. */
 export function hideExplanationTooltip(): void {
+  pinned = false;
   hide();
+}
+
+/** Test-only: tear down the singleton tooltip and reset module state. */
+export function _resetForTest(): void {
+  pinned = false;
+  if (currentUnsubscribe) currentUnsubscribe();
+  currentUnsubscribe = null;
+  if (dwellTimer != null) window.clearTimeout(dwellTimer);
+  if (hideTimer != null) window.clearTimeout(hideTimer);
+  dwellTimer = null;
+  hideTimer = null;
+  activeAnnotationId = null;
+  pendingAnnotationId = null;
+  activeDoc = null;
+  activeText = null;
+  activeGroup = null;
+  tooltipEl?.remove();
+  tooltipEl = null;
+}
+
+/**
+ * Force the tooltip closed if it's currently showing (or pinned open for) the
+ * given annotation. Called when a highlight is deleted so a pinned chat panel
+ * doesn't linger over a highlight that no longer exists.
+ */
+export function dismissExplanationFor(annotationId: string): void {
+  if (activeAnnotationId === annotationId) {
+    pinned = false;
+    hide();
+  }
 }

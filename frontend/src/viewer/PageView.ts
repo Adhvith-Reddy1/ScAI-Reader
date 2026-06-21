@@ -26,6 +26,7 @@ import { getHighlightMode } from "../highlightMode.ts";
 import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
+import { dismissExplanationFor } from "./ExplanationTooltip.ts";
 import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
 import {
   buildLiveSelectionLayer,
@@ -255,6 +256,8 @@ async function refreshAnnotations(
       } catch {
         return;
       }
+      // Close any explanation panel pinned to the highlight we just removed.
+      dismissExplanationFor(annotationId);
       await refreshAnnotations(meta, pageNumber, wrap, state);
     },
     meta,
