@@ -800,7 +800,9 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   max-width: none;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 24px);
+  /* Fallback cap; JS sets a precise inline max-height that grows with content
+     up to a readable size and then lets the thread scroll. */
+  max-height: min(620px, calc(100vh - 24px));
   /* Clip to the rounded box so nothing spills when sized small; the thread is
      the only scroll region. Resize handles sit just inside the edges. */
   overflow: hidden;

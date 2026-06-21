@@ -181,6 +181,21 @@ describe("ExplanationTooltip pin / chat / resize", () => {
     expect(streamRefineMock).toHaveBeenCalledTimes(1);
   });
 
+  it("caps the pinned panel height (grow-then-scroll) when not resized", async () => {
+    seedExplanation("a", "definition", "x");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    const tip = await openAndPin(group);
+
+    // A bounded max-height is applied so the thread (overflow-y:auto) scrolls
+    // instead of the box growing without limit. jsdom viewport is 768 tall.
+    const cap = parseFloat(tip.style.maxHeight);
+    expect(cap).toBeGreaterThan(0);
+    expect(cap).toBeLessThanOrEqual(620);
+    // Height is left to grow with content rather than pinned to a value.
+    expect(tip.style.height).toBe("");
+  });
+
   it("dragging the SE handle resizes the panel", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
@@ -241,8 +256,11 @@ describe("ExplanationTooltip pin / chat / resize", () => {
       .querySelector<HTMLButtonElement>(".explanation-chat-open")!
       .click();
 
+    // Width is restored exactly; the remembered height comes back as the
+    // grow-to cap (max-height) so the panel still expands-then-scrolls.
     expect(tip.style.width).toBe("480px");
-    expect(tip.style.height).toBe("360px");
+    expect(tip.style.maxHeight).toBe("360px");
+    expect(tip.style.height).toBe("");
   });
 
   it("Escape closes a pinned conversation", async () => {

@@ -26,7 +26,11 @@ import {
 const DWELL_MS = 200;
 const GAP_PX = 8;
 const TOOLTIP_WIDTH_PX = 360;
-const PINNED_WIDTH_PX = 380;
+// Pinned panel defaults: wide enough to read comfortably, and a height the box
+// grows into as the reply streams before the thread starts scrolling. Kept
+// well under the viewport so it never dominates the page.
+const DEFAULT_PINNED_WIDTH = 600;
+const DEFAULT_CAP_PX = 620;
 
 // Tooltip singleton state.
 let tooltipEl: HTMLDivElement | null = null;
@@ -311,11 +315,14 @@ function startResize(dir: string, e: PointerEvent): void {
     const top = dir.includes("n") ? startTop + (startH - h) : startTop;
 
     el.style.width = `${w}px`;
+    // Set height AND max-height together so the drag can grow the panel past
+    // the placement cap; the dragged height becomes the new cap.
     el.style.height = `${h}px`;
+    el.style.maxHeight = `${h}px`;
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
     pinnedPlaced = true;
-    // Remember this size for the next time any explanation is opened.
+    // Remember this size (height is the grow-to cap) for the next open.
     savedSize = { width: w, height: h };
     persistSavedSize();
   };
@@ -388,12 +395,14 @@ function position(anchorRect: DOMRect): void {
 
   let width: number;
   if (pinned) {
-    width = Math.min(savedSize?.width ?? PINNED_WIDTH_PX, vw - margin * 2);
+    width = Math.min(savedSize?.width ?? DEFAULT_PINNED_WIDTH, vw - margin * 2);
     el.style.width = `${width}px`;
-    // Apply the reader's remembered height if any; otherwise size to content.
-    if (savedSize?.height) {
-      el.style.height = `${Math.min(savedSize.height, vh - margin * 2)}px`;
-    }
+    // The panel height is left to grow with content (the thread scrolls once
+    // it hits the cap), so clear any stale explicit height and apply a
+    // provisional cap to measure with.
+    el.style.height = "";
+    const cap = Math.min(savedSize?.height ?? DEFAULT_CAP_PX, vh - margin * 2);
+    el.style.maxHeight = `${cap}px`;
     pinnedPlaced = true;
   } else {
     width = Math.min(TOOLTIP_WIDTH_PX, vw - margin * 2);
@@ -407,11 +416,18 @@ function position(anchorRect: DOMRect): void {
   x = Math.max(margin, Math.min(x, vw - width - margin));
 
   // Prefer above the highlight; flip below if it won't fit; then clamp so the
-  // whole panel stays on-screen (its height is capped to the viewport in CSS).
+  // whole panel stays on-screen.
   let y = anchorRect.top - tooltipHeight - GAP_PX;
   if (y < margin) y = anchorRect.bottom + GAP_PX;
   y = Math.min(y, vh - tooltipHeight - margin);
   y = Math.max(margin, y);
+
+  if (pinned) {
+    // Final cap: grow only as far as the bottom of the screen allows, never
+    // past the remembered/default cap. Beyond this the thread scrolls.
+    const cap = Math.min(savedSize?.height ?? DEFAULT_CAP_PX, vh - y - margin);
+    el.style.maxHeight = `${cap}px`;
+  }
 
   el.style.left = `${x + window.scrollX}px`;
   el.style.top = `${y + window.scrollY}px`;
