@@ -1,32 +1,29 @@
 /**
- * Nav-bar Highlight button + color popover. Edge-style behavior:
+ * Nav-bar Highlight button + color popover.
  *
- *   click button →  popover opens with 5 swatches + "Off"
- *   click swatch →  highlight mode ON with that color; button shows the color
- *   click "Off"  →  highlight mode OFF
- *   click button while ON → also turns OFF (quick toggle)
+ *   click button → popover opens
+ *   pick a palette → swatches switch to that palette (persisted)
+ *   click a swatch → highlight mode ON in that cosmetic color (persisted default)
+ *   click "Explain ✨" → highlight mode ON as an AI "Explain" highlight
+ *   click "Off" → highlight mode OFF
+ *   click button while ON → quick toggle OFF
  *
- * The button reflects current state via `data-active` and `data-color`,
- * which the stylesheet uses for the active visual treatment.
+ * Cosmetic colors are purely visual; the AI explanation feature is triggered
+ * only by the dedicated Explain highlight (see highlightMode `explain`).
  */
 
 import {
-  HIGHLIGHT_COLORS,
-  type HighlightColor,
-} from "./api.ts";
+  EXPLAIN_COLOR,
+  PALETTES,
+  loadHighlightPrefs,
+  paletteById,
+  saveHighlightPrefs,
+} from "./palettes.ts";
 import {
   getHighlightMode,
   setHighlightMode,
   subscribeHighlightMode,
 } from "./highlightMode.ts";
-
-const SWATCH_FILL: Record<HighlightColor, string> = {
-  yellow: "#FFEB3B",
-  blue: "#2196F3",
-  red: "#F44336",
-  green: "#4CAF50",
-  pink: "#E91E63",
-};
 
 export function buildHighlightButton(): HTMLElement {
   const root = document.createElement("div");
@@ -53,9 +50,7 @@ export function buildHighlightButton(): HTMLElement {
 
   button.addEventListener("click", (e) => {
     e.stopPropagation();
-    const state = getHighlightMode();
-    if (state.active) {
-      // Quick toggle off
+    if (getHighlightMode().active) {
       setHighlightMode({ active: false });
       popover.hidden = true;
     } else {
@@ -69,8 +64,10 @@ export function buildHighlightButton(): HTMLElement {
 
   subscribeHighlightMode((s) => {
     button.dataset.active = String(s.active);
+    button.dataset.explain = String(s.explain);
     button.dataset.color = s.color;
-    indicator.style.background = SWATCH_FILL[s.color];
+    indicator.style.background = s.explain ? EXPLAIN_COLOR : s.color;
+    label.textContent = s.active && s.explain ? "Explain" : "Highlight";
   });
 
   return root;
@@ -81,21 +78,69 @@ function buildPopover(onPick: () => void): HTMLDivElement {
   pop.className = "hl-popover";
   pop.setAttribute("role", "menu");
 
-  for (const color of HIGHLIGHT_COLORS) {
-    const sw = document.createElement("button");
-    sw.type = "button";
-    sw.className = "swatch";
-    sw.setAttribute("aria-label", color);
-    sw.setAttribute("data-color", color);
-    sw.style.background = SWATCH_FILL[color];
-    sw.addEventListener("mousedown", (e) => e.preventDefault());
-    sw.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setHighlightMode({ active: true, color });
-      onPick();
-    });
-    pop.appendChild(sw);
-  }
+  let paletteId = loadHighlightPrefs().paletteId;
+
+  // Palette switcher row.
+  const tabs = document.createElement("div");
+  tabs.className = "hl-palette-tabs";
+  const swatchRow = document.createElement("div");
+  swatchRow.className = "hl-swatches";
+
+  const renderSwatches = (): void => {
+    swatchRow.replaceChildren();
+    for (const color of paletteById(paletteId).colors) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "swatch";
+      sw.setAttribute("aria-label", color);
+      sw.setAttribute("data-color", color);
+      sw.style.background = color;
+      sw.addEventListener("mousedown", (e) => e.preventDefault());
+      sw.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setHighlightMode({ active: true, explain: false, color });
+        saveHighlightPrefs({ paletteId, color });
+        onPick();
+      });
+      swatchRow.appendChild(sw);
+    }
+  };
+
+  const renderTabs = (): void => {
+    tabs.replaceChildren();
+    for (const p of PALETTES) {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "hl-palette-tab";
+      tab.textContent = p.name;
+      tab.dataset.palette = p.id;
+      tab.dataset.selected = String(p.id === paletteId);
+      tab.addEventListener("click", (e) => {
+        e.stopPropagation();
+        paletteId = p.id;
+        saveHighlightPrefs({ paletteId, color: loadHighlightPrefs().color });
+        renderTabs();
+        renderSwatches();
+      });
+      tabs.appendChild(tab);
+    }
+  };
+
+  renderTabs();
+  renderSwatches();
+  pop.append(tabs, swatchRow);
+
+  // Dedicated AI "Explain" highlight.
+  const explain = document.createElement("button");
+  explain.type = "button";
+  explain.className = "hl-explain";
+  explain.textContent = "Explain ✨";
+  explain.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHighlightMode({ active: true, explain: true, color: EXPLAIN_COLOR });
+    onPick();
+  });
+  pop.appendChild(explain);
 
   const off = document.createElement("button");
   off.type = "button";

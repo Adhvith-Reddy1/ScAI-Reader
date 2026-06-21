@@ -166,3 +166,42 @@ def test_persistence_across_independent_request_chain(app_client, simple_pdf):
     assert len(a["rects"]) == 2
     assert a["rects"][0]["x0"] == 50.0
     assert a["rects"][1]["y1"] == 85.0
+
+
+@pytest.mark.integration
+def test_hex_color_and_explain_flag_round_trip(app_client, simple_pdf):
+    """Palette colors are stored as hex; the AI-explain flag is independent
+    of color and survives a round trip."""
+    doc_id = _upload(app_client, simple_pdf)
+    r = app_client.post(
+        f"/documents/{doc_id}/annotations",
+        json={
+            "page": 1,
+            "color": "#FF9800",
+            "rects": _DEFAULT_RECT,
+            "explain": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["color"] == "#FF9800"
+    assert body["explain"] is True
+
+    fetched = app_client.get(f"/documents/{doc_id}/annotations?page=1").json()
+    assert fetched[0]["color"] == "#FF9800"
+    assert fetched[0]["explain"] is True
+
+
+@pytest.mark.integration
+def test_explain_defaults_false_and_bad_color_rejected(app_client, simple_pdf):
+    doc_id = _upload(app_client, simple_pdf)
+    # Default explain is False.
+    body = app_client.post(
+        f"/documents/{doc_id}/annotations", json=_highlight(color="#00FF00")
+    ).json()
+    assert body["explain"] is False
+    # A non-hex, non-legacy color string is rejected.
+    bad = app_client.post(
+        f"/documents/{doc_id}/annotations", json=_highlight(color="chartreuse")
+    )
+    assert bad.status_code == 422

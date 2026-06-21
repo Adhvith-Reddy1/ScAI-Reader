@@ -344,9 +344,10 @@ body {
   left: 0;
   z-index: 50;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px;
   background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
@@ -354,6 +355,46 @@ body {
 }
 .hl-popover[hidden] {
   display: none;
+}
+.hl-palette-tabs {
+  display: flex;
+  gap: 4px;
+}
+.hl-palette-tab {
+  flex: 1 1 auto;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.hl-palette-tab:hover {
+  color: var(--text);
+}
+.hl-palette-tab[data-selected="true"] {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.hl-swatches {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+.hl-popover .hl-explain {
+  background: rgba(33, 150, 243, 0.16);
+  border: 1px solid rgba(33, 150, 243, 0.55);
+  color: rgba(150, 195, 255, 0.95);
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.hl-popover .hl-explain:hover {
+  background: rgba(33, 150, 243, 0.28);
 }
 .hl-popover .swatch {
   width: 24px;
@@ -496,6 +537,15 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   padding: 2px 8px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Keep the page-location and zoom boxes the same size in the toolbar. */
+.page-indicator,
+.zoom-controls {
+  box-sizing: border-box;
+  height: 30px;
+  min-width: 124px;
+  justify-content: center;
 }
 .page-indicator[hidden] { display: none; }
 .page-indicator-input {

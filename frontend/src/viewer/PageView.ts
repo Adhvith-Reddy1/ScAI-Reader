@@ -310,7 +310,7 @@ async function maybeAutoSaveHighlight(
   const pageRects: Rect[] = rectsToPageSpace(merged, state.geom);
 
   // Capture the selection text BEFORE we clear it — needed for AI
-  // explanations on blue highlights.
+  // explanations on "Explain" highlights.
   const selectedText = sel.toString().trim();
 
   let saved;
@@ -321,6 +321,7 @@ async function maybeAutoSaveHighlight(
       mode.color,
       pageRects,
       selectedText || undefined,
+      mode.explain,
     );
   } catch {
     return;
@@ -328,9 +329,9 @@ async function maybeAutoSaveHighlight(
   sel.removeAllRanges();
   await refreshAnnotations(meta, pageNumber, wrap, state);
 
-  // Blue highlights eagerly generate an AI definition/explanation so that
+  // Explain highlights eagerly generate an AI definition/explanation so that
   // by the time the user hovers, the response is partially or fully ready.
-  if (saved && mode.color === "blue" && selectedText) {
+  if (saved && mode.explain && selectedText) {
     startExplanation(meta.id, saved.id, selectedText);
   }
 }

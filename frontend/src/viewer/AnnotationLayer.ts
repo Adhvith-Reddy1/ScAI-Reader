@@ -6,7 +6,7 @@
  * annotations change, rather than mutating in place.
  */
 
-import type { Annotation, DocumentMeta, HighlightColor } from "../api.ts";
+import type { Annotation, DocumentMeta } from "../api.ts";
 import { getEraseMode } from "../eraseMode.ts";
 import { pageBBoxToViewport, type PageGeometry } from "./coords.ts";
 import { mergeAdjacentLineRects } from "./selection.ts";
@@ -15,13 +15,34 @@ import { bindHighlightActions } from "./HighlightHoverActions.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-const COLOR_RGBA: Record<HighlightColor, string> = {
+const HIGHLIGHT_ALPHA = 0.4;
+
+// Legacy named colors (highlights saved before palettes) keep their original,
+// individually-tuned alphas.
+const LEGACY_COLOR_RGBA: Record<string, string> = {
   yellow: "rgba(255, 235, 59, 0.42)",
   blue: "rgba(33, 150, 243, 0.32)",
   red: "rgba(244, 67, 54, 0.28)",
   green: "rgba(76, 175, 80, 0.36)",
   pink: "rgba(233, 30, 99, 0.30)",
 };
+
+/** Resolve a stored color (legacy name or "#RRGGBB" hex) to an rgba fill. */
+function fillFor(color: string): string {
+  const legacy = LEGACY_COLOR_RGBA[color];
+  if (legacy) return legacy;
+  const m = /^#([0-9a-fA-F]{6})$/.exec(color);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${HIGHLIGHT_ALPHA})`;
+  }
+  return color; // already an rgba()/other string
+}
+
+/** A highlight is an "explain" highlight via the flag, or (legacy) by blue. */
+function isExplainHighlight(ann: Annotation): boolean {
+  return ann.explain === true || ann.color === "blue";
+}
 
 export function buildAnnotationLayer(
   annotations: Annotation[],
@@ -51,7 +72,7 @@ export function buildAnnotationLayer(
       r.setAttribute("y", String(viewport.y0));
       r.setAttribute("width", String(Math.max(0, viewport.x1 - viewport.x0)));
       r.setAttribute("height", String(Math.max(0, viewport.y1 - viewport.y0)));
-      r.setAttribute("fill", COLOR_RGBA[ann.color]);
+      r.setAttribute("fill", fillFor(ann.color));
       group.appendChild(r);
     }
 
@@ -66,10 +87,10 @@ export function buildAnnotationLayer(
     });
     svg.appendChild(group);
 
-    // Blue highlights get the AI-explanation tooltip, which carries its own
-    // bottom-left Delete button. Every other color gets the standalone hover
-    // Delete pill anchored at the highlight's bottom-left.
-    if (ann.color === "blue" && doc) {
+    // Explain highlights get the AI-explanation tooltip, which carries its own
+    // bottom-left Delete button. Every cosmetic highlight gets the standalone
+    // hover Delete pill anchored at the highlight's bottom-left.
+    if (isExplainHighlight(ann) && doc) {
       bindBlueAnnotation(group, doc, ann.id, ann.text ?? null, onDelete);
     } else {
       bindHighlightActions(group, ann.id, onDelete);

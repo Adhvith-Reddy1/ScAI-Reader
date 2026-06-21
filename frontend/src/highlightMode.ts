@@ -14,13 +14,20 @@
  */
 
 import type { HighlightColor } from "./api.ts";
+import { loadHighlightPrefs } from "./palettes.ts";
 
 export interface HighlightModeState {
   active: boolean;
   color: HighlightColor;
+  /** When true, drag-select creates an AI "Explain" highlight. */
+  explain: boolean;
 }
 
-let state: HighlightModeState = { active: false, color: "yellow" };
+function initialState(): HighlightModeState {
+  return { active: false, color: loadHighlightPrefs().color, explain: false };
+}
+
+let state: HighlightModeState = initialState();
 const subscribers = new Set<(s: HighlightModeState) => void>();
 let disableErase: (() => void) | null = null;
 
@@ -56,7 +63,7 @@ export function subscribeHighlightMode(
 
 /** For tests. */
 export function _resetForTest(): void {
-  state = { active: false, color: "yellow" };
+  state = { active: false, color: "yellow", explain: false };
   subscribers.clear();
   disableErase = null;
 }

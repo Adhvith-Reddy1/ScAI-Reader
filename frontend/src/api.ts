@@ -107,8 +107,12 @@ export async function fetchSearchResults(
   return r.json() as Promise<SearchResponse>;
 }
 
-export const HIGHLIGHT_COLORS = ["yellow", "blue", "red", "green", "pink"] as const;
-export type HighlightColor = typeof HIGHLIGHT_COLORS[number];
+/**
+ * A highlight color — a hex string like "#FFEB3B" from a palette, or one of the
+ * original legacy names ("yellow" | "blue" | …) for highlights saved before
+ * palettes existed. Render code resolves either form to an rgba fill.
+ */
+export type HighlightColor = string;
 
 export interface Rect {
   x0: number;
@@ -124,12 +128,17 @@ export interface Annotation {
   color: HighlightColor;
   rects: Rect[];
   text: string | null;
+  /**
+   * True for an "Explain" highlight — the AI explanation feature is keyed off
+   * this flag, not the color, so any color can be cosmetic. (Legacy blue
+   * highlights have no flag; render code treats color === "blue" as explain.)
+   */
+  explain?: boolean;
   created_at: string;
   /**
-   * Server-side cached explanation, included only for blue highlights that
-   * have a `status: "complete"` row in the explanations table. Frontend
-   * seeds explanationStore from this so the first hover renders instantly
-   * with no follow-up network call.
+   * Server-side cached explanation, included for explain highlights that have a
+   * `status: "complete"` row in the explanations table. Frontend seeds
+   * explanationStore from this so the first hover renders instantly.
    */
   explanation?: { kind: ExplanationKind; content: string };
 }
@@ -140,11 +149,12 @@ export async function createHighlight(
   color: HighlightColor,
   rects: Rect[],
   text?: string,
+  explain = false,
 ): Promise<Annotation> {
   const r = await fetch(`/documents/${docId}/annotations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page, color, rects, text }),
+    body: JSON.stringify({ page, color, rects, text, explain }),
   });
   if (!r.ok) throw new Error(`save highlight failed (${r.status})`);
   return r.json() as Promise<Annotation>;

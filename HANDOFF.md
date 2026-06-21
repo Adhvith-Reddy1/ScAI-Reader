@@ -6,6 +6,51 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Highlight palettes + dedicated Explain highlight; nav-bar tweak — 2026-06-21
+
+### Color palettes + free color choice (persisted)
+
+Highlight color used to be a fixed 5-name enum, and "blue" doubled as the AI
+trigger. Now:
+
+- **Colors are free-form** (`#RRGGBB` hex), organized into palettes
+  (`frontend/src/palettes.ts`: Classic / Pastel / Vibrant / Earthy). Backend
+  `annotations.py` accepts hex **or** the legacy names (so old highlights still
+  load) and rejects anything else. `AnnotationLayer.fillFor()` resolves either
+  form to an rgba fill (legacy names keep their tuned alphas; hex uses 0.4).
+- **The picker** (`HighlightButton.ts`) gained a palette-tab row + the current
+  palette's swatches. The chosen palette+color persist to localStorage
+  (`scai.highlightPrefs`) and seed `highlightMode`'s default color.
+
+### AI explanation decoupled from color (dedicated "Explain ✨" highlight)
+
+Per product decision, the AI feature is now its **own** highlight type, not a
+color:
+
+- New `explain: bool` on the annotation (payload + create/list responses).
+  `highlightMode` gained an `explain` flag; the picker has an "Explain ✨"
+  button that sets `{explain:true, color: EXPLAIN_COLOR (#2196F3)}`.
+- `AnnotationLayer.isExplainHighlight(ann)` = `ann.explain || ann.color ===
+  "blue"` (back-compat for legacy blue highlights). The hover tooltip / eager
+  generation key off this, not the color. `PageView` passes `mode.explain` to
+  `createHighlight` and eager-generates only for explain highlights.
+
+### Nav bar
+
+- Swapped the page-indicator and zoom-controls slots in `index.html` (page box
+  now left of zoom). Gave both `.page-indicator`/`.zoom-controls` the same size
+  (`height:30px; min-width:124px; box-sizing:border-box; justify-content:center`).
+
+### Tests (138 frontend + 107 backend)
+
+Backend +2 (hex color + explain round-trip; explain defaults false / bad color
+422). Frontend: rewrote `HighlightButton.test` for the palette UI (8), updated
+`highlightMode.test` for the `explain` field. No browser here, so the palette
+popover / nav-bar sizing were verified via jsdom + a live API smoke test, not a
+visual eyeball.
+
+---
+
 ## Explanation latency: page-text context + faster models — 2026-06-21
 
 ### Why

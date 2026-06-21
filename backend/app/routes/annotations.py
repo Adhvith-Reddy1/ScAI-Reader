@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..config import Settings
 from ..storage import db, files
@@ -14,12 +14,11 @@ from .deps import get_settings
 
 router = APIRouter(prefix="/documents/{doc_id}/annotations", tags=["annotations"])
 
-HighlightColor = Literal["yellow", "blue", "red", "green", "pink"]
-"""Edge-style 5-color palette."""
-
-ALLOWED_COLORS: frozenset[HighlightColor] = frozenset(
-    ("yellow", "blue", "red", "green", "pink")
-)
+# Colors are now free-form so the frontend can offer multiple palettes. We
+# accept a hex string (#RRGGBB / #RRGGBBAA) or one of the original five names
+# (kept for backward compatibility with highlights saved before palettes).
+_LEGACY_COLORS = frozenset(("yellow", "blue", "red", "green", "pink"))
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
 class Rect(BaseModel):
@@ -31,9 +30,19 @@ class Rect(BaseModel):
 
 class CreateHighlight(BaseModel):
     page: int = Field(ge=1, description="1-indexed page number")
-    color: HighlightColor
+    color: str = Field(max_length=32)
     rects: list[Rect]
     text: str | None = Field(default=None, max_length=4000)
+    # The AI explanation feature is no longer tied to a color — a highlight is
+    # an "explain" highlight only when this is set. Cosmetic colors are free.
+    explain: bool = False
+
+    @field_validator("color")
+    @classmethod
+    def _validate_color(cls, v: str) -> str:
+        if v in _LEGACY_COLORS or _HEX_RE.match(v):
+            return v
+        raise ValueError("color must be #RRGGBB hex or a known color name")
 
 
 @router.post("")
@@ -51,6 +60,7 @@ def create_annotation(
     payload = {
         "color": body.color,
         "rects": [r.model_dump() for r in body.rects],
+        "explain": body.explain,
     }
     if body.text:
         payload["text"] = body.text
@@ -77,6 +87,7 @@ def create_annotation(
         "color": body.color,
         "rects": payload["rects"],
         "text": payload.get("text"),
+        "explain": body.explain,
         "created_at": now,
     }
 
@@ -126,6 +137,7 @@ def list_annotations(
             "color": payload.get("color"),
             "rects": payload.get("rects", []),
             "text": payload.get("text"),
+            "explain": payload.get("explain", False),
             "created_at": r["created_at"],
         }
         # Only attach a non-null explanation when one's fully cached.

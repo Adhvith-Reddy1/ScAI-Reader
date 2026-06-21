@@ -18,9 +18,17 @@ describe("highlight mode state", () => {
 
   it("setHighlightMode merges partial updates", () => {
     setHighlightMode({ color: "blue" });
-    expect(getHighlightMode()).toEqual({ active: false, color: "blue" });
+    expect(getHighlightMode()).toEqual({
+      active: false,
+      color: "blue",
+      explain: false,
+    });
     setHighlightMode({ active: true });
-    expect(getHighlightMode()).toEqual({ active: true, color: "blue" });
+    expect(getHighlightMode()).toEqual({
+      active: true,
+      color: "blue",
+      explain: false,
+    });
   });
 
   it("toggleHighlightMode flips active", () => {
@@ -36,7 +44,11 @@ describe("highlight mode state", () => {
     expect(cb).toHaveBeenCalledTimes(1);
     setHighlightMode({ color: "red" });
     expect(cb).toHaveBeenCalledTimes(2);
-    expect(cb.mock.calls[1][0]).toEqual({ active: false, color: "red" });
+    expect(cb.mock.calls[1][0]).toEqual({
+      active: false,
+      color: "red",
+      explain: false,
+    });
   });
 
   it("unsubscribe stops callbacks", () => {
