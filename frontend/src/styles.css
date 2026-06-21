@@ -1097,7 +1097,10 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   margin: 0;
   padding: 0;
   border: none;
-  background: transparent;
+  /* Visible at rest so the reader can tell a citation is clickable: a faint
+     blue wash over the bracket plus an underline. Brightens on hover. */
+  background: rgba(120, 180, 255, 0.18);
+  border-bottom: 1.5px solid rgba(120, 180, 255, 0.85);
   border-radius: 2px;
   cursor: pointer;
   pointer-events: auto;
@@ -1105,7 +1108,7 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 }
 .citation-marker:hover,
 .citation-marker:focus-visible {
-  background: rgba(120, 180, 255, 0.28);
+  background: rgba(120, 180, 255, 0.4);
   outline: none;
 }
 
