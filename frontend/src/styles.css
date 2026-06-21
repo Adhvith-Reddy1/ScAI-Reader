@@ -1081,3 +1081,119 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .figure-card.is-error {
   border-color: rgba(244, 67, 54, 0.6);
 }
+
+/* --- Citations ---------------------------------------------------------- */
+
+/* Overlay of clickable hotspots over in-text citation brackets. Sits above
+   the text layer; only the marker buttons capture pointer events. */
+.citation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.citation-marker {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 0.1s ease;
+}
+.citation-marker:hover,
+.citation-marker:focus-visible {
+  background: rgba(120, 180, 255, 0.28);
+  outline: none;
+}
+
+/* The textbox shown on click: author + title of the cited work(s). */
+.citation-card {
+  position: absolute;
+  z-index: 220;
+  background: #1f242c;
+  color: #e6e8eb;
+  border: 1px solid rgba(120, 180, 255, 0.5);
+  border-radius: 12px;
+  padding: 0;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: auto;
+  max-width: 360px;
+}
+.citation-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px;
+  gap: 8px;
+}
+.citation-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(140, 200, 255, 0.95);
+}
+.citation-card-close {
+  background: transparent;
+  border: none;
+  color: rgba(220, 220, 220, 0.6);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.citation-card-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.citation-card-body {
+  padding: 0 14px 12px;
+}
+.citation-card.is-loading .citation-card-body::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: rgba(140, 200, 255, 0.85);
+  animation: explanation-shimmer 1s infinite;
+}
+.citation-card.is-error {
+  border-color: rgba(244, 67, 54, 0.6);
+}
+.citation-entry {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+}
+.citation-entry + .citation-entry {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.citation-entry-num {
+  flex: 0 0 auto;
+  color: rgba(140, 200, 255, 0.95);
+  font-variant-numeric: tabular-nums;
+}
+.citation-entry-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.citation-entry-title {
+  font-weight: 600;
+}
+.citation-entry-authors {
+  color: rgba(220, 224, 230, 0.72);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.citation-entry.is-missing .citation-entry-detail {
+  color: rgba(220, 224, 230, 0.6);
+  font-style: italic;
+}

@@ -1,11 +1,13 @@
 import {
   createHighlight,
   deleteAnnotation,
+  fetchPageCitations,
   fetchPageFigures,
   fetchPageText,
   listAnnotations,
   pageImageUrl,
   type Annotation,
+  type CitationMarker,
   type DocumentMeta,
   type PageDimension,
   type PageFigure,
@@ -13,6 +15,8 @@ import {
   type Rect,
 } from "../api.ts";
 import { seedFigure } from "../figureStore.ts";
+import { loadReferences } from "../referenceStore.ts";
+import { buildCitationLayer } from "./CitationLayer.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToViewport } from "./coords.ts";
 import {
@@ -50,6 +54,8 @@ interface PageState {
   mouseupWired: boolean;
   figuresWired: boolean;
   figures: PageFigure[];
+  citations: CitationMarker[];
+  citationsLoaded: boolean;
   currentDpi: number;
   findHits: HTMLElement[];
 }
@@ -86,6 +92,8 @@ export function buildPageView(
     mouseupWired: false,
     figuresWired: false,
     figures: [],
+    citations: [],
+    citationsLoaded: false,
     currentDpi: 0,
     findHits: [],
   };
@@ -125,7 +133,7 @@ export function buildPageView(
     state.geom = geom;
 
     wrap
-      .querySelectorAll(".live-selection-layer, .text-layer")
+      .querySelectorAll(".live-selection-layer, .text-layer, .citation-layer")
       .forEach((el) => el.remove());
     if (state.annotationLayer) {
       state.annotationLayer.remove();
@@ -137,6 +145,11 @@ export function buildPageView(
     liveSelectionLayer.setAttribute("height", String(heightCss));
     wrap.appendChild(liveSelectionLayer);
     wrap.appendChild(buildTextLayer(text, geom));
+    // Citation markers sit above the text layer so their small hotspots get
+    // the click; the rest of the page stays selectable.
+    if (state.citations.length > 0) {
+      wrap.appendChild(buildCitationLayer(meta.id, state.citations, geom));
+    }
     registerLiveSelection(wrap, liveSelectionLayer);
     void refreshAnnotations(meta, pageNumber, wrap, state);
 
@@ -164,6 +177,7 @@ export function buildPageView(
       }
     }
     layout();
+    void loadCitations(meta, pageNumber, state, layout);
   };
 
   applyDisplay();
@@ -333,6 +347,29 @@ async function maybeAutoSaveHighlight(
   if (saved && mode.color === "blue" && selectedText) {
     startExplanation(meta.id, saved.id, selectedText);
   }
+}
+
+async function loadCitations(
+  meta: DocumentMeta,
+  pageNumber: number,
+  state: PageState,
+  redraw: () => void,
+): Promise<void> {
+  if (state.citationsLoaded) return;
+  state.citationsLoaded = true;
+  try {
+    const resp = await fetchPageCitations(meta.id, pageNumber);
+    state.citations = resp.citations;
+  } catch {
+    state.citations = [];
+    return;
+  }
+  if (state.citations.length === 0) return;
+  // Start parsing the bibliography now so the reference list is ready (or
+  // close to it) by the time the reader clicks a marker.
+  loadReferences(meta.id);
+  // Re-run layout so the citation layer is drawn over the current geometry.
+  redraw();
 }
 
 async function loadFigures(

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .routes import (
     annotations,
+    citations,
     documents,
     explanations,
     figures,
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(annotations.router)
     app.include_router(explanations.router)
     app.include_router(figures.router)
+    app.include_router(citations.router)
     app.include_router(outline.router)
     app.include_router(search.router)
 

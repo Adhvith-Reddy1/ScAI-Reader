@@ -352,6 +352,58 @@ export function streamRefine(
   );
 }
 
+export interface CitationMarker {
+  marker_id: string;
+  page: number;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+  /** Reference numbers this marker resolves to ("[3, 5]" -> [3, 5]). */
+  numbers: number[];
+  /** The literal bracket text, e.g. "[3, 5]". */
+  raw: string;
+}
+
+export interface PageCitationsResponse {
+  doc_id: string;
+  page: number;
+  page_width_pt: number;
+  page_height_pt: number;
+  citations: CitationMarker[];
+}
+
+export async function fetchPageCitations(
+  docId: string,
+  pageNumber: number,
+): Promise<PageCitationsResponse> {
+  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/citations`);
+  if (!r.ok) throw new Error(`citations fetch failed (${r.status})`);
+  return r.json() as Promise<PageCitationsResponse>;
+}
+
+export interface ReferenceEntry {
+  number: number;
+  authors: string | null;
+  title: string | null;
+}
+
+export type ReferencesStatus = "complete" | "pending" | "empty" | "error";
+
+export interface ReferencesResponse {
+  doc_id: string;
+  status: ReferencesStatus;
+  references: ReferenceEntry[];
+}
+
+/**
+ * The parsed bibliography. The first call triggers a one-shot LLM parse on the
+ * backend (status may come back "pending" while it runs); subsequent calls hit
+ * the cached result. Marker→reference matching is a plain number lookup.
+ */
+export async function fetchReferences(docId: string): Promise<ReferencesResponse> {
+  const r = await fetch(`/documents/${docId}/references`);
+  if (!r.ok) throw new Error(`references fetch failed (${r.status})`);
+  return r.json() as Promise<ReferencesResponse>;
+}
+
 export interface FigureBBox {
   x0: number;
   y0: number;

@@ -72,6 +72,29 @@ CREATE TABLE IF NOT EXISTS figure_explanations (
     updated_at    TEXT NOT NULL,
     PRIMARY KEY (doc_id, figure_id)
 );
+
+-- Tracks the one-shot parse of a document's reference list. A row here gates
+-- the (potentially slow, LLM-backed) parse so concurrent requests don't
+-- duplicate the work — see routes/citations.py.
+CREATE TABLE IF NOT EXISTS reference_runs (
+    doc_id      TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL,                 -- pending | complete | error | empty
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+-- Parsed bibliography entries, keyed by the citation number used in-text
+-- ("[12]" -> number 12). Populated once per document; clicking a citation
+-- marker is then an integer lookup into this table.
+CREATE TABLE IF NOT EXISTS document_references (
+    doc_id      TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    number      INTEGER NOT NULL,
+    authors     TEXT,
+    title       TEXT,
+    raw         TEXT,
+    PRIMARY KEY (doc_id, number)
+);
 """
 
 
