@@ -45,6 +45,18 @@ CITATION_PATTERN = re.compile(
 _RANGE_SEP = re.compile(r"[%s]" % _DASHES)
 _NUM = re.compile(r"\d+")
 
+# A superscript citation marker is a whole run that is nothing but citation
+# numbers — "24,25", "3", "10-12" — set in a smaller, raised font (Nature /
+# Science / most biology journals). Matched against the entire (stripped) run.
+_SUPERSCRIPT_BODY = re.compile(
+    r"^\s*(\d+(?:\s*[,%s]\s*\d+)*)\s*$" % _DASHES
+)
+
+# A run is a superscript-citation candidate only if its font is at most this
+# fraction of the page's dominant (body) font size. Citation superscripts run
+# ~0.6–0.75x body; the cutoff leaves headroom without catching body digits.
+_SUPERSCRIPT_FONT_RATIO = 0.80
+
 # Reference-section headings, matched against a whole (stripped) run/line. We
 # keep the set tight so a sentence mentioning "references" mid-paragraph isn't
 # mistaken for the heading — a heading run is short and stands alone.
@@ -125,11 +137,67 @@ def _sub_bbox(run: TextRun, start: int, end: int) -> BBox:
     return BBox(x0=x0, y0=run.bbox.y0, x1=x1, y1=run.bbox.y1)
 
 
-def detect_citations(page_text: PageText) -> list[CitationMarker]:
-    """Find every bracketed numeric citation marker on a page.
+def _dominant_font_size(runs: list[TextRun]) -> float:
+    """The page's body font size: the size covering the most characters.
 
-    Cost is one regex scan per text run; most runs contain no brackets. Returns
-    markers in reading order (columns, then runs within them)."""
+    Body prose dominates the character count, so the most-weighted size is the
+    body text — the baseline we compare candidate superscripts against."""
+    weights: dict[float, int] = {}
+    for r in runs:
+        n = len(r.text.strip())
+        if n == 0:
+            continue
+        key = round(r.font_size, 1)
+        weights[key] = weights.get(key, 0) + n
+    if not weights:
+        return 0.0
+    return max(weights.items(), key=lambda kv: kv[1])[0]
+
+
+def _is_raised_superscript(
+    candidate: TextRun, runs: list[TextRun], body_fs: float
+) -> bool:
+    """True if `candidate` sits raised above the baseline of the body text on
+    its line — i.e. it's a superscript, not a subscript (e.g. CO₂) or a stray
+    small number. We find the nearest body-sized run sharing the line and check
+    the candidate's bottom edge clears that run's baseline.
+
+    If no body run shares the line, fall back to the font signal alone for very
+    small runs (a strongly superscript-sized token with no neighbour to test).
+    """
+    c = candidate.bbox
+    c_mid = (c.y0 + c.y1) / 2
+    nearest: TextRun | None = None
+    nearest_dx = float("inf")
+    for r in runs:
+        if r is candidate:
+            continue
+        if r.font_size < body_fs * 0.88:  # must be (roughly) body-sized
+            continue
+        # Same visual line: candidate's vertical midpoint falls within the body
+        # run's vertical span (small pad for rounding).
+        if not (r.bbox.y0 - 2 <= c_mid <= r.bbox.y1 + 2):
+            continue
+        dx = min(abs(c.x0 - r.bbox.x1), abs(r.bbox.x0 - c.x1))
+        if dx < nearest_dx:
+            nearest_dx = dx
+            nearest = r
+
+    if nearest is None:
+        # No body neighbour to compare against — trust a strong font signal.
+        return candidate.font_size <= body_fs * 0.70
+
+    # Raised if the candidate's bottom clears the body baseline by a margin.
+    return c.y1 <= nearest.bbox.y1 - 0.2 * body_fs
+
+
+def detect_citations(page_text: PageText) -> list[CitationMarker]:
+    """Find every numeric citation marker on a page — both bracketed (``[12]``)
+    and superscript (Nature-style raised ``12``).
+
+    Cost is a couple of regex checks per run plus, for the few pure-number runs,
+    a small neighbour scan. Returns markers in reading order (columns, then runs
+    within them)."""
     markers: list[CitationMarker] = []
     idx = 0
     # Walk runs in reading order: column by column. Fall back to raw runs if a
@@ -141,11 +209,16 @@ def detect_citations(page_text: PageText) -> list[CitationMarker]:
     else:
         runs.extend(page_text.runs)
 
+    body_fs = _dominant_font_size(runs)
+
     for run in runs:
+        # Pass 1: bracketed markers — there may be several within one run.
+        matched_bracket = False
         for m in CITATION_PATTERN.finditer(run.text):
             numbers = _expand_numbers(m.group("body"))
             if not numbers:
                 continue
+            matched_bracket = True
             bbox = _sub_bbox(run, m.start(), m.end())
             markers.append(
                 CitationMarker(
@@ -157,6 +230,29 @@ def detect_citations(page_text: PageText) -> list[CitationMarker]:
                 )
             )
             idx += 1
+        if matched_bracket:
+            continue
+
+        # Pass 2: superscript marker — the whole run is a raised number token in
+        # a smaller-than-body font. The run's bbox IS the marker (no interp).
+        sm = _SUPERSCRIPT_BODY.match(run.text)
+        if (
+            sm is not None
+            and body_fs > 0
+            and run.font_size <= body_fs * _SUPERSCRIPT_FONT_RATIO
+        ):
+            numbers = _expand_numbers(sm.group(1))
+            if numbers and _is_raised_superscript(run, runs, body_fs):
+                markers.append(
+                    CitationMarker(
+                        marker_id=f"p{page_text.page_index}_c{idx}",
+                        page_index=page_text.page_index,
+                        bbox=run.bbox,
+                        numbers=numbers,
+                        raw=run.text.strip(),
+                    )
+                )
+                idx += 1
     return markers
 
 

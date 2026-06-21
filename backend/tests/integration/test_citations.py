@@ -66,6 +66,29 @@ def test_page_citations_detected(app_client, citation_pdf):
 
 
 @pytest.mark.integration
+def test_superscript_citations_detected(app_client, tmp_path):
+    # Nature-style superscript citations, built with platypus <super> markup so
+    # pdfium emits the raised, smaller-font runs the detector keys on.
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate
+
+    path = tmp_path / "super.pdf"
+    styles = getSampleStyleSheet()
+    body = (
+        "AI agents<super>24,25</super> tackle research, and the Virtual Lab "
+        "architecture<super>3</super> is broadly applicable<super>7</super> here."
+    )
+    SimpleDocTemplate(str(path), pagesize=letter).build([Paragraph(body, styles["BodyText"])])
+
+    doc_id = _upload(app_client, path)
+    body_json = app_client.get(f"/documents/{doc_id}/pages/1/citations").json()
+    numbers = [tuple(m["numbers"]) for m in body_json["citations"]]
+    assert (24, 25) in numbers
+    assert (3,) in numbers
+    assert (7,) in numbers
+
+
+@pytest.mark.integration
 def test_page_citations_404_for_unknown_doc(app_client):
     r = app_client.get("/documents/deadbeef/pages/1/citations")
     assert r.status_code == 404

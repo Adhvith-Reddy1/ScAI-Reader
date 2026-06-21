@@ -89,6 +89,47 @@ def test_ignores_absurd_number_runs():
     assert detect_citations(_page(runs)) == []
 
 
+def _super(text: str, x0: float, y0: float, x1: float, y1: float) -> TextRun:
+    """A small, raised run (font_size carried explicitly)."""
+    return TextRun(text=text, bbox=BBox(x0, y0, x1, y1), font_size=6.8)
+
+
+def test_detects_superscript_citation():
+    # Body text at fs=10 on the line y0=80..y1=90; the superscript sits raised
+    # (y0=77..y1=84) in a smaller font right after the word.
+    body = _run("AI agents", 72, 80, 120, 90)
+    sup = _super("24,25", 121, 77, 140, 84)
+    runs = (body, sup)
+    markers = detect_citations(_page(runs))
+    assert [m.numbers for m in markers] == [(24, 25)]
+    assert markers[0].raw == "24,25"
+    # The whole superscript run is the hotspot (no interpolation).
+    assert markers[0].bbox.x0 == 121 and markers[0].bbox.x1 == 140
+
+
+def test_rejects_subscript_numbers():
+    # A chemical subscript (CO2): small font but sits LOW, not raised.
+    body = _run("CO", 72, 80, 90, 90)
+    sub = _super("2", 91, 86, 96, 92)  # bottom (92) below body baseline (90)
+    markers = detect_citations(_page((body, sub)))
+    assert markers == []
+
+
+def test_body_sized_numbers_are_not_superscripts():
+    # A page/equation number at body font size must not be flagged.
+    body = _run("Equation result follows", 72, 80, 300, 90)
+    num = _run("42", 305, 80, 320, 90)  # same font_size as body
+    markers = detect_citations(_page((body, num)))
+    assert markers == []
+
+
+def test_superscript_and_bracket_coexist():
+    body = _run("Methods [9] and prior", 72, 80, 200, 90)
+    sup = _super("3", 201, 77, 210, 84)
+    markers = detect_citations(_page((body, sup)))
+    assert [m.numbers for m in markers] == [(9,), (3,)]
+
+
 def test_extract_references_text_slices_after_heading():
     page0 = _page(
         (
