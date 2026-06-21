@@ -26,6 +26,7 @@ import {
 const DWELL_MS = 200;
 const GAP_PX = 8;
 const TOOLTIP_WIDTH_PX = 360;
+const PINNED_WIDTH_PX = 380;
 
 // Tooltip singleton state.
 let tooltipEl: HTMLDivElement | null = null;
@@ -39,6 +40,7 @@ let inputEl: HTMLInputElement | null = null;
 let sendEl: HTMLButtonElement | null = null;
 let applyEl: HTMLButtonElement | null = null;
 let footEl: HTMLDivElement | null = null;
+let openChatEl: HTMLButtonElement | null = null;
 let currentUnsubscribe: (() => void) | null = null;
 let dwellTimer: number | null = null;
 let hideTimer: number | null = null;
@@ -54,12 +56,17 @@ let pinned = false;
 let activeDoc: DocumentMeta | null = null;
 let activeText: string | null = null;
 let activeGroup: SVGGElement | null = null;
+let activeOnDelete: ((annotationId: string) => void) | null = null;
+// Once the reader drags a resize handle, we stop auto-positioning so their
+// chosen size/position sticks until the panel is closed.
+let userSized = false;
 
 interface BlueRegistration {
   group: SVGGElement;
   doc: DocumentMeta;
   annotationId: string;
   text: string | null;
+  onDelete: (annotationId: string) => void;
 }
 
 interface WrapState {
@@ -140,9 +147,21 @@ function ensureTooltip(): HTMLDivElement {
   chat.appendChild(apply);
   el.appendChild(chat);
 
-  // Collapsed footer — the bottom-right affordance that opens the chat.
+  // Footer: Delete on the bottom-left, "Ask a follow-up ›" on the right.
   const foot = document.createElement("div");
   foot.className = "explanation-tooltip-foot";
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "explanation-tooltip-delete";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => {
+    if (activeOnDelete && activeAnnotationId) {
+      activeOnDelete(activeAnnotationId);
+    }
+  });
+  foot.appendChild(del);
+
   const openChat = document.createElement("button");
   openChat.type = "button";
   openChat.className = "explanation-chat-open";
@@ -154,6 +173,14 @@ function ensureTooltip(): HTMLDivElement {
   });
   foot.appendChild(openChat);
   el.appendChild(foot);
+
+  // Eight resize handles (edges + corners), only interactive when pinned.
+  for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+    const handle = document.createElement("div");
+    handle.className = `explanation-resize-handle resize-${dir}`;
+    handle.addEventListener("pointerdown", (ev) => startResize(dir, ev));
+    el.appendChild(handle);
+  }
 
   // While the cursor is over the tooltip itself, cancel any pending hide
   // so the user can read it (or type) without it flickering away.
@@ -185,6 +212,7 @@ function ensureTooltip(): HTMLDivElement {
   sendEl = send;
   applyEl = apply;
   footEl = foot;
+  openChatEl = openChat;
   return el;
 }
 
@@ -201,6 +229,54 @@ function rerender(): void {
   if (activeAnnotationId == null) return;
   render(activeAnnotationId);
   if (activeGroup) position(activeGroup.getBoundingClientRect());
+}
+
+const RESIZE_MIN_W = 260;
+const RESIZE_MIN_H = 200;
+
+/** Drag a resize handle to size the panel; content reflows to fit. */
+function startResize(dir: string, e: PointerEvent): void {
+  if (!tooltipEl) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const el = tooltipEl;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const rect = el.getBoundingClientRect();
+  const startW = rect.width;
+  const startH = rect.height;
+  const startLeft = parseFloat(el.style.left) || rect.left + window.scrollX;
+  const startTop = parseFloat(el.style.top) || rect.top + window.scrollY;
+  const maxW = window.innerWidth - 24;
+  const maxH = window.innerHeight - 24;
+
+  const onMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    let w = startW;
+    let h = startH;
+    if (dir.includes("e")) w = startW + dx;
+    if (dir.includes("w")) w = startW - dx;
+    if (dir.includes("s")) h = startH + dy;
+    if (dir.includes("n")) h = startH - dy;
+    w = Math.max(RESIZE_MIN_W, Math.min(maxW, w));
+    h = Math.max(RESIZE_MIN_H, Math.min(maxH, h));
+    // Dragging a west/north edge keeps the opposite edge anchored.
+    const left = dir.includes("w") ? startLeft + (startW - w) : startLeft;
+    const top = dir.includes("n") ? startTop + (startH - h) : startTop;
+
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    userSized = true;
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function clearSubscription(): void {
@@ -227,7 +303,14 @@ function hide(): void {
   activeDoc = null;
   activeText = null;
   activeGroup = null;
-  if (tooltipEl) tooltipEl.style.display = "none";
+  activeOnDelete = null;
+  userSized = false;
+  if (tooltipEl) {
+    tooltipEl.style.display = "none";
+    // Clear any manual resize so the next open auto-sizes from scratch.
+    tooltipEl.style.width = "";
+    tooltipEl.style.height = "";
+  }
 }
 
 function scheduleHide(): void {
@@ -241,22 +324,33 @@ function scheduleHide(): void {
 
 function position(anchorRect: DOMRect): void {
   const el = ensureTooltip();
+  // Pinned panel lays out as a flex column (so the thread scrolls); the
+  // collapsed hover tooltip is a plain block.
+  el.style.display = pinned ? "flex" : "block";
+
+  // Once the reader has dragged the panel to their own size, leave its
+  // geometry alone — don't yank it back on every re-render.
+  if (pinned && userSized) return;
+
   const margin = 12;
   const vw = window.innerWidth;
-  const width = Math.min(TOOLTIP_WIDTH_PX, vw - margin * 2);
+  const vh = window.innerHeight;
+  const target = pinned ? PINNED_WIDTH_PX : TOOLTIP_WIDTH_PX;
+  const width = Math.min(target, vw - margin * 2);
   el.style.width = `${width}px`;
 
-  el.style.display = "block";
   const tooltipHeight = el.offsetHeight;
 
   const centerX = anchorRect.left + anchorRect.width / 2;
   let x = centerX - width / 2;
   x = Math.max(margin, Math.min(x, vw - width - margin));
 
+  // Prefer above the highlight; flip below if it won't fit; then clamp so the
+  // whole panel stays on-screen (its height is capped to the viewport in CSS).
   let y = anchorRect.top - tooltipHeight - GAP_PX;
-  if (y < margin) {
-    y = anchorRect.bottom + GAP_PX;
-  }
+  if (y < margin) y = anchorRect.bottom + GAP_PX;
+  y = Math.min(y, vh - tooltipHeight - margin);
+  y = Math.max(margin, y);
 
   el.style.left = `${x + window.scrollX}px`;
   el.style.top = `${y + window.scrollY}px`;
@@ -302,9 +396,15 @@ function renderChat(annotationId: string, chatAvailable: boolean): void {
   const el = tooltipEl!;
   el.classList.toggle("is-pinned", pinned);
 
-  if (footEl) footEl.style.display = pinned || !chatAvailable ? "none" : "flex";
+  // Delete lives in the footer and is available in every state, so the footer
+  // is always shown. The "Ask a follow-up" affordance only appears collapsed
+  // and only when there's an explanation worth clarifying.
+  if (footEl) footEl.style.display = "flex";
+  if (openChatEl) {
+    openChatEl.style.display = !pinned && chatAvailable ? "inline-flex" : "none";
+  }
   if (closeEl) closeEl.style.display = pinned ? "block" : "none";
-  if (chatEl) chatEl.style.display = pinned ? "block" : "none";
+  if (chatEl) chatEl.style.display = pinned ? "flex" : "none";
   if (!pinned) return;
 
   const chat = getChat(annotationId);
@@ -352,6 +452,7 @@ async function show(
   activeDoc = doc;
   activeText = text;
   activeGroup = registration.group;
+  activeOnDelete = registration.onDelete;
   clearSubscription();
 
   currentUnsubscribe = subscribeExplanation(annotationId, () => {
@@ -458,6 +559,7 @@ export function bindBlueAnnotation(
   doc: DocumentMeta,
   annotationId: string,
   text: string | null,
+  onDelete: (annotationId: string) => void,
 ): () => void {
   // The caller (AnnotationLayer) appends `group` to a freshly-created SVG
   // and only attaches that SVG to the DOM after returning. So at this
@@ -476,7 +578,15 @@ export function bindBlueAnnotation(
       state = setupWrapListeners(wrap);
       wrapStates.set(wrap, state);
     }
-    state.registrations.set(annotationId, { group, doc, annotationId, text });
+    state.registrations.set(annotationId, {
+      group,
+      doc,
+      annotationId,
+      text,
+      onDelete,
+    });
+    // Keep the live delete callback fresh if the panel is already open for it.
+    if (activeAnnotationId === annotationId) activeOnDelete = onDelete;
 
     // If a pinned conversation is open for this highlight and the page just
     // re-laid-out (zoom/scroll rebuilds the SVG), re-anchor to the new group

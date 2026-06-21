@@ -86,11 +86,11 @@ function position(anchorRect: DOMRect): void {
   const h = el.offsetHeight;
   const margin = 6;
 
-  // Top-right corner of the highlight, nudged just above it.
-  let x = anchorRect.right - w;
+  // Bottom-left corner of the highlight, nudged just below it.
+  let x = anchorRect.left;
   x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
-  let y = anchorRect.top - h - GAP_PX;
-  if (y < margin) y = anchorRect.bottom + GAP_PX;
+  let y = anchorRect.bottom + GAP_PX;
+  if (y + h > window.innerHeight - margin) y = anchorRect.top - h - GAP_PX;
 
   el.style.left = `${x + window.scrollX}px`;
   el.style.top = `${y + window.scrollY}px`;

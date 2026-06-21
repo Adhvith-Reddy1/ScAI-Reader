@@ -95,14 +95,14 @@ describe("ExplanationTooltip pin / dismiss", () => {
   it("opens the chat when the follow-up affordance is clicked", async () => {
     seedExplanation("a", "definition", "A measure of disorder.");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy");
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
 
     const tip = await openAndPin(group);
 
     expect(tip.classList.contains("is-pinned")).toBe(true);
-    expect(
-      getComputedStyle(tip.querySelector(".explanation-chat")!).display,
-    ).not.toBe("none");
+    expect(tip.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
     // Close button is now visible, footer affordance hidden.
     expect(
       (tip.querySelector(".explanation-tooltip-close") as HTMLElement).style
@@ -110,12 +110,68 @@ describe("ExplanationTooltip pin / dismiss", () => {
     ).toBe("block");
   });
 
+  it("Delete button in the footer invokes the highlight's onDelete", async () => {
+    const onDelete = vi.fn();
+    seedExplanation("a", "definition", "x");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", onDelete);
+    // Hover (collapsed) is enough — the Delete button lives in the footer and
+    // is available without opening the chat.
+    await Promise.resolve();
+    hoverInto(group);
+    vi.advanceTimersByTime(300);
+    await Promise.resolve();
+
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+    const del = tip.querySelector<HTMLButtonElement>(
+      ".explanation-tooltip-delete",
+    )!;
+    expect(del).not.toBeNull();
+    del.click();
+    expect(onDelete).toHaveBeenCalledWith("a");
+  });
+
+  it("dragging the SE handle resizes the panel", async () => {
+    seedExplanation("a", "definition", "x");
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    const tip = await openAndPin(group);
+
+    // Give the panel a known starting geometry for the resize math.
+    stubRect(tip, {
+      left: 100,
+      top: 100,
+      right: 480,
+      bottom: 360,
+      width: 380,
+      height: 260,
+    });
+    tip.style.left = "100px";
+    tip.style.top = "100px";
+
+    const se = tip.querySelector<HTMLElement>(".resize-se")!;
+    se.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 480, clientY: 360, bubbles: true }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 580, clientY: 460 }),
+    );
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+
+    // +100 in each axis from the drag delta.
+    expect(tip.style.width).toBe("480px");
+    expect(tip.style.height).toBe("360px");
+    // SE drag leaves the top-left corner anchored.
+    expect(tip.style.left).toBe("100px");
+    expect(tip.style.top).toBe("100px");
+  });
+
   it("Escape closes a pinned conversation", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy");
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
     const tip = await openAndPin(group);
-    expect(tip.style.display).toBe("block");
+    expect(tip.style.display).toBe("flex");
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(tip.style.display).toBe("none");
@@ -124,13 +180,13 @@ describe("ExplanationTooltip pin / dismiss", () => {
   it("dismissExplanationFor closes a panel pinned to the deleted highlight", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy");
+    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
     const tip = await openAndPin(group);
-    expect(tip.style.display).toBe("block");
+    expect(tip.style.display).toBe("flex");
 
     // A different highlight's deletion must NOT close this panel.
     dismissExplanationFor("some-other-id");
-    expect(tip.style.display).toBe("block");
+    expect(tip.style.display).toBe("flex");
 
     dismissExplanationFor("a");
     expect(tip.style.display).toBe("none");

@@ -6,6 +6,51 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Explanation box: bottom-left Delete, scrolling chat, resizable — 2026-06-21
+
+### Why
+
+Three UX fixes to the pinnable explanation/definition box: (1) put Delete at
+the bottom-left of the box; (2) a long follow-up thread ran off the bottom of
+the screen — it should scroll inside the box instead; (3) let the reader resize
+the box from any edge/corner with the text reflowing to fit.
+
+### What changed (frontend only)
+
+- `ExplanationTooltip.ts`
+  - Footer is now `[Delete | Ask a follow-up ›]`. Delete calls the highlight's
+    `onDelete`, so `bindBlueAnnotation(group, doc, id, text, onDelete)` gained a
+    param; `show()`/re-bind capture it as `activeOnDelete`. Delete is shown in
+    every state (incl. error/empty) so a blue highlight is always removable.
+  - Pinned panel is a flex column capped at `calc(100vh - 24px)`; the thread is
+    the sole scroll region (`flex:1; min-height:0; overflow-y:auto`). `position()`
+    now sets `display:flex` when pinned and clamps vertically so it never runs
+    off-screen. Fixed the bug where `position()` forced `display:block` and broke
+    the flex layout.
+  - Eight resize handles (n/s/e/w + corners), shown only when pinned, dragged via
+    pointer events (`startResize`). Once dragged, `userSized` makes `position()`
+    leave geometry alone; `hide()` resets it and clears inline width/height.
+- `AnnotationLayer.ts` — blue highlights use the in-box Delete (no standalone
+  pill); every other color keeps the standalone hover pill.
+- `HighlightHoverActions.ts` — that pill now anchors at the highlight's
+  **bottom-left** (was top-right).
+- `styles.css` — `.is-pinned` flex/scroll/`overflow:hidden`; footer space-between
+  + `.explanation-tooltip-delete`; `.explanation-resize-handle` edge/corner specs
+  positioned just inside the border (so `overflow:hidden` doesn't clip them).
+
+### Tests (132 frontend + 102 backend)
+
+`ExplanationTooltip.test.ts` grew to 5: open-chat, footer Delete → onDelete, SE
+resize drag, Escape, dismiss-on-delete. `RESIZE_MIN_W/H = 260/200`.
+
+### Notes
+
+- No browser in the container, so resize/scroll were verified via jsdom unit
+  tests + review, not a live drag. Still needs a real-browser eyeball.
+- Native CSS `resize` only does the SE corner, so the 8-way handles are custom.
+
+---
+
 ## Tooltip chat + refine, and hover-to-delete — 2026-06-21
 
 ### Why

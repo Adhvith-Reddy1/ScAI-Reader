@@ -66,12 +66,13 @@ export function buildAnnotationLayer(
     });
     svg.appendChild(group);
 
-    // Hovering any highlight surfaces a small Delete button.
-    bindHighlightActions(group, ann.id, onDelete);
-
-    // Blue highlights additionally get the AI-explanation hover tooltip.
+    // Blue highlights get the AI-explanation tooltip, which carries its own
+    // bottom-left Delete button. Every other color gets the standalone hover
+    // Delete pill anchored at the highlight's bottom-left.
     if (ann.color === "blue" && doc) {
-      bindBlueAnnotation(group, doc, ann.id, ann.text ?? null);
+      bindBlueAnnotation(group, doc, ann.id, ann.text ?? null, onDelete);
+    } else {
+      bindHighlightActions(group, ann.id, onDelete);
     }
   }
   return svg;

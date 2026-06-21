@@ -746,6 +746,7 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
    500ms dwell; updates live while the model is streaming. */
 .explanation-tooltip {
   position: absolute;
+  box-sizing: border-box;
   z-index: 200;
   background: #1f242c;
   color: #e6e8eb;
@@ -792,9 +793,21 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   0%, 100% { opacity: 0.2; }
   50% { opacity: 1; }
 }
+/* Pinned = the interactive, resizable panel. It becomes a flex column so the
+   thread can scroll while the header/body/footer stay put, and its height is
+   capped to the viewport so a long conversation never runs off-screen. */
 .explanation-tooltip.is-pinned {
-  max-width: 380px;
-  width: 380px;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+  /* Clip to the rounded box so nothing spills when sized small; the thread is
+     the only scroll region. Resize handles sit just inside the edges. */
+  overflow: hidden;
+  resize: none;
+}
+.explanation-tooltip.is-pinned .explanation-tooltip-body {
+  flex: 0 0 auto;
 }
 
 /* Header row holds the title and (when pinned) a close button. */
@@ -819,11 +832,29 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   color: #fff;
 }
 
-/* Collapsed footer: bottom-right "ask a follow-up" affordance. */
+/* Footer: Delete on the bottom-left, "ask a follow-up" on the right. */
 .explanation-tooltip-foot {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
+  flex: 0 0 auto;
+}
+.explanation-tooltip-delete {
+  background: transparent;
+  border: 1px solid rgba(244, 67, 54, 0.45);
+  color: #ffb4ab;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.explanation-tooltip-delete:hover {
+  background: rgba(244, 67, 54, 0.85);
+  border-color: rgba(244, 67, 54, 0.85);
+  color: #fff;
 }
 .explanation-chat-open {
   background: transparent;
@@ -839,9 +870,13 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   border-color: rgba(120, 180, 255, 0.6);
 }
 
-/* Expanded chat (only shown when pinned). */
+/* Expanded chat (only shown when pinned). Flexes to fill the panel between
+   the body and the footer; the thread inside is the scroll region. */
 .explanation-chat {
   display: none;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -850,12 +885,15 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   margin-bottom: 8px;
 }
 .explanation-chat-thread:empty {
-  display: none;
+  flex: 0 0 auto;
+  min-height: 0;
+  margin-bottom: 0;
 }
 .explanation-chat-msg {
   padding: 6px 9px;
@@ -938,6 +976,47 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   opacity: 0.5;
   cursor: default;
 }
+
+/* Resize handles — edges + corners. Only interactive when the panel is
+   pinned; hit areas overhang the border slightly for easy grabbing. */
+.explanation-resize-handle {
+  display: none;
+  position: absolute;
+  z-index: 1;
+}
+.explanation-tooltip.is-pinned .explanation-resize-handle {
+  display: block;
+}
+.explanation-resize-handle.resize-n,
+.explanation-resize-handle.resize-s {
+  left: 10px;
+  right: 10px;
+  height: 7px;
+  cursor: ns-resize;
+}
+.explanation-resize-handle.resize-e,
+.explanation-resize-handle.resize-w {
+  top: 10px;
+  bottom: 10px;
+  width: 7px;
+  cursor: ew-resize;
+}
+.explanation-resize-handle.resize-n { top: 0; }
+.explanation-resize-handle.resize-s { bottom: 0; }
+.explanation-resize-handle.resize-e { right: 0; }
+.explanation-resize-handle.resize-w { left: 0; }
+.explanation-resize-handle.resize-ne,
+.explanation-resize-handle.resize-nw,
+.explanation-resize-handle.resize-se,
+.explanation-resize-handle.resize-sw {
+  width: 12px;
+  height: 12px;
+  z-index: 2;
+}
+.explanation-resize-handle.resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.explanation-resize-handle.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.explanation-resize-handle.resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.explanation-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
 /* Figure-explain pinned card. Stays open until dismissed, anchors next
    to the figure so it doesn't occlude the page text. */
