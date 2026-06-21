@@ -6,6 +6,34 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Explanation box: capped grow-then-scroll size — 2026-06-21
+
+The pinned box's `max-height` was `calc(100vh - 24px)` (≈ full screen), so a
+streaming follow-up grew the box almost to fill the page before scrolling. Now
+it grows with content up to a readable cap, then the thread scrolls.
+
+- `ExplanationTooltip.ts`: pinned `position()` no longer sets an explicit height
+  — it sets `width` (default `DEFAULT_PINNED_WIDTH = 600`) and a `max-height`
+  cap (`DEFAULT_CAP_PX = 620`, or the remembered size), clamped to
+  `vh - top - margin` so the panel never runs past the bottom of the screen.
+  Height is left `auto` so it grows then the thread (`overflow-y:auto`) scrolls.
+- A **remembered/resized height is now the grow-to cap**, not a fixed height —
+  reopening still expands-then-scrolls at the reader's chosen size. Resize drag
+  sets `height` + `max-height` together so a drag can grow past the cap.
+- `styles.css` `.is-pinned` fallback `max-height: min(620px, calc(100vh-24px))`.
+- Tests: `ExplanationTooltip.test.ts` → 9 (added "caps height (grow-then-scroll)
+  when not resized"; "remembers size" now checks `max-height`, not `height`).
+
+### Pre-existing race fixed (separate commit)
+
+`storage/files.py` wrote the render cache via a fixed `*.tmp` name, so two
+threads rendering the same page raced (`tmp.rename` → FileNotFoundError). This
+session's container timing made `test_concurrent_renders` fail consistently.
+Fixed with a per-writer unique temp name (`_unique_tmp`, pid + random token) +
+`Path.replace`. Same applied to `save_pdf`.
+
+---
+
 ## Explanation box: chat-mode polish + persistent size — 2026-06-21
 
 Four follow-up tweaks to the pinnable explanation box (all in
