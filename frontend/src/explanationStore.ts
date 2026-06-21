@@ -11,7 +11,10 @@
 
 import {
   getExplanation,
+  streamChat,
   streamExplanation,
+  streamRefine,
+  type ChatTurn,
   type ExplanationKind,
 } from "./api.ts";
 
@@ -21,28 +24,69 @@ export type ExplanationState =
   | { status: "ready"; content: string; kind: ExplanationKind }
   | { status: "error"; error: string };
 
+/**
+ * The follow-up conversation a reader can have when the tooltip wasn't
+ * enough. `streaming` is true while an assistant reply is arriving;
+ * `refining` is true while the box text is being rewritten from the thread.
+ */
+export interface ChatThread {
+  messages: ChatTurn[];
+  streaming: boolean;
+  refining: boolean;
+  error: string | null;
+}
+
 type Subscriber = (state: ExplanationState) => void;
 
 interface Entry {
   state: ExplanationState;
+  chat: ChatThread;
   subscribers: Set<Subscriber>;
   abort?: () => void;
+  chatAbort?: () => void;
+  refineAbort?: () => void;
 }
 
 const entries = new Map<string, Entry>();
 
+function freshChat(): ChatThread {
+  return { messages: [], streaming: false, refining: false, error: null };
+}
+
 function ensureEntry(id: string): Entry {
   let entry = entries.get(id);
   if (!entry) {
-    entry = { state: { status: "idle" }, subscribers: new Set() };
+    entry = {
+      state: { status: "idle" },
+      chat: freshChat(),
+      subscribers: new Set(),
+    };
     entries.set(id, entry);
   }
   return entry;
 }
 
+/** Re-broadcast the current explanation state. Used after chat mutations so
+ * subscribers (the tooltip) re-render even though `state` didn't change. */
+function notify(entry: Entry): void {
+  for (const cb of entry.subscribers) cb(entry.state);
+}
+
 function setState(entry: Entry, next: ExplanationState): void {
   entry.state = next;
-  for (const cb of entry.subscribers) cb(next);
+  notify(entry);
+}
+
+function currentContentKind(entry: Entry): {
+  content: string;
+  kind: ExplanationKind;
+} {
+  const s = entry.state;
+  if (s.status === "ready") return { content: s.content, kind: s.kind };
+  if (s.status === "loading") {
+    return { content: s.content, kind: s.kind ?? "explanation" };
+  }
+  return { content: "", kind: "explanation" };
 }
 
 export function subscribeExplanation(
@@ -163,4 +207,119 @@ export async function hydrateExplanation(
   }
   // pending — caller may start a fresh stream
   return false;
+}
+
+/** The follow-up thread for a highlight. */
+export function getChat(annotationId: string): ChatThread {
+  return ensureEntry(annotationId).chat;
+}
+
+/**
+ * Send a follow-up question. Appends the user's message and a placeholder
+ * assistant turn, then streams the reply into that placeholder. No-op while a
+ * reply or a refine is already in flight.
+ */
+export function sendChatMessage(
+  docId: string,
+  annotationId: string,
+  text: string,
+  userText: string,
+): void {
+  const trimmed = userText.trim();
+  if (!trimmed) return;
+  const entry = ensureEntry(annotationId);
+  if (entry.chat.streaming || entry.chat.refining) return;
+
+  const { content, kind } = currentContentKind(entry);
+  entry.chat.messages.push({ role: "user", content: trimmed });
+  // Messages we actually send: everything up to and including this question.
+  const outgoing = entry.chat.messages.slice();
+  entry.chat.messages.push({ role: "assistant", content: "" });
+  entry.chat.streaming = true;
+  entry.chat.error = null;
+  notify(entry);
+
+  const last = entry.chat.messages[entry.chat.messages.length - 1];
+  entry.chatAbort = streamChat(
+    docId,
+    annotationId,
+    { text, kind, content, messages: outgoing },
+    {
+      onDelta: (chunk) => {
+        last.content += chunk;
+        notify(entry);
+      },
+      onDone: (full) => {
+        if (full) last.content = full;
+        entry.chat.streaming = false;
+        entry.chatAbort = undefined;
+        notify(entry);
+      },
+      onError: (message) => {
+        // Drop the empty placeholder so the thread doesn't show a blank reply.
+        if (last.role === "assistant" && last.content === "") {
+          entry.chat.messages.pop();
+        }
+        entry.chat.streaming = false;
+        entry.chat.error = message;
+        entry.chatAbort = undefined;
+        notify(entry);
+      },
+    },
+  );
+}
+
+/**
+ * Rewrite the box text from the conversation. Streams the new definition/
+ * explanation live into the body and, on success, leaves it as the ready
+ * content (the server persists it too). On failure the original text is kept.
+ */
+export function refineFromChat(
+  docId: string,
+  annotationId: string,
+  text: string,
+): void {
+  const entry = ensureEntry(annotationId);
+  if (entry.chat.refining || entry.chat.streaming) return;
+  if (entry.chat.messages.length === 0) return;
+
+  const { content: originalContent, kind } = currentContentKind(entry);
+  entry.chat.refining = true;
+  entry.chat.error = null;
+  notify(entry);
+
+  let acc = "";
+  entry.refineAbort = streamRefine(
+    docId,
+    annotationId,
+    { text, kind, content: originalContent, messages: entry.chat.messages.slice() },
+    {
+      onDelta: (chunk) => {
+        acc += chunk;
+        // Show the rewrite arriving in the body (loading shimmer + partial).
+        setState(entry, { status: "loading", content: acc, kind });
+        entry.chat.refining = true;
+        notify(entry);
+      },
+      onDone: (full) => {
+        setState(entry, { status: "ready", content: full || acc, kind });
+        entry.chat.refining = false;
+        entry.refineAbort = undefined;
+        notify(entry);
+      },
+      onError: (message) => {
+        // Restore what the reader had — a failed rewrite shouldn't blank it.
+        setState(entry, { status: "ready", content: originalContent, kind });
+        entry.chat.refining = false;
+        entry.chat.error = message;
+        entry.refineAbort = undefined;
+        notify(entry);
+      },
+    },
+  );
+}
+
+/** Test-only: drop all per-annotation state. */
+export function _resetForTest(): void {
+  entries.clear();
 }

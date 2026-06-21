@@ -6,6 +6,66 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Tooltip chat + refine, and hover-to-delete — 2026-06-21
+
+### Why
+
+Two requests against the blue-highlight explanation feature: (1) when a
+definition/explanation isn't good enough, let the reader chat to clarify, then
+fold the useful parts back into the tooltip; (2) replace the `window.confirm`
+click-to-delete with a hover "Delete" button. (This branch was fast-forwarded
+onto `dazzling-hypatia-wiv6h5`, which is where the explanation feature lives.)
+
+### Backend (`app/routes/explanations.py`)
+
+- Refactored the Claude stream into `_stream_anthropic(model, system, messages,
+  max_tokens)` + `_pdf_document_block(pdf_b64)`; `_stream_claude` now delegates.
+- `POST …/chat` — streams an assistant reply (SSE, same wire format as
+  `/explain`). The PDF + the tooltip context (highlighted text + current
+  content) ride on the first user turn via `_build_chat_messages`; the rest of
+  the thread is sent verbatim. Uses `MODEL_EXPLANATION`, 400 tok, `SYSTEM_CHAT`.
+- `POST …/refine` — one-shot rewrite that folds the conversation back into the
+  tooltip. On a clean finish it calls `_save_refined` (UPSERT into
+  `explanations`, status `complete`) so the new text is served on reload and
+  inlined by `GET /annotations`. A failed refine never overwrites existing text.
+- No schema change — refine reuses the `explanations.content` column.
+
+### Frontend
+
+- `api.ts` — `streamChat` / `streamRefine` over a shared `consumeSSE` reader.
+- `explanationStore.ts` — per-annotation `ChatThread` ({messages, streaming,
+  refining, error}) plus `sendChatMessage`, `refineFromChat`, `getChat`,
+  `_resetForTest`. Refine streams live into the body as `loading` then `ready`.
+- `ExplanationTooltip.ts` — the hover tooltip is now *pinnable*. Collapsed: a
+  bottom-right "Ask a follow-up ›" affordance. Click → `pinned=true`: auto-hide
+  and hover-switching are disabled, a close (×) appears, and a thread + input +
+  "Update explanation" button show. `pinned` is the key new module flag guarding
+  `hide`/`scheduleHide`/`onMove`.
+- `HighlightHoverActions.ts` (new) — hover any highlight → a "Delete" button at
+  its top-right. Same page-wrap mousemove hit-test trick the tooltip uses (the
+  text-layer overlays the SVG so `mouseenter` on groups doesn't fire).
+- `AnnotationLayer.ts` — dropped the `window.confirm` click path; binds
+  `bindHighlightActions` for every highlight. Erase-mode click-delete unchanged.
+
+### Tests (now 127 frontend + 102 backend)
+
+- Backend: `tests/integration/test_explanation_chat.py` — chat/refine 404 +
+  422 validation, the no-API-key SSE error path, refine-doesn't-overwrite, and
+  `_save_refined` persistence.
+- Frontend: `explanationStore.chat.test.ts` (6) + `HighlightHoverActions.test.ts`
+  (2); updated `AnnotationLayer.test.ts` (plain click no longer deletes).
+
+### Notes / followups
+
+- Chat threads are in-memory (frontend store) — they don't survive reload; only
+  the refined tooltip text persists. Persisting the thread would need a table.
+- No `ANTHROPIC_API_KEY` in this container, so chat/refine were verified
+  structurally (validation + no-key error path), not against a live model.
+- Fresh container had no `backend/.venv`; recreate with `python3.12 -m venv` +
+  `pip install -e ".[test]"` (the `>=3.12` floor rejects the default 3.11).
+
+---
+
 ## Data-loss bug: re-upload wiped highlights — 2026-06-18
 
 ### The bug

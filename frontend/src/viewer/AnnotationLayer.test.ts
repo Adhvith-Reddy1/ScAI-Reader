@@ -78,22 +78,13 @@ describe("buildAnnotationLayer", () => {
     expect(parseFloat(rect.getAttribute("height")!)).toBeCloseTo(1164.7, 1);
   });
 
-  it("calls onDelete with the annotation id when user confirms", () => {
-    vi.stubGlobal("confirm", () => true);
-    const onDelete = vi.fn();
-    const svg = buildAnnotationLayer(
-      [ann("the-id", "yellow", [{ x0: 0, y0: 0, x1: 50, y1: 12 }])],
-      geom,
-      onDelete,
-    );
-    const g = svg.querySelector("g.annotation") as SVGGElement;
-    g.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onDelete).toHaveBeenCalledWith("the-id");
-    vi.unstubAllGlobals();
-  });
-
-  it("does not call onDelete when user cancels", () => {
-    vi.stubGlobal("confirm", () => false);
+  it("a plain click no longer deletes — deletion moved to the hover button", () => {
+    // Outside erase mode, clicking a highlight must NOT delete it; the
+    // delete affordance is the hover "Delete" button instead. If the old
+    // confirm path were still wired, confirm() would be consulted here.
+    vi.stubGlobal("confirm", () => {
+      throw new Error("confirm should not be called on a plain click");
+    });
     const onDelete = vi.fn();
     const svg = buildAnnotationLayer(
       [ann("the-id", "yellow", [{ x0: 0, y0: 0, x1: 50, y1: 12 }])],

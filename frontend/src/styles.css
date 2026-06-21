@@ -275,6 +275,32 @@ body {
   stroke-width: 1;
 }
 
+/* Hover delete button for highlights. Pops up at the highlight's top-right. */
+.highlight-actions {
+  position: absolute;
+  z-index: 210;
+  pointer-events: auto;
+}
+.highlight-actions-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #2b2d31;
+  color: #ffb4ab;
+  border: 1px solid rgba(244, 67, 54, 0.55);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.highlight-actions-delete:hover {
+  background: rgba(244, 67, 54, 0.9);
+  color: #fff;
+  border-color: rgba(244, 67, 54, 0.9);
+}
+
 /* Nav-bar highlight button + color popover (Edge-style). */
 .hl-button-root {
   position: relative;
@@ -765,6 +791,152 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 @keyframes explanation-shimmer {
   0%, 100% { opacity: 0.2; }
   50% { opacity: 1; }
+}
+.explanation-tooltip.is-pinned {
+  max-width: 380px;
+  width: 380px;
+}
+
+/* Header row holds the title and (when pinned) a close button. */
+.explanation-tooltip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.explanation-tooltip-close {
+  display: none;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: rgba(230, 232, 235, 0.7);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.explanation-tooltip-close:hover {
+  color: #fff;
+}
+
+/* Collapsed footer: bottom-right "ask a follow-up" affordance. */
+.explanation-tooltip-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.explanation-chat-open {
+  background: transparent;
+  border: 1px solid rgba(120, 180, 255, 0.35);
+  color: rgba(150, 195, 255, 0.95);
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.explanation-chat-open:hover {
+  background: rgba(120, 180, 255, 0.12);
+  border-color: rgba(120, 180, 255, 0.6);
+}
+
+/* Expanded chat (only shown when pinned). */
+.explanation-chat {
+  display: none;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.explanation-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.explanation-chat-thread:empty {
+  display: none;
+}
+.explanation-chat-msg {
+  padding: 6px 9px;
+  border-radius: 9px;
+  max-width: 85%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.explanation-chat-msg.is-user {
+  align-self: flex-end;
+  background: rgba(79, 140, 255, 0.22);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+}
+.explanation-chat-msg.is-assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.explanation-chat-thread.is-streaming
+  .explanation-chat-msg.is-assistant:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: rgba(120, 180, 255, 0.85);
+  animation: explanation-shimmer 1s infinite;
+}
+.explanation-chat-error {
+  display: none;
+  color: rgba(255, 138, 128, 0.95);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.explanation-chat-form {
+  display: flex;
+  gap: 6px;
+}
+.explanation-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: #e6e8eb;
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.explanation-chat-input:focus {
+  outline: none;
+  border-color: rgba(120, 180, 255, 0.6);
+}
+.explanation-chat-send,
+.explanation-chat-apply {
+  flex: 0 0 auto;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.explanation-chat-send {
+  background: rgba(79, 140, 255, 0.85);
+  border: 1px solid rgba(79, 140, 255, 0.9);
+  color: #fff;
+}
+.explanation-chat-apply {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid rgba(120, 180, 255, 0.5);
+  color: rgba(150, 195, 255, 0.95);
+}
+.explanation-chat-apply:hover:not(:disabled) {
+  background: rgba(120, 180, 255, 0.12);
+}
+.explanation-chat-send:disabled,
+.explanation-chat-apply:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Figure-explain pinned card. Stays open until dismissed, anchors next

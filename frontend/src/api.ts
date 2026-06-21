@@ -220,6 +220,138 @@ export interface ExplainCallbacks {
   onError: (message: string) => void;
 }
 
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatStreamCallbacks {
+  onDelta: (chunk: string) => void;
+  onDone: (full: string) => void;
+  onError: (message: string) => void;
+}
+
+/**
+ * Reads an SSE response body and dispatches each `data:` frame. Shared by the
+ * chat and refine streams (and tolerant of the same wire format the explain
+ * endpoints emit). Returns when the stream ends or aborts.
+ */
+async function consumeSSE(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (
+    event:
+      | { type: "meta"; kind?: ExplanationKind; cached?: boolean }
+      | { type: "delta"; text: string }
+      | { type: "done"; text: string }
+      | { type: "error"; message: string },
+  ) => void,
+  onAbortError: (e: Error) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") onAbortError(e as Error);
+      return;
+    }
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        try {
+          onEvent(JSON.parse(payload));
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+  }
+}
+
+function streamChatLike(
+  url: string,
+  body: unknown,
+  callbacks: ChatStreamCallbacks,
+): () => void {
+  const ctrl = new AbortController();
+  void (async () => {
+    let r: Response;
+    try {
+      r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") callbacks.onError((e as Error).message);
+      return;
+    }
+    if (!r.ok || !r.body) {
+      callbacks.onError(`request failed (${r.status})`);
+      return;
+    }
+    await consumeSSE(
+      r.body,
+      (event) => {
+        if (event.type === "delta") callbacks.onDelta(event.text);
+        else if (event.type === "done") callbacks.onDone(event.text);
+        else if (event.type === "error") callbacks.onError(event.message);
+      },
+      (e) => callbacks.onError(e.message),
+    );
+  })();
+  return () => ctrl.abort();
+}
+
+export interface ChatRequestBody {
+  text: string;
+  kind: ExplanationKind;
+  content: string;
+  messages: ChatTurn[];
+}
+
+/** Streams an assistant reply to a follow-up chat turn on a highlight. */
+export function streamChat(
+  docId: string,
+  annotationId: string,
+  body: ChatRequestBody,
+  callbacks: ChatStreamCallbacks,
+): () => void {
+  return streamChatLike(
+    `/documents/${docId}/annotations/${annotationId}/chat`,
+    body,
+    callbacks,
+  );
+}
+
+/**
+ * Streams a rewritten definition/explanation that folds in the useful parts
+ * of the conversation. On the server this also persists the new text.
+ */
+export function streamRefine(
+  docId: string,
+  annotationId: string,
+  body: ChatRequestBody,
+  callbacks: ChatStreamCallbacks,
+): () => void {
+  return streamChatLike(
+    `/documents/${docId}/annotations/${annotationId}/refine`,
+    body,
+    callbacks,
+  );
+}
+
 export interface FigureBBox {
   x0: number;
   y0: number;

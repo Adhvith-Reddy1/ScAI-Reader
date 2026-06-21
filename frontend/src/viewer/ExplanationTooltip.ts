@@ -14,8 +14,11 @@
 
 import type { DocumentMeta } from "../api.ts";
 import {
+  getChat,
   getExplanationState,
   hydrateExplanation,
+  refineFromChat,
+  sendChatMessage,
   startExplanation,
   subscribeExplanation,
 } from "../explanationStore.ts";
@@ -28,6 +31,14 @@ const TOOLTIP_WIDTH_PX = 360;
 let tooltipEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
 let bodyEl: HTMLDivElement | null = null;
+let closeEl: HTMLButtonElement | null = null;
+let chatEl: HTMLDivElement | null = null;
+let threadEl: HTMLDivElement | null = null;
+let chatErrorEl: HTMLDivElement | null = null;
+let inputEl: HTMLInputElement | null = null;
+let sendEl: HTMLButtonElement | null = null;
+let applyEl: HTMLButtonElement | null = null;
+let footEl: HTMLDivElement | null = null;
 let currentUnsubscribe: (() => void) | null = null;
 let dwellTimer: number | null = null;
 let hideTimer: number | null = null;
@@ -35,6 +46,14 @@ let activeAnnotationId: string | null = null;
 // The annotation the cursor is currently INSIDE (may differ from the
 // activeAnnotationId until the dwell timer fires).
 let pendingAnnotationId: string | null = null;
+// Once the reader opens the chat, the tooltip is "pinned": it stops
+// auto-hiding and stops following the cursor to other highlights, so they can
+// type a follow-up without it vanishing.
+let pinned = false;
+// Context for the pinned annotation, captured on show().
+let activeDoc: DocumentMeta | null = null;
+let activeText: string | null = null;
+let activeGroup: SVGGElement | null = null;
 
 interface BlueRegistration {
   group: SVGGElement;
@@ -58,16 +77,86 @@ function ensureTooltip(): HTMLDivElement {
   el.setAttribute("role", "tooltip");
   el.style.display = "none";
 
+  const head = document.createElement("div");
+  head.className = "explanation-tooltip-head";
   const title = document.createElement("div");
   title.className = "explanation-tooltip-title";
-  el.appendChild(title);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "explanation-tooltip-close";
+  close.setAttribute("aria-label", "Close");
+  close.textContent = "×";
+  close.addEventListener("click", () => {
+    pinned = false;
+    hide();
+  });
+  head.appendChild(title);
+  head.appendChild(close);
+  el.appendChild(head);
 
   const body = document.createElement("div");
   body.className = "explanation-tooltip-body";
   el.appendChild(body);
 
+  // Chat section — revealed when pinned.
+  const chat = document.createElement("div");
+  chat.className = "explanation-chat";
+
+  const thread = document.createElement("div");
+  thread.className = "explanation-chat-thread";
+  chat.appendChild(thread);
+
+  const chatError = document.createElement("div");
+  chatError.className = "explanation-chat-error";
+  chat.appendChild(chatError);
+
+  const form = document.createElement("form");
+  form.className = "explanation-chat-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "explanation-chat-input";
+  input.placeholder = "Ask a follow-up…";
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.className = "explanation-chat-send";
+  send.textContent = "Send";
+  form.appendChild(input);
+  form.appendChild(send);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitChat();
+  });
+  chat.appendChild(form);
+
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.className = "explanation-chat-apply";
+  apply.textContent = "Update explanation";
+  apply.addEventListener("click", () => {
+    if (activeDoc && activeAnnotationId && activeText) {
+      refineFromChat(activeDoc.id, activeAnnotationId, activeText);
+    }
+  });
+  chat.appendChild(apply);
+  el.appendChild(chat);
+
+  // Collapsed footer — the bottom-right affordance that opens the chat.
+  const foot = document.createElement("div");
+  foot.className = "explanation-tooltip-foot";
+  const openChat = document.createElement("button");
+  openChat.type = "button";
+  openChat.className = "explanation-chat-open";
+  openChat.textContent = "Ask a follow-up ›";
+  openChat.addEventListener("click", () => {
+    pinned = true;
+    rerender();
+    inputEl?.focus();
+  });
+  foot.appendChild(openChat);
+  el.appendChild(foot);
+
   // While the cursor is over the tooltip itself, cancel any pending hide
-  // so the user can read it without it flickering away.
+  // so the user can read it (or type) without it flickering away.
   el.addEventListener("mouseenter", () => {
     if (hideTimer != null) {
       window.clearTimeout(hideTimer);
@@ -80,7 +169,30 @@ function ensureTooltip(): HTMLDivElement {
   tooltipEl = el;
   titleEl = title;
   bodyEl = body;
+  closeEl = close;
+  chatEl = chat;
+  threadEl = thread;
+  chatErrorEl = chatError;
+  inputEl = input;
+  sendEl = send;
+  applyEl = apply;
+  footEl = foot;
   return el;
+}
+
+function submitChat(): void {
+  if (!activeDoc || !activeAnnotationId || !activeText || !inputEl) return;
+  const value = inputEl.value;
+  if (!value.trim()) return;
+  sendChatMessage(activeDoc.id, activeAnnotationId, activeText, value);
+  inputEl.value = "";
+}
+
+/** Re-render the active annotation and re-anchor to its highlight. */
+function rerender(): void {
+  if (activeAnnotationId == null) return;
+  render(activeAnnotationId);
+  if (activeGroup) position(activeGroup.getBoundingClientRect());
 }
 
 function clearSubscription(): void {
@@ -91,6 +203,9 @@ function clearSubscription(): void {
 }
 
 function hide(): void {
+  // A pinned tooltip stays put — the reader is mid-conversation. Only an
+  // explicit close (which clears `pinned` first) gets through.
+  if (pinned) return;
   if (dwellTimer != null) {
     window.clearTimeout(dwellTimer);
     dwellTimer = null;
@@ -101,10 +216,14 @@ function hide(): void {
   }
   clearSubscription();
   activeAnnotationId = null;
+  activeDoc = null;
+  activeText = null;
+  activeGroup = null;
   if (tooltipEl) tooltipEl.style.display = "none";
 }
 
 function scheduleHide(): void {
+  if (pinned) return;
   if (hideTimer != null) window.clearTimeout(hideTimer);
   hideTimer = window.setTimeout(() => {
     // Only hide if the cursor isn't back on the tooltip or a tracked group.
@@ -162,6 +281,58 @@ function render(annotationId: string): void {
     title.textContent = "Explanation";
     body.textContent = "No explanation has been generated for this highlight.";
   }
+
+  // The chat only makes sense once there's an actual definition/explanation
+  // to clarify — not on the error or "nothing generated" states.
+  const chatAvailable =
+    (state.status === "ready" || state.status === "loading") &&
+    activeText != null;
+  renderChat(annotationId, chatAvailable);
+}
+
+function renderChat(annotationId: string, chatAvailable: boolean): void {
+  const el = tooltipEl!;
+  el.classList.toggle("is-pinned", pinned);
+
+  if (footEl) footEl.style.display = pinned || !chatAvailable ? "none" : "flex";
+  if (closeEl) closeEl.style.display = pinned ? "block" : "none";
+  if (chatEl) chatEl.style.display = pinned ? "block" : "none";
+  if (!pinned) return;
+
+  const chat = getChat(annotationId);
+
+  // Thread.
+  const thread = threadEl!;
+  thread.replaceChildren();
+  for (const msg of chat.messages) {
+    const row = document.createElement("div");
+    row.className = `explanation-chat-msg is-${msg.role}`;
+    row.textContent = msg.content;
+    thread.appendChild(row);
+  }
+  if (chat.streaming) {
+    thread.classList.add("is-streaming");
+  } else {
+    thread.classList.remove("is-streaming");
+  }
+  thread.scrollTop = thread.scrollHeight;
+
+  // Error line.
+  if (chatErrorEl) {
+    chatErrorEl.textContent = chat.error ?? "";
+    chatErrorEl.style.display = chat.error ? "block" : "none";
+  }
+
+  // Controls — disable while a reply or rewrite is mid-flight.
+  const busy = chat.streaming || chat.refining;
+  if (inputEl) inputEl.disabled = busy;
+  if (sendEl) sendEl.disabled = busy;
+  if (applyEl) {
+    applyEl.disabled = busy || chat.messages.length === 0;
+    applyEl.textContent = chat.refining
+      ? "Updating…"
+      : "Update explanation";
+  }
 }
 
 async function show(
@@ -170,6 +341,9 @@ async function show(
 ): Promise<void> {
   const { doc, annotationId, text } = registration;
   activeAnnotationId = annotationId;
+  activeDoc = doc;
+  activeText = text;
+  activeGroup = registration.group;
   clearSubscription();
 
   currentUnsubscribe = subscribeExplanation(annotationId, () => {
@@ -212,6 +386,9 @@ function findHitRegistration(
 
 function setupWrapListeners(wrap: HTMLElement): WrapState {
   const onMove = (e: MouseEvent) => {
+    // While pinned the reader owns the tooltip — don't let cursor movement
+    // over other highlights swap it out from under their conversation.
+    if (pinned) return;
     const state = wrapStates.get(wrap);
     if (!state) return;
     const hit = findHitRegistration(state, e.clientX, e.clientY);
