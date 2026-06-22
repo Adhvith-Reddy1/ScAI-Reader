@@ -37,6 +37,17 @@ def test_extract_json_array_raises_without_an_array():
         _extract_json_array("I could not find any references.")
 
 
+def test_extract_json_array_salvages_truncated_output():
+    # Model hit the token cap mid-list: no closing bracket, last entry partial.
+    truncated = (
+        '[{"number": 1, "authors": "A", "title": "T1"}, '
+        '{"number": 2, "authors": "B", "title": "T2"}, {"number": 3, "auth'
+    )
+    out = _coerce_entries(_extract_json_array(truncated))
+    # The two complete entries are recovered; the partial one is dropped.
+    assert [e["number"] for e in out] == [1, 2]
+
+
 def test_coerce_entries_filters_and_dedupes():
     parsed = [
         {"number": 1, "authors": "A", "title": "T1"},

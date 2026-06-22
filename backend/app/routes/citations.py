@@ -237,9 +237,23 @@ def _extract_json_array(text: str) -> list:
     start = s.find("[")
     end = s.rfind("]")
     if start != -1 and end > start:
-        parsed = json.loads(s[start : end + 1])
-        if isinstance(parsed, list):
-            return parsed
+        try:
+            parsed = json.loads(s[start : end + 1])
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    # Salvage a truncated array (hit the token cap mid-list): keep everything
+    # through the last complete object and close the bracket ourselves.
+    if start != -1:
+        last_obj = s.rfind("}")
+        if last_obj > start:
+            try:
+                parsed = json.loads(s[start : last_obj + 1] + "]")
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
     raise ValueError("model response did not contain a JSON array")
 
 
@@ -292,16 +306,30 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
             {
                 "role": "user",
                 "content": (
-                    "Here is the reference section:\n\n"
-                    f"<references>\n{blob}\n</references>"
+                    "Extract the numbered reference list from this paper text "
+                    "and return it as a JSON array. The text may include body "
+                    "content, methods or figure captions with scrambled line "
+                    "wrapping; find the references within it.\n\n"
+                    f"<paper>\n{blob}\n</paper>"
                 ),
-            }
+            },
+            # Prefill the reply with "[" so the model is forced to emit a JSON
+            # array and can't wrap it in prose, refuse, or ask a question —
+            # which is what produced "no JSON array" responses before.
+            {"role": "assistant", "content": "["},
         ],
     )
     text = "".join(
         block.text for block in msg.content if getattr(block, "type", "") == "text"
     )
-    return _coerce_entries(_extract_json_array(text))
+    stop = getattr(msg, "stop_reason", None)
+    try:
+        # Re-attach the prefilled "[" the model continued from.
+        parsed = _extract_json_array("[" + text)
+    except ValueError as e:
+        head = ("[" + text)[:200].replace("\n", " ")
+        raise ValueError(f"{e} (stop_reason={stop}, head={head!r})") from e
+    return _coerce_entries(parsed)
 
 
 @router.get("/references")
