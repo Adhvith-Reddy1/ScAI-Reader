@@ -215,6 +215,30 @@ body {
   color: var(--muted);
 }
 
+/* Inner canvas: the page image + overlays, sized to the unrotated page and
+   CSS-rotated as one rigid unit. Its left/top/width/height/transform are set
+   inline by PageView per frame. Centered rotation keeps it filling the outer
+   slot, which reserves the rotated footprint for the scroll layout. */
+.page-canvas {
+  position: absolute;
+  transform-origin: center center;
+}
+
+/* While a page is rotated we drop the custom per-line selection overlay (its
+   geometry assumes an unrotated frame) and let the browser paint the native
+   selection, which tracks the rotated text spans correctly. */
+html[data-page-rotated="true"] .live-selection-layer {
+  display: none;
+}
+html[data-page-rotated="true"] .text-run::selection {
+  background: rgba(79, 140, 255, 0.4);
+  color: transparent;
+}
+html[data-page-rotated="true"] .text-run::-moz-selection {
+  background: rgba(79, 140, 255, 0.4);
+  color: transparent;
+}
+
 /* Invisible-but-selectable text overlay. PDF.js trick: real DOM text styled
    to be invisible, positioned to match the rasterized glyphs. Per-column
    containers keep the browser's selection from bleeding across columns. */
@@ -482,6 +506,34 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 }
 .zoom-btn:hover,
 .zoom-label:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Rotate controls — same chrome as the zoom group. */
+.rotate-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 2px;
+}
+.rotate-btn {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  width: 24px;
+  padding: 2px 8px;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  transition: background 80ms ease;
+}
+.rotate-btn:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 

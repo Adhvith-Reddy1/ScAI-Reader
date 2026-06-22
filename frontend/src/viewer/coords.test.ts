@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   pageBBoxToViewport,
+  pageBBoxToVisualRect,
+  pagePointToVisual,
   viewportBBoxToPage,
+  viewportRectToPageRect,
+  visualPointToPage,
+  visualSize,
   scale,
   type PageGeometry,
 } from "./coords.ts";
@@ -11,6 +16,7 @@ const lettersize: PageGeometry = {
   pageHeightPt: 792,
   displayWidthPx: 900,
   displayHeightPx: 1164.7058823529412, // 900 * 792/612
+  rotation: 0,
 };
 
 describe("scale", () => {
@@ -42,6 +48,7 @@ describe("page <-> viewport round trip", () => {
         pageHeightPt: 792,
         displayWidthPx,
         displayHeightPx: displayWidthPx * (792 / 612),
+        rotation: 0,
       };
       const round = viewportBBoxToPage(
         pageBBoxToViewport(original, geom),
@@ -74,5 +81,75 @@ describe("pageBBoxToViewport", () => {
     expect(i.y0).toBeGreaterThanOrEqual(o.y0);
     expect(i.x1).toBeLessThanOrEqual(o.x1);
     expect(i.y1).toBeLessThanOrEqual(o.y1);
+  });
+});
+
+describe("rotation transforms", () => {
+  // Scale 1 (display px == page pt) keeps the arithmetic legible.
+  const geomAt = (rotation: number): PageGeometry => ({
+    pageWidthPt: 612,
+    pageHeightPt: 792,
+    displayWidthPx: 612,
+    displayHeightPx: 792,
+    rotation,
+  });
+
+  it("swaps the visual footprint at 90° and 270°", () => {
+    expect(visualSize(geomAt(0))).toEqual({ w: 612, h: 792 });
+    expect(visualSize(geomAt(180))).toEqual({ w: 612, h: 792 });
+    expect(visualSize(geomAt(90))).toEqual({ w: 792, h: 612 });
+    expect(visualSize(geomAt(270))).toEqual({ w: 792, h: 612 });
+  });
+
+  it("maps the page top-left to the expected on-screen corner", () => {
+    // Clockwise: page top-left lands at the visual top-right at 90°.
+    const at90 = pagePointToVisual({ x: 0, y: 0 }, geomAt(90));
+    expect(at90.x).toBeCloseTo(792, 6);
+    expect(at90.y).toBeCloseTo(0, 6);
+    // 180° sends it to the bottom-right.
+    const at180 = pagePointToVisual({ x: 0, y: 0 }, geomAt(180));
+    expect(at180.x).toBeCloseTo(612, 6);
+    expect(at180.y).toBeCloseTo(792, 6);
+    // 270° sends it to the bottom-left.
+    const at270 = pagePointToVisual({ x: 0, y: 0 }, geomAt(270));
+    expect(at270.x).toBeCloseTo(0, 6);
+    expect(at270.y).toBeCloseTo(612, 6);
+  });
+
+  it("round-trips page → visual → page at every rotation", () => {
+    for (const rotation of [0, 90, 180, 270]) {
+      const geom = geomAt(rotation);
+      for (const pt of [
+        { x: 0, y: 0 },
+        { x: 153, y: 400 },
+        { x: 612, y: 792 },
+      ]) {
+        const back = visualPointToPage(pagePointToVisual(pt, geom), geom);
+        expect(back.x).toBeCloseTo(pt.x, 5);
+        expect(back.y).toBeCloseTo(pt.y, 5);
+      }
+    }
+  });
+
+  it("round-trips a bbox through the visual rect at every rotation", () => {
+    const box = { x0: 100, y0: 150, x1: 260, y1: 180 };
+    for (const rotation of [0, 90, 180, 270]) {
+      const geom = geomAt(rotation);
+      const back = viewportRectToPageRect(pageBBoxToVisualRect(box, geom), geom);
+      expect(back.x0).toBeCloseTo(box.x0, 4);
+      expect(back.y0).toBeCloseTo(box.y0, 4);
+      expect(back.x1).toBeCloseTo(box.x1, 4);
+      expect(back.y1).toBeCloseTo(box.y1, 4);
+    }
+  });
+
+  it("keeps scale-only behavior at rotation 0 (no regression)", () => {
+    const box = { x0: 72, y0: 100, x1: 300, y1: 120 };
+    const viaRotation = viewportRectToPageRect(
+      pageBBoxToViewport(box, geomAt(0)),
+      geomAt(0),
+    );
+    expect(viaRotation.x0).toBeCloseTo(72, 6);
+    expect(viaRotation.y1).toBeCloseTo(120, 6);
   });
 });

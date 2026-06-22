@@ -18,6 +18,8 @@
  * the document level and dispatch to every registered page wrap.
  */
 
+import { getRotation } from "../rotation.ts";
+
 const NS = "http://www.w3.org/2000/svg";
 
 const SELECTION_FILL = "rgba(79, 140, 255, 0.4)";
@@ -72,6 +74,10 @@ export function updateLiveSelectionLayer(
   wrap: HTMLElement,
 ): void {
   clearSvg(svg);
+  // When the page is rotated, getClientRects() comes back in the rotated frame
+  // and our per-line merge math no longer holds. Fall back to the browser's
+  // native ::selection paint (re-enabled via CSS) instead of drawing wrong rects.
+  if (getRotation() !== 0) return;
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
   if (!sel.anchorNode || !wrap.contains(sel.anchorNode)) return;

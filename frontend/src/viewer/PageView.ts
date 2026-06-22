@@ -16,9 +16,10 @@ import {
 } from "../api.ts";
 import { seedFigure } from "../figureStore.ts";
 import { loadReferences } from "../referenceStore.ts";
+import { getRotation, subscribeRotation } from "../rotation.ts";
 import { buildCitationLayer } from "./CitationLayer.ts";
 import { showFigureCard } from "./FigureCard.ts";
-import { pageBBoxToViewport } from "./coords.ts";
+import { pageBBoxToVisualRect, visualPointToPage } from "./coords.ts";
 import {
   getQuery as getFindQuery,
   registerPageAdapter,
@@ -70,6 +71,9 @@ export function buildPageView(
   pageNumber: number,
   pageDim: PageDimension,
 ): PageViewHandle {
+  // Outer slot: sized to the rotated (on-screen) footprint and laid out by the
+  // page list. Stays upright so the page-number label and scroll math are
+  // unaffected by rotation.
   const wrap = document.createElement("div");
   wrap.className = "page-wrap";
 
@@ -77,13 +81,22 @@ export function buildPageView(
   num.className = "page-number";
   num.textContent = `Page ${pageNumber} of ${meta.page_count}`;
 
+  // Inner canvas: holds the page image and every overlay layer, sized to the
+  // unrotated page and CSS-rotated as a single rigid unit. Because the rotated
+  // canvas's bounding box exactly fills `wrap`, canvas.getBoundingClientRect()
+  // gives the on-screen page origin at any rotation — which is all the
+  // selection→page-space inverse needs.
+  const canvas = document.createElement("div");
+  canvas.className = "page-canvas";
+
   const img = document.createElement("img");
   img.className = "page";
   img.alt = `Page ${pageNumber}`;
   img.loading = "lazy";
 
+  canvas.appendChild(img);
   wrap.appendChild(num);
-  wrap.appendChild(img);
+  wrap.appendChild(canvas);
 
   const state: PageState = {
     geom: null,
@@ -102,8 +115,22 @@ export function buildPageView(
     const effectiveScale = getBaseScale() * getZoom();
     const widthPx = pageDim.width_pt * effectiveScale;
     const heightPx = pageDim.height_pt * effectiveScale;
-    wrap.style.width = `${widthPx}px`;
-    wrap.style.height = `${heightPx}px`;
+    const rot = getRotation();
+    const swap = rot === 90 || rot === 270;
+    const visualW = swap ? heightPx : widthPx;
+    const visualH = swap ? widthPx : heightPx;
+
+    // Outer reserves the rotated footprint so the scroll list stays correct.
+    wrap.style.width = `${visualW}px`;
+    wrap.style.height = `${visualH}px`;
+
+    // Inner is the unrotated page, centered in the outer and spun in place.
+    canvas.style.width = `${widthPx}px`;
+    canvas.style.height = `${heightPx}px`;
+    canvas.style.left = `${(visualW - widthPx) / 2}px`;
+    canvas.style.top = `${(visualH - heightPx) / 2}px`;
+    canvas.style.transform = rot ? `rotate(${rot}deg)` : "";
+
     img.style.width = `${widthPx}px`;
     img.style.height = `${heightPx}px`;
 
@@ -129,10 +156,11 @@ export function buildPageView(
       pageHeightPt: text.page_height_pt,
       displayWidthPx: widthCss,
       displayHeightPx: heightCss,
+      rotation: getRotation(),
     };
     state.geom = geom;
 
-    wrap
+    canvas
       .querySelectorAll(".live-selection-layer, .text-layer, .citation-layer")
       .forEach((el) => el.remove());
     if (state.annotationLayer) {
@@ -143,29 +171,29 @@ export function buildPageView(
     const liveSelectionLayer = buildLiveSelectionLayer();
     liveSelectionLayer.setAttribute("width", String(widthCss));
     liveSelectionLayer.setAttribute("height", String(heightCss));
-    wrap.appendChild(liveSelectionLayer);
-    wrap.appendChild(buildTextLayer(text, geom));
+    canvas.appendChild(liveSelectionLayer);
+    canvas.appendChild(buildTextLayer(text, geom));
     // Citation markers sit above the text layer so their small hotspots get
     // the click; the rest of the page stays selectable.
     if (state.citations.length > 0) {
-      wrap.appendChild(buildCitationLayer(meta.id, state.citations, geom));
+      canvas.appendChild(buildCitationLayer(meta.id, state.citations, geom));
     }
-    registerLiveSelection(wrap, liveSelectionLayer);
-    void refreshAnnotations(meta, pageNumber, wrap, state);
+    registerLiveSelection(canvas, liveSelectionLayer);
+    void refreshAnnotations(meta, pageNumber, canvas, state);
 
     if (!state.mouseupWired) {
-      wireHighlightOnSelection(meta, pageNumber, wrap, state);
+      wireHighlightOnSelection(meta, pageNumber, canvas, state);
       state.mouseupWired = true;
     }
 
     if (!state.figuresWired) {
-      wireFigureDoubleClick(meta, wrap, state);
+      wireFigureDoubleClick(meta, canvas, state);
       state.figuresWired = true;
       void loadFigures(meta, pageNumber, state);
     }
 
     // Re-apply the current find query against the freshly-built text layer.
-    refreshFindMatches(pageNumber, wrap, state);
+    refreshFindMatches(pageNumber, canvas, state);
   };
 
   const init = async (): Promise<void> => {
@@ -196,8 +224,12 @@ export function buildPageView(
     applyDisplay();
     if (state.text) layout();
   });
+  const unsubRotation = subscribeRotation(() => {
+    applyDisplay();
+    if (state.text) layout();
+  });
   const unsubFind = subscribeFindQuery(() => {
-    refreshFindMatches(pageNumber, wrap, state);
+    refreshFindMatches(pageNumber, canvas, state);
   });
 
   return {
@@ -205,6 +237,7 @@ export function buildPageView(
     dispose: () => {
       unsubZoom();
       unsubFit();
+      unsubRotation();
       unsubFind();
       unregisterPage(pageNumber);
     },
@@ -314,14 +347,18 @@ async function maybeAutoSaveHighlight(
     return;
   }
 
+  // `wrap` here is the inner canvas; its bounding box equals the on-screen
+  // (visual) page box at any rotation, so these rects are in visual space.
   const containerRect = wrap.getBoundingClientRect();
   const viewportRects = clientRectsRelativeTo(
     range.getClientRects(),
     containerRect,
   );
   if (viewportRects.length === 0) return;
-  const merged = mergeAdjacentLineRects(viewportRects);
-  const pageRects: Rect[] = rectsToPageSpace(merged, state.geom);
+  // Convert to page-space FIRST (this undoes rotation), then merge by line —
+  // under rotation, lines are only horizontal again once back in page-space.
+  const pageRects: Rect[] = rectsToPageSpace(viewportRects, state.geom);
+  const merged = mergeAdjacentLineRects(pageRects);
 
   // Capture the selection text BEFORE we clear it — needed for AI
   // explanations on blue highlights.
@@ -333,7 +370,7 @@ async function maybeAutoSaveHighlight(
       meta.id,
       pageNumber,
       mode.color,
-      pageRects,
+      merged,
       selectedText || undefined,
     );
   } catch {
@@ -408,21 +445,27 @@ function wireFigureDoubleClick(
     const target = e.target as Element | null;
     if (target && target.closest(".text-run")) return;
 
+    // `wrap` is the inner canvas: its bounding box is the on-screen page box at
+    // any rotation. Map the cursor back into page-space to hit-test, so figures
+    // remain clickable when the page is rotated.
     const wrapRect = wrap.getBoundingClientRect();
-    const xInWrap = e.clientX - wrapRect.left;
-    const yInWrap = e.clientY - wrapRect.top;
+    const cursorPage = visualPointToPage(
+      { x: e.clientX - wrapRect.left, y: e.clientY - wrapRect.top },
+      state.geom,
+    );
 
-    // Match against the (display-space) bbox of every figure on this page.
     for (const fig of state.figures) {
-      const v = pageBBoxToViewport(fig.bbox, state.geom);
+      const b = fig.bbox;
       if (
-        xInWrap >= v.x0 &&
-        xInWrap <= v.x1 &&
-        yInWrap >= v.y0 &&
-        yInWrap <= v.y1
+        cursorPage.x >= b.x0 &&
+        cursorPage.x <= b.x1 &&
+        cursorPage.y >= b.y0 &&
+        cursorPage.y <= b.y1
       ) {
         e.preventDefault();
-        // Convert back to a viewport-anchored rect for card positioning.
+        // The figure's on-screen rect (for card positioning) is its page bbox
+        // run through the forward visual transform.
+        const v = pageBBoxToVisualRect(b, state.geom);
         const figRect = new DOMRect(
           wrapRect.left + v.x0,
           wrapRect.top + v.y0,

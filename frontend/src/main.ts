@@ -19,6 +19,13 @@ import { buildLibrary } from "./Library.ts";
 import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
+import { buildRotateControls } from "./RotateControls.ts";
+import {
+  rotateCCW,
+  rotateCW,
+  setActiveDoc as setRotationDoc,
+  subscribeRotation,
+} from "./rotation.ts";
 import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
 import { buildSidebarToggle } from "./SidebarToggle.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
@@ -38,6 +45,7 @@ const docInfo = document.getElementById("doc-info") as HTMLElement;
 const buttonSlot = document.getElementById("highlight-button-slot") as HTMLElement;
 const eraseSlot = document.getElementById("erase-button-slot") as HTMLElement;
 const zoomSlot = document.getElementById("zoom-controls-slot") as HTMLElement;
+const rotateSlot = document.getElementById("rotate-controls-slot") as HTMLElement;
 const pageIndicatorSlot = document.getElementById(
   "page-indicator-slot",
 ) as HTMLElement;
@@ -54,7 +62,14 @@ sidebarToggleSlot.appendChild(buildSidebarToggle());
 buttonSlot.appendChild(buildHighlightButton());
 eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
+rotateSlot.appendChild(buildRotateControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
+
+// Toggle the global flag that swaps custom selection for native paint while a
+// page is rotated (see styles.css).
+subscribeRotation((deg) => {
+  document.documentElement.dataset.pageRotated = String(deg !== 0);
+});
 
 const findBar = buildFindBar();
 viewer.appendChild(findBar.element);
@@ -64,6 +79,26 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     findBar.hide();
   }
+});
+
+// "R" rotates the page (Shift+R counter-clockwise). Plain letter shortcut, so
+// ignore it while typing in an input or when a modifier-driven combo is meant.
+window.addEventListener("keydown", (e) => {
+  if (e.key.toLowerCase() !== "r") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target as HTMLElement | null;
+  if (
+    t &&
+    (t.isContentEditable ||
+      t.tagName === "INPUT" ||
+      t.tagName === "TEXTAREA")
+  ) {
+    return;
+  }
+  if (!pageList) return;
+  e.preventDefault();
+  if (e.shiftKey) rotateCCW();
+  else rotateCW();
 });
 
 subscribeHighlightMode((s) => {
@@ -245,6 +280,8 @@ async function renderDocument(
   const maxWidthPt = Math.max(...dims.pages.map((p) => p.width_pt));
   const maxHeightPt = Math.max(...dims.pages.map((p) => p.height_pt));
   setDocumentBounds(maxWidthPt, maxHeightPt);
+  // Load this document's saved rotation before sizing any pages.
+  setRotationDoc(meta.id);
   pushViewportSize();
 
   pageList = buildPageList(meta, dims.pages, viewer);
@@ -259,6 +296,7 @@ async function showLibrary(): Promise<void> {
   }
   setActivePageList(null);
   clearDocument();
+  setRotationDoc(null);
   viewer.innerHTML = "";
   const library = await buildLibrary((doc) => {
     void renderDocument(doc);

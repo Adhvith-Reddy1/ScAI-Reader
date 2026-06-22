@@ -13,6 +13,7 @@ const geom: PageGeometry = {
   pageHeightPt: 792,
   displayWidthPx: 900,
   displayHeightPx: 1164.7,
+  rotation: 0,
 };
 
 function markers(): CitationMarker[] {
