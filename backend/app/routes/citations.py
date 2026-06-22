@@ -46,26 +46,53 @@ MODEL_REFERENCES = "claude-sonnet-4-6"
 
 # Bump whenever reference extraction/parsing improves so cached runs from an
 # older version are re-parsed instead of served stale. v2: whole-document
-# fallback + merged-heading detection (was: strict heading only).
-REFERENCE_PARSER_VERSION = 2
+# fallback + merged-heading detection. v3: forced tool-use output.
+REFERENCE_PARSER_VERSION = 3
 
 SYSTEM_REFERENCES = (
-    "You parse the reference list of an academic paper into structured data. "
-    "You are given text extracted from the paper — ideally just the "
-    "References/Bibliography section, but it may include surrounding article "
-    "body, methods, or figure text, possibly with scrambled line wrapping from "
-    "a multi-column layout. Find the numbered reference list within it and "
-    "parse only those entries. Return ONLY a JSON array — no prose, no "
-    "markdown, no code fences. Each element is an object with exactly these "
-    'keys: "number" (integer — the citation number as it would appear in-text, '
-    "e.g. 12 for a superscript or [12]; infer it from the entry's leading "
-    "number whether written as '12.', '[12]', or '12)'), \"authors\" (string — "
-    'the author names as written; if there are many, you may shorten to "First '
-    'Author et al."), and "title" (string — the title of the cited work). Omit '
-    "any entry whose number you cannot determine. Preserve the document's "
-    "numbering exactly; do not renumber. If there is no reference list in the "
-    "text, return an empty array []."
+    "You extract the reference list of an academic paper into structured data "
+    "by calling the save_references tool. You are given text from the paper — "
+    "ideally just the References/Bibliography section, but it may include "
+    "surrounding article body, methods, or figure text, possibly with scrambled "
+    "line wrapping from a multi-column layout. Locate the numbered reference "
+    "list within it and parse only those entries. For each entry provide: "
+    "number (integer — the citation number as it appears in-text, e.g. 12 for a "
+    "superscript or [12]; infer it from the entry's leading number whether "
+    "written as '12.', '[12]', or '12)'), authors (the author names as written; "
+    "if there are many you may shorten to 'First Author et al.'), and title "
+    "(the title of the cited work). Omit any entry whose number you cannot "
+    "determine. Preserve the document's numbering exactly; do not renumber. If "
+    "there is no reference list in the text, call the tool with an empty array."
 )
+
+# Tool schema whose input IS the structured reference list. Forcing this tool
+# (tool_choice) guarantees structured output — the model can't reply with prose
+# or refuse, and we read parsed data straight off the tool call.
+REFERENCE_TOOL = {
+    "name": "save_references",
+    "description": "Record the parsed reference list from the paper.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "references": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "number": {
+                            "type": "integer",
+                            "description": "In-text citation number.",
+                        },
+                        "authors": {"type": "string"},
+                        "title": {"type": "string"},
+                    },
+                    "required": ["number"],
+                },
+            }
+        },
+        "required": ["references"],
+    },
+}
 
 
 def _now() -> str:
@@ -287,11 +314,38 @@ def _coerce_entries(parsed: object) -> list[dict]:
     return out
 
 
-async def _parse_with_claude(references_text: str) -> list[dict]:
-    """Ask Claude to turn the raw reference blob into structured rows.
+def _entries_from_response(content: list, stop_reason: str | None = None) -> list[dict]:
+    """Pull reference rows out of a model response.
 
-    Non-streaming: we want the whole JSON array before persisting. Raises on
-    transport/parse failure so the caller can mark the run errored."""
+    Primary path: the forced ``save_references`` tool call, whose ``input`` is
+    already-structured data. Fallback: any free-text JSON, just in case. Raises
+    a descriptive error if neither yields a list."""
+    for block in content:
+        if getattr(block, "type", "") == "tool_use":
+            data = getattr(block, "input", None)
+            refs = data.get("references") if isinstance(data, dict) else None
+            if isinstance(refs, list):
+                return _coerce_entries(refs)
+    text = "".join(
+        getattr(b, "text", "") for b in content if getattr(b, "type", "") == "text"
+    )
+    if text.strip():
+        try:
+            return _coerce_entries(_extract_json_array(text))
+        except ValueError as e:
+            raise ValueError(f"{e} (stop_reason={stop_reason})") from e
+    raise ValueError(
+        f"model returned no reference data (stop_reason={stop_reason})"
+    )
+
+
+async def _parse_with_claude(references_text: str) -> list[dict]:
+    """Extract structured reference rows from the document text via Claude.
+
+    Uses forced tool use: the model must call ``save_references`` with the
+    structured array, so we get parsed data directly and the model can't reply
+    with prose or refuse. Raises on transport/parse failure so the caller marks
+    the run errored."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY not set on backend")
 
@@ -302,34 +356,21 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
         model=MODEL_REFERENCES,
         max_tokens=16000,
         system=SYSTEM_REFERENCES,
+        tools=[REFERENCE_TOOL],
+        tool_choice={"type": "tool", "name": "save_references"},
         messages=[
             {
                 "role": "user",
                 "content": (
-                    "Extract the numbered reference list from this paper text "
-                    "and return it as a JSON array. The text may include body "
-                    "content, methods or figure captions with scrambled line "
-                    "wrapping; find the references within it.\n\n"
-                    f"<paper>\n{blob}\n</paper>"
+                    "Extract the numbered reference list from this paper text. "
+                    "The text may include body content, methods or figure "
+                    "captions with scrambled line wrapping; find the references "
+                    f"within it.\n\n<paper>\n{blob}\n</paper>"
                 ),
-            },
-            # Prefill the reply with "[" so the model is forced to emit a JSON
-            # array and can't wrap it in prose, refuse, or ask a question —
-            # which is what produced "no JSON array" responses before.
-            {"role": "assistant", "content": "["},
+            }
         ],
     )
-    text = "".join(
-        block.text for block in msg.content if getattr(block, "type", "") == "text"
-    )
-    stop = getattr(msg, "stop_reason", None)
-    try:
-        # Re-attach the prefilled "[" the model continued from.
-        parsed = _extract_json_array("[" + text)
-    except ValueError as e:
-        head = ("[" + text)[:200].replace("\n", " ")
-        raise ValueError(f"{e} (stop_reason={stop}, head={head!r})") from e
-    return _coerce_entries(parsed)
+    return _entries_from_response(msg.content, getattr(msg, "stop_reason", None))
 
 
 @router.get("/references")

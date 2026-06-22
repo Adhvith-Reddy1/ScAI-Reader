@@ -12,8 +12,46 @@ from app.pdf.citations import (
     detect_citations,
     extract_references_text,
 )
+from types import SimpleNamespace
+
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
-from app.routes.citations import _coerce_entries, _extract_json_array
+from app.routes.citations import (
+    _coerce_entries,
+    _entries_from_response,
+    _extract_json_array,
+)
+
+
+def test_entries_from_response_reads_forced_tool_call():
+    # The forced save_references tool returns already-structured input.
+    tool = SimpleNamespace(
+        type="tool_use",
+        name="save_references",
+        input={
+            "references": [
+                {"number": 1, "authors": "Porter, A.", "title": "T1"},
+                {"number": 2, "authors": "Sijp, W.", "title": "T2"},
+            ]
+        },
+    )
+    out = _entries_from_response([tool], "tool_use")
+    assert [e["number"] for e in out] == [1, 2]
+
+
+def test_entries_from_response_falls_back_to_text_json():
+    block = SimpleNamespace(
+        type="text", text='[{"number": 3, "authors": "C", "title": "T3"}]'
+    )
+    out = _entries_from_response([block], "end_turn")
+    assert out[0]["number"] == 3
+
+
+def test_entries_from_response_raises_with_stop_reason():
+    import pytest
+
+    block = SimpleNamespace(type="text", text="I could not find references.")
+    with pytest.raises(ValueError, match="max_tokens"):
+        _entries_from_response([block], "max_tokens")
 
 PAGE_W = 612.0
 PAGE_H = 792.0
