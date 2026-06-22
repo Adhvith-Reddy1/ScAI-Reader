@@ -13,9 +13,40 @@ from app.pdf.citations import (
     extract_references_text,
 )
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
+from app.routes.citations import _coerce_entries, _extract_json_array
 
 PAGE_W = 612.0
 PAGE_H = 792.0
+
+
+def test_extract_json_array_tolerates_messy_model_output():
+    arr = '[{"number": 1, "authors": "Porter, A.", "title": "A paper"}]'
+    assert _extract_json_array(arr)[0]["number"] == 1
+    # Prose around the array.
+    wrapped = f"Sure, here it is:\n{arr}\nHope that helps!"
+    assert _extract_json_array(wrapped)[0]["title"] == "A paper"
+    # Fenced code block.
+    fenced = f"```json\n{arr}\n```"
+    assert _extract_json_array(fenced)[0]["authors"] == "Porter, A."
+
+
+def test_extract_json_array_raises_without_an_array():
+    import pytest
+
+    with pytest.raises(ValueError):
+        _extract_json_array("I could not find any references.")
+
+
+def test_coerce_entries_filters_and_dedupes():
+    parsed = [
+        {"number": 1, "authors": "A", "title": "T1"},
+        {"number": "2", "authors": "B", "title": "T2"},   # stringy number ok
+        {"number": 1, "authors": "dup", "title": "dup"},  # duplicate dropped
+        {"number": "x", "authors": "C", "title": "T3"},   # non-numeric dropped
+        {"title": "no number"},                            # missing number dropped
+    ]
+    out = _coerce_entries(parsed)
+    assert [e["number"] for e in out] == [1, 2]
 
 
 def _run(text: str, x0: float, y0: float, x1: float, y1: float) -> TextRun:

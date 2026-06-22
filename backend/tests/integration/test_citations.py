@@ -113,12 +113,13 @@ def test_references_without_api_key_errors_and_caches(
     assert r.status_code == 200
     body = r.json()
     # The references heading exists, so we get past extraction and fail at the
-    # (keyless) model call -> error status, no entries.
+    # (keyless) model call -> error status, with the detail surfaced.
     assert body["status"] == "error"
     assert body["references"] == []
+    assert "ANTHROPIC_API_KEY" in body.get("error", "")
 
-    # The failed run is cached: a second call returns the same status without
-    # re-attempting (single-flight gate).
+    # Errors are retryable: a later request re-attempts rather than serving a
+    # stale failure (so a fixed key recovers without manual intervention).
     again = app_client.get(f"/documents/{doc_id}/references").json()
     assert again["status"] == "error"
 

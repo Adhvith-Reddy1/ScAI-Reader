@@ -161,12 +161,14 @@ def _claim_run(conn, doc_id: str) -> bool:
     )
     if cur.rowcount > 0:
         return True
-    # A row exists. If it's from an older parser version, claim it by bumping
-    # to pending at the current version (only one racer wins the WHERE clause).
+    # A row exists. Re-claim it if it's from an older parser version OR it
+    # previously errored (errors are usually transient — a missing/invalid key,
+    # a rate limit — so a later request should retry). Only one racer wins the
+    # WHERE clause, preserving single-flight.
     cur = conn.execute(
         "UPDATE reference_runs SET status = 'pending', error = NULL, "
         "parser_version = ?, updated_at = ? "
-        "WHERE doc_id = ? AND parser_version < ?",
+        "WHERE doc_id = ? AND (parser_version < ? OR status = 'error')",
         (REFERENCE_PARSER_VERSION, now, doc_id, REFERENCE_PARSER_VERSION),
     )
     return cur.rowcount > 0
@@ -214,14 +216,31 @@ def _gather_references_text(settings: Settings, doc_id: str) -> str:
     return extract_references_text(pages)
 
 
-def _strip_json_fence(text: str) -> str:
+def _extract_json_array(text: str) -> list:
+    """Parse the JSON array out of a model response, tolerantly.
+
+    Tries the whole (de-fenced) string first, then falls back to the substring
+    between the first ``[`` and the last ``]`` so stray prose around the array
+    doesn't blow up the parse."""
     s = text.strip()
     if s.startswith("```"):
-        # Drop a leading ```json / ``` fence and the trailing ```.
         s = s.split("\n", 1)[1] if "\n" in s else s
         if s.endswith("```"):
-            s = s[: -3]
-    return s.strip()
+            s = s[:-3]
+    s = s.strip()
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    start = s.find("[")
+    end = s.rfind("]")
+    if start != -1 and end > start:
+        parsed = json.loads(s[start : end + 1])
+        if isinstance(parsed, list):
+            return parsed
+    raise ValueError("model response did not contain a JSON array")
 
 
 def _coerce_entries(parsed: object) -> list[dict]:
@@ -267,7 +286,7 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
     client = anthropic.AsyncAnthropic()
     msg = await client.messages.create(
         model=MODEL_REFERENCES,
-        max_tokens=8000,
+        max_tokens=16000,
         system=SYSTEM_REFERENCES,
         messages=[
             {
@@ -282,8 +301,7 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
     text = "".join(
         block.text for block in msg.content if getattr(block, "type", "") == "text"
     )
-    parsed = json.loads(_strip_json_fence(text))
-    return _coerce_entries(parsed)
+    return _coerce_entries(_extract_json_array(text))
 
 
 @router.get("/references")
@@ -299,15 +317,17 @@ async def get_references(
     if not _doc_exists(settings, doc_id):
         raise HTTPException(status_code=404, detail="document not found")
 
-    # Fast path: already parsed (or already failed / known-empty).
+    # Fast path: already parsed (or known-empty / in-flight). A prior "error"
+    # is NOT short-circuited — it gets re-claimed below so a fixed key or a
+    # cleared rate limit retries automatically.
     with db.connect(settings.db_path) as conn:
         status = _fresh_status(conn, doc_id)
         if status == "complete":
             return {"doc_id": doc_id, "status": "complete",
                     "references": _load_references(conn, doc_id)}
-        if status in ("pending", "empty", "error"):
+        if status in ("pending", "empty"):
             return {"doc_id": doc_id, "status": status, "references": []}
-        # No run yet — try to claim it. Whoever wins does the work below.
+        # No run yet, stale version, or a previous error — (re)claim and parse.
         won = _claim_run(conn, doc_id)
         if not won:
             return {"doc_id": doc_id, "status": "pending", "references": []}
@@ -329,9 +349,11 @@ async def get_references(
         entries = await _parse_with_claude(references_text)
     except Exception as e:  # noqa: BLE001
         log.exception("reference parsing failed")
+        detail = f"{type(e).__name__}: {e}"
         with db.connect(settings.db_path) as conn:
-            _finish_run(conn, doc_id, "error", f"{type(e).__name__}: {e}")
-        return {"doc_id": doc_id, "status": "error", "references": []}
+            _finish_run(conn, doc_id, "error", detail)
+        return {"doc_id": doc_id, "status": "error", "references": [],
+                "error": detail}
 
     with db.connect(settings.db_path) as conn:
         if entries:
