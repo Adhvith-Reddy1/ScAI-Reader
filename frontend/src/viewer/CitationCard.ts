@@ -121,7 +121,16 @@ function render(): void {
   }
   if (state.status === "error") {
     el.classList.add("is-error");
-    body.textContent = "Couldn't read this document's reference list.";
+    body.replaceChildren();
+    const headline = document.createElement("div");
+    headline.textContent = "Couldn't read this document's reference list.";
+    body.appendChild(headline);
+    if (state.message) {
+      const detail = document.createElement("div");
+      detail.className = "citation-error-detail";
+      detail.textContent = state.message;
+      body.appendChild(detail);
+    }
     return;
   }
   if (state.status === "empty") {

@@ -391,6 +391,8 @@ export interface ReferencesResponse {
   doc_id: string;
   status: ReferencesStatus;
   references: ReferenceEntry[];
+  /** Present on status "error": the backend's failure detail, for display. */
+  error?: string | null;
 }
 
 /**

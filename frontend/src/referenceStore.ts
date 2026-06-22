@@ -23,7 +23,7 @@ export type ReferencesState =
   | { status: "loading" }
   | { status: "ready"; byNumber: Map<number, ReferenceEntry> }
   | { status: "empty" }
-  | { status: "error" };
+  | { status: "error"; message?: string };
 
 type Subscriber = (state: ReferencesState) => void;
 
@@ -73,7 +73,12 @@ export function getReference(
   return state.byNumber.get(number) ?? null;
 }
 
-function settle(entry: Entry, status: ReferencesStatus, refs: ReferenceEntry[]): void {
+function settle(
+  entry: Entry,
+  status: ReferencesStatus,
+  refs: ReferenceEntry[],
+  message?: string,
+): void {
   if (status === "complete") {
     const byNumber = new Map<number, ReferenceEntry>();
     for (const ref of refs) byNumber.set(ref.number, ref);
@@ -81,7 +86,7 @@ function settle(entry: Entry, status: ReferencesStatus, refs: ReferenceEntry[]):
   } else if (status === "empty") {
     setState(entry, { status: "empty" });
   } else {
-    setState(entry, { status: "error" });
+    setState(entry, { status: "error", message });
   }
 }
 
@@ -100,19 +105,22 @@ export function loadReferences(docId: string): void {
     let resp;
     try {
       resp = await fetchReferences(docId);
-    } catch {
-      setState(entry, { status: "error" });
+    } catch (e) {
+      setState(entry, { status: "error", message: (e as Error).message });
       return;
     }
     if (resp.status === "pending") {
       if (polls++ >= MAX_POLLS) {
-        setState(entry, { status: "error" });
+        setState(entry, {
+          status: "error",
+          message: "Timed out waiting for the reference list to parse.",
+        });
         return;
       }
       setTimeout(() => void attempt(), POLL_INTERVAL_MS);
       return;
     }
-    settle(entry, resp.status, resp.references);
+    settle(entry, resp.status, resp.references, resp.error ?? undefined);
   };
 
   void attempt();
