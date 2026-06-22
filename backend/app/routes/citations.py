@@ -44,23 +44,27 @@ router = APIRouter(prefix="/documents/{doc_id}", tags=["citations"])
 
 MODEL_REFERENCES = "claude-sonnet-4-6"
 
-# References sections are long but bounded; cap the prompt so a pathological
-# document can't blow up the request. ~60k chars comfortably covers a 50+ entry
-# bibliography.
-MAX_REFERENCES_CHARS = 60_000
+# Bump whenever reference extraction/parsing improves so cached runs from an
+# older version are re-parsed instead of served stale. v2: whole-document
+# fallback + merged-heading detection (was: strict heading only).
+REFERENCE_PARSER_VERSION = 2
 
 SYSTEM_REFERENCES = (
     "You parse the reference list of an academic paper into structured data. "
-    "You are given the raw text of the document's References/Bibliography "
-    "section, with line wrapping and numbering as the PDF produced it. Return "
-    "ONLY a JSON array — no prose, no markdown, no code fences. Each element is "
-    'an object with exactly these keys: "number" (integer — the citation '
-    "number as it would appear in-text in brackets, e.g. 12 for [12]; infer it "
-    "from the entry's leading number whether written as '12.', '[12]', or "
-    '"12)"), "authors" (string — the author names as written; if there are '
-    'many, you may shorten to "First Author et al."), and "title" (string — '
-    "the title of the cited work). Omit any entry whose number you cannot "
-    "determine. Preserve the document's numbering exactly; do not renumber."
+    "You are given text extracted from the paper — ideally just the "
+    "References/Bibliography section, but it may include surrounding article "
+    "body, methods, or figure text, possibly with scrambled line wrapping from "
+    "a multi-column layout. Find the numbered reference list within it and "
+    "parse only those entries. Return ONLY a JSON array — no prose, no "
+    "markdown, no code fences. Each element is an object with exactly these "
+    'keys: "number" (integer — the citation number as it would appear in-text, '
+    "e.g. 12 for a superscript or [12]; infer it from the entry's leading "
+    "number whether written as '12.', '[12]', or '12)'), \"authors\" (string — "
+    'the author names as written; if there are many, you may shorten to "First '
+    'Author et al."), and "title" (string — the title of the cited work). Omit '
+    "any entry whose number you cannot determine. Preserve the document's "
+    "numbering exactly; do not renumber. If there is no reference list in the "
+    "text, return an empty array []."
 )
 
 
@@ -131,22 +135,39 @@ def _load_references(conn, doc_id: str) -> list[dict]:
     ]
 
 
-def _run_status(conn, doc_id: str) -> str | None:
+def _fresh_status(conn, doc_id: str) -> str | None:
+    """Status of this doc's parse, but only if it was produced by the CURRENT
+    parser version. A row from an older version is treated as absent so the
+    improved extractor re-runs (and stale 'empty'/'error' results self-heal)."""
     row = conn.execute(
-        "SELECT status FROM reference_runs WHERE doc_id = ?", (doc_id,)
+        "SELECT status, parser_version FROM reference_runs WHERE doc_id = ?",
+        (doc_id,),
     ).fetchone()
-    return row["status"] if row else None
+    if row is None or row["parser_version"] != REFERENCE_PARSER_VERSION:
+        return None
+    return row["status"]
 
 
 def _claim_run(conn, doc_id: str) -> bool:
-    """Atomically claim the parse for this doc. Returns True if we won the
-    claim (and must do the work), False if another caller already holds it."""
+    """Atomically claim the parse for this doc at the current parser version.
+    Returns True if we won the claim. Handles both brand-new docs and docs with
+    a stale (older-version) row that needs re-parsing."""
     now = _now()
     cur = conn.execute(
         "INSERT OR IGNORE INTO reference_runs "
-        "(doc_id, status, error, created_at, updated_at) "
-        "VALUES (?, 'pending', NULL, ?, ?)",
-        (doc_id, now, now),
+        "(doc_id, status, error, parser_version, created_at, updated_at) "
+        "VALUES (?, 'pending', NULL, ?, ?, ?)",
+        (doc_id, REFERENCE_PARSER_VERSION, now, now),
+    )
+    if cur.rowcount > 0:
+        return True
+    # A row exists. If it's from an older parser version, claim it by bumping
+    # to pending at the current version (only one racer wins the WHERE clause).
+    cur = conn.execute(
+        "UPDATE reference_runs SET status = 'pending', error = NULL, "
+        "parser_version = ?, updated_at = ? "
+        "WHERE doc_id = ? AND parser_version < ?",
+        (REFERENCE_PARSER_VERSION, now, doc_id, REFERENCE_PARSER_VERSION),
     )
     return cur.rowcount > 0
 
@@ -155,9 +176,9 @@ def _finish_run(
     conn, doc_id: str, status: str, error: str | None = None
 ) -> None:
     conn.execute(
-        "UPDATE reference_runs SET status = ?, error = ?, updated_at = ? "
-        "WHERE doc_id = ?",
-        (status, error, _now(), doc_id),
+        "UPDATE reference_runs SET status = ?, error = ?, "
+        "parser_version = ?, updated_at = ? WHERE doc_id = ?",
+        (status, error, REFERENCE_PARSER_VERSION, _now(), doc_id),
     )
 
 
@@ -241,7 +262,8 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY not set on backend")
 
-    blob = references_text[:MAX_REFERENCES_CHARS]
+    # `extract_references_text` already caps the size; send as-is.
+    blob = references_text
     client = anthropic.AsyncAnthropic()
     msg = await client.messages.create(
         model=MODEL_REFERENCES,
@@ -279,7 +301,7 @@ async def get_references(
 
     # Fast path: already parsed (or already failed / known-empty).
     with db.connect(settings.db_path) as conn:
-        status = _run_status(conn, doc_id)
+        status = _fresh_status(conn, doc_id)
         if status == "complete":
             return {"doc_id": doc_id, "status": "complete",
                     "references": _load_references(conn, doc_id)}

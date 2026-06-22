@@ -124,15 +124,57 @@ def test_references_without_api_key_errors_and_caches(
 
 
 @pytest.mark.integration
-def test_references_empty_when_no_bibliography(app_client, tmp_path):
+def test_stale_parser_version_is_reparsed(app_client, tmp_settings, monkeypatch):
+    # A run cached by an older parser version must not be served as-is; the
+    # improved parser should re-run. This is what unsticks documents that were
+    # wrongly marked "empty" before the extractor was fixed.
+    from app.storage import db
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    path = Path(tmp_settings.data_dir) / "stale.pdf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, "Body with citation [1].")
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(72, 690, "References")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 660, "[1] A. Smith. A paper. 2020.")
+    c.showPage()
+    c.save()
+    doc_id = _upload(app_client, path)
+
+    # Plant a stale "empty" run (parser_version 0) as the old code would have.
+    with db.connect(tmp_settings.db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO reference_runs "
+            "(doc_id, status, error, parser_version, created_at, updated_at) "
+            "VALUES (?, 'empty', NULL, 0, 't', 't')",
+            (doc_id,),
+        )
+
+    body = app_client.get(f"/documents/{doc_id}/references").json()
+    # Re-parsed rather than served stale "empty": without a key it now errors.
+    assert body["status"] == "error"
+
+
+@pytest.mark.integration
+def test_references_without_heading_still_attempts_parse(
+    app_client, tmp_path, monkeypatch
+):
+    # No "References" heading: extraction now falls back to the whole document
+    # and lets the model decide. Without a key that surfaces as `error` (with a
+    # key the model would return [] -> `empty`); either way we no longer give up
+    # before trying, which was the Nature-paper bug.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     path = tmp_path / "nobib.pdf"
     c = canvas.Canvas(str(path), pagesize=letter)
     c.setFont("Helvetica", 12)
-    c.drawString(72, 720, "A document with a citation [1] but no reference list.")
+    c.drawString(72, 720, "A document with a citation [1] but no clear heading.")
     c.showPage()
     c.save()
     doc_id = _upload(app_client, path)
 
     body = app_client.get(f"/documents/{doc_id}/references").json()
-    assert body["status"] == "empty"
+    assert body["status"] == "error"
     assert body["references"] == []

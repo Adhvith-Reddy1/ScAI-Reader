@@ -168,6 +168,35 @@ def test_extract_references_uses_last_heading():
     assert "completeness" not in text
 
 
-def test_extract_references_returns_empty_without_heading():
-    page = _page((_run("No bibliography heading anywhere here.", 40, 50, 500, 62),))
+def test_extract_references_handles_heading_glued_to_first_entry():
+    # Dense reprints often drop the space: "References1. Smith..." on one run.
+    # The strict heading regex misses this; extraction must still find it.
+    page = _page(
+        (
+            _run("Body text with a citation 24,25 here.", 40, 100, 500, 112),
+            _run("References1. Swanson, K. The Virtual Lab. 2025.", 40, 200, 560, 212),
+            _run("2. Jumper, J. AlphaFold. 2021.", 40, 220, 560, 232),
+        ),
+    )
+    text = extract_references_text([page])
+    assert text.startswith("1. Swanson")
+    assert "AlphaFold" in text
+    assert "Body text" not in text
+
+
+def test_extract_references_falls_back_to_whole_document_without_heading():
+    # No heading at all (scrambled extraction) — hand the LLM the whole text
+    # so it can locate the reference list itself rather than returning nothing.
+    page = _page(
+        (
+            _run("Some body text and a citation 5.", 40, 50, 500, 62),
+            _run("Smith J. A paper without a clear heading. Nature 2020.", 40, 70, 560, 82),
+        ),
+    )
+    text = extract_references_text([page])
+    assert "A paper without a clear heading" in text
+
+
+def test_extract_references_empty_only_without_any_text():
+    page = _page(())  # a page that yielded no runs
     assert extract_references_text([page]) == ""

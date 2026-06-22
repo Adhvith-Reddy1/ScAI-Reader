@@ -77,11 +77,12 @@ CREATE TABLE IF NOT EXISTS figure_explanations (
 -- the (potentially slow, LLM-backed) parse so concurrent requests don't
 -- duplicate the work — see routes/citations.py.
 CREATE TABLE IF NOT EXISTS reference_runs (
-    doc_id      TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
-    status      TEXT NOT NULL,                 -- pending | complete | error | empty
-    error       TEXT,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    doc_id          TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    status          TEXT NOT NULL,             -- pending | complete | error | empty
+    error           TEXT,
+    parser_version  INTEGER NOT NULL DEFAULT 0,-- bumped when extraction improves
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
 );
 
 -- Parsed bibliography entries, keyed by the citation number used in-text
@@ -102,6 +103,21 @@ def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight, idempotent column additions for pre-existing databases.
+    CREATE TABLE IF NOT EXISTS won't add columns to a table that already
+    exists, so bring older DBs forward here."""
+    # reference_runs.parser_version (added so improved reference extraction
+    # auto-invalidates rows parsed by an older version).
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(reference_runs)")}
+    if "parser_version" not in cols:
+        conn.execute(
+            "ALTER TABLE reference_runs ADD COLUMN "
+            "parser_version INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 @contextmanager

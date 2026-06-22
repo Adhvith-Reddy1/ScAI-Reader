@@ -60,13 +60,32 @@ _SUPERSCRIPT_FONT_RATIO = 0.80
 # Reference-section headings, matched against a whole (stripped) run/line. We
 # keep the set tight so a sentence mentioning "references" mid-paragraph isn't
 # mistaken for the heading — a heading run is short and stands alone.
-_REF_HEADING = re.compile(
-    r"^\s*(?:\d+\.?\s+|[IVX]+\.?\s+)?"        # optional section number
-    r"(references|bibliography|references\s+and\s+notes|"
+# Reference-section heading words. We match these against a run that either IS
+# the heading on its own line, or — in dense reprints where text extraction
+# glues the heading to the first entry ("References1. Smith, J...") — STARTS the
+# reference list. The inline variant only counts as a heading when what follows
+# the word is empty or begins with a digit (the first reference number), so a
+# sentence like "References to prior work" isn't mistaken for the heading.
+_REF_HEADING_WORDS = (
+    r"(?:references(?:\s+and\s+notes)?|bibliography|"
     r"literature\s+cited|works\s+cited)"
-    r"\s*$",
+)
+_REF_HEADING = re.compile(
+    r"^\s*(?:\d+\.?\s+|[IVX]+\.?\s+)?" + _REF_HEADING_WORDS + r"\s*$",
     re.IGNORECASE,
 )
+# No \b after the word: extraction often drops the space, gluing the heading
+# straight onto the first entry ("References1. Smith..."). The digit gate below
+# keeps prose like "References to prior work" from matching.
+_REF_HEADING_INLINE = re.compile(
+    r"^\s*(?:\d+\.?\s+|[IVX]+\.?\s+)?" + _REF_HEADING_WORDS + r"(?P<rest>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Upper bound on the text we hand the reference parser. The whole-document
+# fallback (no heading found) can be large; 150k chars (~37k tokens) covers a
+# long paper's worth of references in a single cached call.
+_MAX_REFERENCES_CHARS = 150_000
 
 # Guardrail: a real citation marker is a short token. Reject brackets enclosing
 # absurdly long digit strings (e.g. a matrix row) that aren't citations.
@@ -260,14 +279,7 @@ def has_reference_heading(runs: list[TextRun]) -> bool:
     return any(_REF_HEADING.match(r.text) for r in runs)
 
 
-def extract_references_text(pages: list[PageText]) -> str:
-    """Return the raw text of the document's reference list, or "" if absent.
-
-    We flatten every page's runs into reading order, find the LAST run that is
-    on its own a "References"/"Bibliography" heading (the list lives near the
-    end, and the word can appear earlier in prose), and concatenate everything
-    after it. The downstream LLM parser tolerates the messy line wrapping.
-    """
+def _flatten(pages: list[PageText]) -> list[TextRun]:
     flat: list[TextRun] = []
     for page in pages:
         if page.columns:
@@ -275,14 +287,57 @@ def extract_references_text(pages: list[PageText]) -> str:
                 flat.extend(col.runs)
         else:
             flat.extend(page.runs)
+    return flat
 
-    heading_idx: int | None = None
+
+def _find_reference_heading(flat: list[TextRun]) -> tuple[int, str] | None:
+    """Locate the reference list's starting run.
+
+    Returns (index, inline_remainder) for the LAST run that opens the reference
+    list, or None. ``inline_remainder`` is any text that followed the heading
+    word inside the same run (the first reference, when extraction glued them);
+    empty when the heading sat on its own line.
+    """
+    best: tuple[int, str] | None = None
     for i, run in enumerate(flat):
-        if _REF_HEADING.match(run.text):
-            heading_idx = i  # keep the last match
+        m = _REF_HEADING_INLINE.match(run.text)
+        if not m:
+            continue
+        rest = m.group("rest").strip()
+        # A real heading is followed by nothing, or by the first reference's
+        # number — not by prose ("References to prior work...").
+        if rest == "" or rest[:1].isdigit():
+            best = (i, rest)
+    return best
 
-    if heading_idx is None:
+
+def extract_references_text(pages: list[PageText]) -> str:
+    """Return text the LLM can parse the reference list from, or "" if the
+    document has no extractable text at all.
+
+    Strategy, most-precise first:
+      1. Find the LAST reference heading (its own line, OR glued to the first
+         entry as in dense reprints) and return everything from there on.
+      2. If no heading is found, fall back to the WHOLE document text and let
+         the LLM locate the reference list itself — far more robust than a
+         heading regex against scrambled multi-column extraction.
+    """
+    flat = _flatten(pages)
+    if not flat:
         return ""
 
-    after = flat[heading_idx + 1 :]
-    return "\n".join(r.text.strip() for r in after if r.text.strip())
+    found = _find_reference_heading(flat)
+    if found is not None:
+        idx, inline_rest = found
+        parts: list[str] = []
+        if inline_rest:
+            parts.append(inline_rest)
+        parts.extend(r.text.strip() for r in flat[idx + 1 :] if r.text.strip())
+        text = "\n".join(parts)
+        if text.strip():
+            return text[:_MAX_REFERENCES_CHARS]
+
+    # No usable heading — hand over the whole document (capped) so the parser
+    # can find the references wherever they sit.
+    whole = "\n".join(r.text.strip() for r in flat if r.text.strip())
+    return whole[-_MAX_REFERENCES_CHARS:]
