@@ -34,6 +34,19 @@ class CreateHighlight(BaseModel):
     color: HighlightColor
     rects: list[Rect]
     text: str | None = Field(default=None, max_length=4000)
+    # When true, this highlight triggers an AI explanation (any color). Plain
+    # highlights leave it false. Historically "blue" implied explanation; that
+    # legacy behaviour is preserved on read (see list_annotations).
+    explain: bool = False
+
+
+def _is_explain(payload: dict) -> bool:
+    """Whether a stored highlight is an explanation highlight. Falls back to
+    the legacy rule (blue == explanation) for rows saved before the flag."""
+    flagged = payload.get("explain")
+    if flagged is None:
+        return payload.get("color") == "blue"
+    return bool(flagged)
 
 
 @router.post("")
@@ -51,6 +64,7 @@ def create_annotation(
     payload = {
         "color": body.color,
         "rects": [r.model_dump() for r in body.rects],
+        "explain": body.explain,
     }
     if body.text:
         payload["text"] = body.text
@@ -77,6 +91,7 @@ def create_annotation(
         "color": body.color,
         "rects": payload["rects"],
         "text": payload.get("text"),
+        "explain": body.explain,
         "created_at": now,
     }
 
@@ -126,6 +141,7 @@ def list_annotations(
             "color": payload.get("color"),
             "rects": payload.get("rects", []),
             "text": payload.get("text"),
+            "explain": _is_explain(payload),
             "created_at": r["created_at"],
         }
         # Only attach a non-null explanation when one's fully cached.
