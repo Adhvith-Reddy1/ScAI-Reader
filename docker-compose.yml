@@ -1,0 +1,50 @@
+# Self-contained ScAI-Reader deployment: the app + a local Ollama model, so
+# AI explanations run on your own box with no per-call API costs.
+#
+#   docker compose up -d --build
+#   docker compose exec ollama ollama pull "${OLLAMA_MODEL:-llama3.1}"
+#
+# Then put a TLS-terminating reverse proxy (Caddy/nginx/Traefik) in front of
+# port 8000, or expose it directly for a quick demo.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      - PDF_READER_DATA_DIR=/data
+      # Point the AI layer at the Ollama sidecar via its OpenAI-compatible API.
+      # Ollama ignores the key; the OpenAI client just needs a non-empty value.
+      - OPENAI_API_KEY=ollama
+      - OPENAI_BASE_URL=http://ollama:11434/v1
+      - OPENAI_MODEL=${OLLAMA_MODEL:-llama3.1}
+    volumes:
+      - scai-data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # GPU acceleration (optional): install the NVIDIA Container Toolkit on the
+    # host, then uncomment to make explanations fast instead of CPU-slow.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  scai-data:
+  ollama-models:

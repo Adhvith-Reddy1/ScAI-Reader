@@ -64,13 +64,25 @@ def test_anthropic_env_wins(settings, monkeypatch):
     assert cfg.source == "env"
 
 
-def test_openai_env_used_when_no_anthropic(settings, monkeypatch):
+def test_openai_env_without_base_url_is_plain_openai(settings, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example/v1")
     cfg = ai.get_provider_config(settings)
     assert cfg.provider == "openai"
     assert cfg.api_key == "sk-env"
-    assert cfg.base_url == "https://example/v1"
+    assert cfg.source == "env"
+    # Falls back to the OpenAI default model.
+    assert cfg.resolve_model("good") == ai.DEFAULT_MODELS["openai"]["good"]
+
+
+def test_openai_env_with_base_url_is_compatible(settings, monkeypatch):
+    # This is the Ollama / self-hosted deployment path (docker-compose sets it).
+    monkeypatch.setenv("OPENAI_API_KEY", "ollama")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://ollama:11434/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "llama3.1")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.provider == "openai_compatible"
+    assert cfg.resolve_base_url() == "http://ollama:11434/v1"
+    assert cfg.resolve_model("good") == "llama3.1"
     assert cfg.source == "env"
 
 

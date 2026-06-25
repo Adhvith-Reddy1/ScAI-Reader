@@ -108,8 +108,16 @@ def get_provider_config(settings: Settings) -> ProviderConfig | None:
     env_openai = os.environ.get("OPENAI_API_KEY")
     if env_openai and env_openai.strip():
         base = os.environ.get("OPENAI_BASE_URL") or None
+        model = os.environ.get("OPENAI_MODEL") or None
+        # A custom base URL is how a self-hosted/OpenAI-compatible endpoint
+        # (e.g. Ollama at http://ollama:11434/v1) is wired in via env.
+        provider = "openai_compatible" if base else "openai"
         return ProviderConfig(
-            "openai", env_openai.strip(), base_url=base, source="env"
+            provider,
+            env_openai.strip(),
+            model=model,
+            base_url=base,
+            source="env",
         )
 
     stored = _read_stored(settings)
