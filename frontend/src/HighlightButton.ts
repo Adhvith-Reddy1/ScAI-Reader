@@ -1,22 +1,20 @@
 /**
- * Nav-bar Highlight button + color popover. Edge-style behavior:
+ * Nav-bar Highlight control — Edge-style split button:
  *
- *   click button →  popover opens with 5 swatches + "Off"
- *   click swatch →  highlight mode ON with that color; button shows the color
- *   click "Off"  →  highlight mode OFF
- *   click button while ON → also turns OFF (quick toggle)
+ *   click the main button  →  toggle highlight mode on/off using the CURRENT
+ *                             color (no need to re-pick a color each time)
+ *   click the caret (▾)    →  open a small popover of color swatches
+ *   click a swatch         →  set that color and turn highlighting on
  *
- * The button reflects current state via `data-active` and `data-color`,
- * which the stylesheet uses for the active visual treatment.
+ * The main button reflects state via `data-active` / `data-color`, which the
+ * stylesheet uses for the active treatment and the color indicator.
  */
 
-import {
-  HIGHLIGHT_COLORS,
-  type HighlightColor,
-} from "./api.ts";
+import { HIGHLIGHT_COLORS, type HighlightColor } from "./api.ts";
 import {
   getHighlightMode,
   setHighlightMode,
+  toggleHighlightMode,
   subscribeHighlightMode,
 } from "./highlightMode.ts";
 
@@ -32,11 +30,13 @@ export function buildHighlightButton(): HTMLElement {
   const root = document.createElement("div");
   root.className = "hl-button-root";
 
+  const group = document.createElement("div");
+  group.className = "hl-button-group";
+
   const button = document.createElement("button");
   button.type = "button";
   button.className = "hl-button";
   button.setAttribute("aria-label", "Highlight");
-  button.setAttribute("aria-haspopup", "true");
 
   const indicator = document.createElement("span");
   indicator.className = "hl-indicator";
@@ -45,22 +45,32 @@ export function buildHighlightButton(): HTMLElement {
   label.textContent = "Highlight";
   button.append(indicator, label);
 
+  const caret = document.createElement("button");
+  caret.type = "button";
+  caret.className = "hl-caret";
+  caret.setAttribute("aria-label", "Choose highlight color");
+  caret.setAttribute("aria-haspopup", "true");
+  caret.textContent = "▾";
+
+  group.append(button, caret);
+
   const popover = buildPopover(() => {
     popover.hidden = true;
   });
   popover.hidden = true;
-  root.append(button, popover);
+  root.append(group, popover);
 
+  // Main button: toggle highlighting with whatever color is current.
   button.addEventListener("click", (e) => {
     e.stopPropagation();
-    const state = getHighlightMode();
-    if (state.active) {
-      // Quick toggle off
-      setHighlightMode({ active: false });
-      popover.hidden = true;
-    } else {
-      popover.hidden = !popover.hidden;
-    }
+    toggleHighlightMode();
+    popover.hidden = true;
+  });
+
+  // Caret: reveal/hide the color choices.
+  caret.addEventListener("click", (e) => {
+    e.stopPropagation();
+    popover.hidden = !popover.hidden;
   });
 
   document.addEventListener("click", (e) => {
@@ -70,8 +80,12 @@ export function buildHighlightButton(): HTMLElement {
   subscribeHighlightMode((s) => {
     button.dataset.active = String(s.active);
     button.dataset.color = s.color;
+    group.dataset.active = String(s.active);
     indicator.style.background = SWATCH_FILL[s.color];
   });
+  // Seed initial visuals.
+  const init = getHighlightMode();
+  indicator.style.background = SWATCH_FILL[init.color];
 
   return root;
 }
@@ -91,22 +105,12 @@ function buildPopover(onPick: () => void): HTMLDivElement {
     sw.addEventListener("mousedown", (e) => e.preventDefault());
     sw.addEventListener("click", (e) => {
       e.stopPropagation();
+      // Picking a color also turns highlighting on (Edge behavior).
       setHighlightMode({ active: true, color });
       onPick();
     });
     pop.appendChild(sw);
   }
-
-  const off = document.createElement("button");
-  off.type = "button";
-  off.className = "hl-off";
-  off.textContent = "Off";
-  off.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setHighlightMode({ active: false });
-    onPick();
-  });
-  pop.appendChild(off);
 
   return pop;
 }

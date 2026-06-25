@@ -1,19 +1,19 @@
 /**
- * Nav-bar "Explain" button + color popover — a separate tool from Highlight.
+ * Nav-bar "Explain" control — a separate tool from Highlight, same Edge-style
+ * split-button logic:
  *
- *   click button →  popover opens with 5 swatches + "Off"
- *   click swatch →  explain mode ON with that color; drags now create AI
- *                   explanation highlights in that color
- *   click "Off" / button while ON → explain mode OFF
- *
- * Mirrors HighlightButton, but drives explainMode. The button reflects state
- * via `data-active` / `data-color` for styling.
+ *   click the main button  →  toggle explain mode on/off using the CURRENT
+ *                             color (drags then create AI explanation highlights
+ *                             in that color)
+ *   click the caret (▾)    →  open a small popover of color swatches
+ *   click a swatch         →  set that color and turn explain mode on
  */
 
 import { HIGHLIGHT_COLORS, type HighlightColor } from "./api.ts";
 import {
   getExplainMode,
   setExplainMode,
+  toggleExplainMode,
   subscribeExplainMode,
 } from "./explainMode.ts";
 
@@ -29,11 +29,13 @@ export function buildExplainButton(): HTMLElement {
   const root = document.createElement("div");
   root.className = "explain-button-root";
 
+  const group = document.createElement("div");
+  group.className = "explain-button-group";
+
   const button = document.createElement("button");
   button.type = "button";
   button.className = "explain-button";
   button.setAttribute("aria-label", "Explain");
-  button.setAttribute("aria-haspopup", "true");
 
   const indicator = document.createElement("span");
   indicator.className = "explain-indicator";
@@ -42,20 +44,30 @@ export function buildExplainButton(): HTMLElement {
   label.textContent = "Explain";
   button.append(indicator, label);
 
+  const caret = document.createElement("button");
+  caret.type = "button";
+  caret.className = "explain-caret";
+  caret.setAttribute("aria-label", "Choose explanation color");
+  caret.setAttribute("aria-haspopup", "true");
+  caret.textContent = "▾";
+
+  group.append(button, caret);
+
   const popover = buildPopover(() => {
     popover.hidden = true;
   });
   popover.hidden = true;
-  root.append(button, popover);
+  root.append(group, popover);
 
   button.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (getExplainMode().active) {
-      setExplainMode({ active: false });
-      popover.hidden = true;
-    } else {
-      popover.hidden = !popover.hidden;
-    }
+    toggleExplainMode();
+    popover.hidden = true;
+  });
+
+  caret.addEventListener("click", (e) => {
+    e.stopPropagation();
+    popover.hidden = !popover.hidden;
   });
 
   document.addEventListener("click", (e) => {
@@ -65,8 +77,11 @@ export function buildExplainButton(): HTMLElement {
   subscribeExplainMode((s) => {
     button.dataset.active = String(s.active);
     button.dataset.color = s.color;
+    group.dataset.active = String(s.active);
     indicator.style.background = SWATCH_FILL[s.color];
   });
+  const init = getExplainMode();
+  indicator.style.background = SWATCH_FILL[init.color];
 
   return root;
 }
@@ -99,17 +114,6 @@ function buildPopover(onPick: () => void): HTMLDivElement {
     swatches.appendChild(sw);
   }
   pop.appendChild(swatches);
-
-  const off = document.createElement("button");
-  off.type = "button";
-  off.className = "explain-off";
-  off.textContent = "Off";
-  off.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setExplainMode({ active: false });
-    onPick();
-  });
-  pop.appendChild(off);
 
   return pop;
 }
