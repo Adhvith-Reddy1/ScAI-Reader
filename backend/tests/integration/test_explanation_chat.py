@@ -43,8 +43,9 @@ def _sse_text(response) -> str:
 
 @pytest.fixture(autouse=True)
 def _no_api_key(monkeypatch):
-    # Force the deterministic "no key" branch so tests don't hit the network.
+    # Force the deterministic "no provider" branch so tests don't hit network.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 @pytest.mark.integration

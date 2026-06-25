@@ -1243,3 +1243,22 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-size: 12px;
 }
 .explanation-setup-ai:hover { filter: brightness(1.1); }
+
+/* AI setup dialog form fields (provider/model/base URL) */
+.ai-setup-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.ai-setup-field > span { font-size: 13px; color: var(--muted); }
+.ai-setup-optional { color: var(--muted); opacity: 0.7; }
+.ai-setup-provider,
+.ai-setup-baseurl,
+.ai-setup-model {
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  font-size: 14px;
+}
+.ai-setup-baseurl, .ai-setup-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ai-setup-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }

@@ -549,22 +549,36 @@ export function streamExplanation(
   return () => ctrl.abort();
 }
 
-// --- AI setup (Anthropic API key) ------------------------------------------
+// --- AI setup (provider + key) ---------------------------------------------
+
+export type AiProvider = "anthropic" | "openai" | "openai_compatible";
 
 export interface AiStatus {
   configured: boolean;
   source: "env" | "stored" | null;
+  provider: AiProvider | null;
+  model: string | null;
+  base_url: string | null;
   editable: boolean;
 }
 
-export interface AiKeyResult {
+export interface AiConfigInput {
+  provider: AiProvider;
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+}
+
+export interface AiConfigResult {
   configured: boolean;
   source: "env" | "stored" | null;
+  provider: AiProvider | null;
+  model: string | null;
   validated: boolean;
   warning: string | null;
 }
 
-/** Whether the backend has an Anthropic key (and where it came from). */
+/** Current AI provider/status on the backend. */
 export async function getAiStatus(): Promise<AiStatus> {
   const r = await fetch("/settings/ai");
   if (!r.ok) throw new Error(`AI status failed (${r.status})`);
@@ -572,14 +586,19 @@ export async function getAiStatus(): Promise<AiStatus> {
 }
 
 /**
- * Save (and by default verify) an Anthropic API key. Rejects with the
- * backend's human-readable message when the key is malformed or refused.
+ * Save (and by default verify) the AI provider config. Rejects with the
+ * backend's human-readable message when something is malformed or refused.
  */
-export async function saveAiKey(apiKey: string): Promise<AiKeyResult> {
+export async function saveAiConfig(input: AiConfigInput): Promise<AiConfigResult> {
   const r = await fetch("/settings/ai", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify({
+      provider: input.provider,
+      api_key: input.apiKey,
+      model: input.model,
+      base_url: input.baseUrl,
+    }),
   });
   if (!r.ok) {
     let detail = `save failed (${r.status})`;
@@ -591,10 +610,10 @@ export async function saveAiKey(apiKey: string): Promise<AiKeyResult> {
     }
     throw new Error(detail);
   }
-  return r.json() as Promise<AiKeyResult>;
+  return r.json() as Promise<AiConfigResult>;
 }
 
-/** Remove the stored key. */
+/** Remove the stored provider config. */
 export async function clearAiKey(): Promise<AiStatus> {
   const r = await fetch("/settings/ai", { method: "DELETE" });
   if (!r.ok) throw new Error(`remove failed (${r.status})`);

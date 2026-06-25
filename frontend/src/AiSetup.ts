@@ -1,26 +1,76 @@
 /**
- * Guided, in-app setup for the Anthropic API key that powers AI explanations.
+ * Guided, in-app setup for the AI provider that powers explanations.
  *
- * A biologist won't have a key or know what one is, so this:
- *   - explains plainly what's needed and why,
- *   - links straight to the Anthropic console to get a key,
- *   - lets them paste it and verifies it before saving,
- *   - shows whether AI is currently on, and lets them remove the key.
+ * A researcher won't have a key or know what one is, so this:
+ *   - lets them pick a provider (Anthropic, OpenAI, or any OpenAI-compatible
+ *     endpoint incl. local models via a base URL),
+ *   - explains plainly what's needed and links to where to get a key,
+ *   - lets them paste it (plus model/URL when relevant) and verifies it,
+ *   - shows what's currently active, and lets them remove it.
  *
- * The key lives on the local backend (see app/ai.py); nothing here stores it
- * in the browser. A nav button reflects on/off status; a first-run banner
- * nudges setup once.
+ * The config lives on the local backend (see app/ai.py); nothing here is
+ * stored in the browser. A nav button reflects on/off status; a first-run
+ * banner nudges setup once.
  */
 
 import {
   clearAiKey,
   getAiStatus,
-  saveAiKey,
+  saveAiConfig,
+  type AiProvider,
   type AiStatus,
 } from "./api.ts";
 
-const CONSOLE_URL = "https://console.anthropic.com/settings/keys";
 const NUDGE_DISMISS_KEY = "scai.aiNudgeDismissed";
+
+interface ProviderMeta {
+  label: string;
+  keyPlaceholder: string;
+  keyUrl: string;
+  keyUrlLabel: string;
+  modelPlaceholder: string;
+  needsBaseUrl: boolean;
+}
+
+const PROVIDERS: { value: AiProvider; meta: ProviderMeta }[] = [
+  {
+    value: "anthropic",
+    meta: {
+      label: "Anthropic (Claude)",
+      keyPlaceholder: "sk-ant-...",
+      keyUrl: "https://console.anthropic.com/settings/keys",
+      keyUrlLabel: "Anthropic console",
+      modelPlaceholder: "claude-sonnet-4-6 (default)",
+      needsBaseUrl: false,
+    },
+  },
+  {
+    value: "openai",
+    meta: {
+      label: "OpenAI (GPT)",
+      keyPlaceholder: "sk-...",
+      keyUrl: "https://platform.openai.com/api-keys",
+      keyUrlLabel: "OpenAI dashboard",
+      modelPlaceholder: "gpt-4o (default)",
+      needsBaseUrl: false,
+    },
+  },
+  {
+    value: "openai_compatible",
+    meta: {
+      label: "OpenAI-compatible (OpenRouter, Groq, Ollama, …)",
+      keyPlaceholder: "key (any value for local servers)",
+      keyUrl: "",
+      keyUrlLabel: "",
+      modelPlaceholder: "e.g. llama3.1 (required)",
+      needsBaseUrl: true,
+    },
+  },
+];
+
+function metaFor(p: AiProvider): ProviderMeta {
+  return (PROVIDERS.find((x) => x.value === p) ?? PROVIDERS[0]).meta;
+}
 
 let lastStatus: AiStatus | null = null;
 const statusListeners = new Set<(s: AiStatus) => void>();
@@ -51,7 +101,7 @@ export function buildAiSetupButton(): HTMLButtonElement {
   const apply = (s: AiStatus): void => {
     btn.dataset.configured = String(s.configured);
     btn.title = s.configured
-      ? "AI explanations are on"
+      ? `AI explanations are on (${s.provider ?? "configured"})`
       : "AI explanations are off — click to set up";
   };
   statusListeners.add(apply);
@@ -84,47 +134,86 @@ export function openAiSetup(): void {
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-label", "AI setup");
 
+  const providerOptions = PROVIDERS.map(
+    (p) => `<option value="${p.value}">${p.meta.label}</option>`,
+  ).join("");
+
   dialog.innerHTML = `
     <button class="ai-setup-close" type="button" aria-label="Close">×</button>
     <h2>Set up AI explanations</h2>
     <p class="ai-setup-intro">
-      ScAI-Reader can explain terms and figures right inside your paper. This
-      uses Anthropic's Claude and needs a one-time API key. Reading,
-      highlighting, and search work without it.
+      ScAI-Reader can explain terms and figures right inside your paper. Pick a
+      provider and add an API key. Reading, highlighting, and search work
+      without it.
     </p>
-    <ol class="ai-setup-steps">
-      <li>Open the <a class="ai-setup-link" target="_blank" rel="noopener"
-        href="${CONSOLE_URL}">Anthropic console</a> and create a key
-        (it starts with <code>sk-ant-</code>).</li>
-      <li>Paste it below and click Save. Usage is billed to your Anthropic
-        account.</li>
-    </ol>
-    <div class="ai-setup-form">
+    <label class="ai-setup-field">
+      <span>Provider</span>
+      <select class="ai-setup-provider">${providerOptions}</select>
+    </label>
+    <label class="ai-setup-field ai-setup-baseurl-field" hidden>
+      <span>Base URL</span>
+      <input class="ai-setup-baseurl" type="text" autocomplete="off"
+        spellcheck="false" placeholder="http://localhost:11434/v1" />
+    </label>
+    <label class="ai-setup-field">
+      <span>API key <a class="ai-setup-link" target="_blank" rel="noopener" href="#">get one ↗</a></span>
       <input class="ai-setup-input" type="password" autocomplete="off"
-        spellcheck="false" placeholder="sk-ant-..." aria-label="Anthropic API key" />
+        spellcheck="false" placeholder="sk-ant-..." aria-label="API key" />
+    </label>
+    <label class="ai-setup-field">
+      <span>Model <span class="ai-setup-optional">(optional)</span></span>
+      <input class="ai-setup-model" type="text" autocomplete="off"
+        spellcheck="false" placeholder="" />
+    </label>
+    <div class="ai-setup-actions">
       <button class="ai-setup-save" type="button">Save</button>
     </div>
     <p class="ai-setup-feedback" role="status"></p>
     <div class="ai-setup-configured" hidden>
       <span class="ai-setup-on">✓ AI explanations are on.</span>
-      <button class="ai-setup-remove" type="button">Remove key</button>
+      <button class="ai-setup-remove" type="button">Remove</button>
     </div>
   `;
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
+  const providerSel = dialog.querySelector(
+    ".ai-setup-provider",
+  ) as HTMLSelectElement;
+  const baseUrlField = dialog.querySelector(
+    ".ai-setup-baseurl-field",
+  ) as HTMLElement;
+  const baseUrlInput = dialog.querySelector(
+    ".ai-setup-baseurl",
+  ) as HTMLInputElement;
   const input = dialog.querySelector(".ai-setup-input") as HTMLInputElement;
+  const modelInput = dialog.querySelector(".ai-setup-model") as HTMLInputElement;
+  const link = dialog.querySelector(".ai-setup-link") as HTMLAnchorElement;
   const saveBtn = dialog.querySelector(".ai-setup-save") as HTMLButtonElement;
   const feedback = dialog.querySelector(".ai-setup-feedback") as HTMLElement;
   const configured = dialog.querySelector(".ai-setup-configured") as HTMLElement;
   const removeBtn = dialog.querySelector(".ai-setup-remove") as HTMLButtonElement;
-  const form = dialog.querySelector(".ai-setup-form") as HTMLElement;
   const onLabel = dialog.querySelector(".ai-setup-on") as HTMLElement;
-
   const closeBtn = dialog.querySelector(".ai-setup-close") as HTMLButtonElement;
-  closeBtn.addEventListener("click", closeOverlay);
 
+  const applyProviderMeta = (): void => {
+    const meta = metaFor(providerSel.value as AiProvider);
+    input.placeholder = meta.keyPlaceholder;
+    modelInput.placeholder = meta.modelPlaceholder;
+    baseUrlField.hidden = !meta.needsBaseUrl;
+    if (meta.keyUrl) {
+      link.href = meta.keyUrl;
+      link.textContent = `get one from ${meta.keyUrlLabel} ↗`;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+  };
+  providerSel.addEventListener("change", applyProviderMeta);
+  applyProviderMeta();
+
+  closeBtn.addEventListener("click", closeOverlay);
   const onKeydown = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
       closeOverlay();
@@ -146,17 +235,21 @@ export function openAiSetup(): void {
     if (s.source === "env") {
       configured.hidden = false;
       removeBtn.hidden = true;
-      form.hidden = true;
-      onLabel.textContent =
-        "✓ AI is on — the key comes from your environment.";
+      onLabel.textContent = `✓ AI is on via ${s.provider ?? "environment"} — the key comes from your environment.`;
       return;
     }
     configured.hidden = !s.configured;
     removeBtn.hidden = !s.configured;
-    onLabel.textContent = "✓ AI explanations are on.";
+    if (s.configured) {
+      const model = s.model ? ` · ${s.model}` : "";
+      onLabel.textContent = `✓ AI is on — ${s.provider}${model}.`;
+      if (s.provider) providerSel.value = s.provider;
+      applyProviderMeta();
+    }
   };
 
   const doSave = async (): Promise<void> => {
+    const provider = providerSel.value as AiProvider;
     const key = input.value.trim();
     if (!key) {
       setFeedback("Paste your API key first.", "error");
@@ -165,7 +258,12 @@ export function openAiSetup(): void {
     saveBtn.disabled = true;
     setFeedback("Checking your key…", "info");
     try {
-      const result = await saveAiKey(key);
+      const result = await saveAiConfig({
+        provider,
+        apiKey: key,
+        model: modelInput.value.trim() || undefined,
+        baseUrl: baseUrlInput.value.trim() || undefined,
+      });
       input.value = "";
       await refreshStatus();
       renderStatus(lastStatus);
@@ -191,7 +289,7 @@ export function openAiSetup(): void {
       await clearAiKey();
       await refreshStatus();
       renderStatus(lastStatus);
-      setFeedback("Key removed. AI explanations are off.", "info");
+      setFeedback("Removed. AI explanations are off.", "info");
     } catch (err) {
       setFeedback((err as Error).message, "error");
     } finally {
@@ -199,7 +297,6 @@ export function openAiSetup(): void {
     }
   });
 
-  // Reflect current status as soon as it's known.
   if (lastStatus) renderStatus(lastStatus);
   void refreshStatus().then(renderStatus);
   input.focus();

@@ -41,20 +41,27 @@ or skip the auto-open with `NO_OPEN=1`.
 
 ### Turning on AI explanations
 
-The AI features (hover explanations, figure walkthroughs) use Anthropic's
-Claude and need an API key. **Everything else — highlights, outline,
-find-in-page — works without one.**
+The AI features (hover explanations, figure walkthroughs) need an LLM provider.
+**Everything else — highlights, outline, find-in-page — works without one.**
 
 You don't need the command line: click **AI** in the top bar (or the first-run
-banner), follow the link to create a key at
-[console.anthropic.com](https://console.anthropic.com/settings/keys), paste it,
-and Save. The key is verified, then stored locally on the backend (usage is
-billed to your Anthropic account). Until then, AI tooltips show a friendly
-"Set up AI" prompt instead of an error.
+banner), pick your provider, paste a key, and Save. The key is verified, then
+stored locally on the backend. Until then, AI tooltips show a friendly "Set up
+AI" prompt instead of an error. Supported:
 
-Advanced/hosted setups can instead export `ANTHROPIC_API_KEY` (or put it in
-`.env`); an environment key always takes precedence and is managed outside the
-app.
+- **Anthropic (Claude)** — key from [console.anthropic.com](https://console.anthropic.com/settings/keys).
+- **OpenAI (GPT)** — key from [platform.openai.com](https://platform.openai.com/api-keys).
+- **OpenAI-compatible** — any endpoint that speaks the OpenAI API: OpenRouter,
+  Groq, Together, Azure OpenAI, or **local models** via Ollama / LM Studio.
+  Enter the base URL (e.g. `http://localhost:11434/v1`) and a model name.
+
+Each path sends only the relevant page's text (plus the page image for figures)
+to the provider — never the whole PDF — so behaviour is consistent across
+providers. Usage is billed to your own provider account.
+
+Advanced/hosted setups can instead export `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` (the latter honours `OPENAI_BASE_URL`); an environment key
+always takes precedence and is managed outside the app.
 
 ### Dev mode (hot reload, two servers)
 
@@ -122,13 +129,14 @@ The AI path is not yet covered end-to-end (would need a live key in CI). The cla
 
 ## Configuration
 
-The AI key is normally set in-app (see "Turning on AI explanations"); it's
-stored at `<data dir>/ai_config.json`. The env var below is an optional
-override for advanced/hosted use and always wins over the stored key.
+The AI provider is normally set in-app (see "Turning on AI explanations"); it's
+stored at `<data dir>/ai_config.json`. The env vars below are optional overrides
+for advanced/hosted use and always win over the stored config.
 
 | Env var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Optional override for the in-app key. When set, AI is on and the key is managed outside the app (the in-app setter is disabled). |
+| `ANTHROPIC_API_KEY` | If set, selects Anthropic and turns AI on; managed outside the app (in-app setter disabled). |
+| `OPENAI_API_KEY` | If set (and no Anthropic key), selects OpenAI. Honours `OPENAI_BASE_URL` for OpenAI-compatible endpoints. |
 | `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, the render cache, and `ai_config.json`. Defaults to `./data`. |
 
 ## Roadmap

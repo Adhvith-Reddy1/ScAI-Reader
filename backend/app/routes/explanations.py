@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator, Literal
 
-import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import ai
+from .. import ai, llm
 from ..config import Settings
 from ..pdf.pdfium_backend import PdfiumBackend
 from ..storage import db, files
@@ -26,10 +24,8 @@ router = APIRouter(
 
 ExplanationKind = Literal["definition", "explanation"]
 
-# Fast tiers for short tooltips: Haiku for definitions, Sonnet for the slightly
-# more involved explanation/chat/refine work. (Was Sonnet/Opus.)
-MODEL_DEFINITION = "claude-haiku-4-5"
-MODEL_EXPLANATION = "claude-sonnet-4-6"
+# Model choice is provider-specific and lives in app.ai (DEFAULT_MODELS); the
+# routes only pick a quality tier ("fast" for definitions, "good" otherwise).
 
 SYSTEM_DEFINITION = (
     "You are a glossary tooltip inside an academic PDF reader. The user "
@@ -261,88 +257,35 @@ def _error_sse(message: str) -> bytes:
     return _sse_event(frame)
 
 
-def _pdf_document_block(pdf_b64: str) -> dict:
-    """An Anthropic `document` content block carrying the whole PDF. The
-    cache_control marker lets follow-up calls for the same document hit
-    cache_read pricing instead of re-uploading the prefix each time."""
-    return {
-        "type": "document",
-        "source": {
-            "type": "base64",
-            "media_type": "application/pdf",
-            "data": pdf_b64,
-        },
-        "cache_control": {"type": "ephemeral"},
-    }
-
-
-async def _stream_anthropic(
-    model: str,
-    system: str,
-    messages: list[dict],
-    max_tokens: int,
-    api_key: str | None,
-) -> AsyncIterator[tuple[str, str]]:
-    """Yields (event_type, payload) tuples.
-
-    event_type is one of:
-      "delta"  -> payload is the new text chunk
-      "done"   -> payload is the full accumulated text
-      "error"  -> payload is the error message
-    """
-    if not api_key:
-        yield ("error", ai.AI_NOT_CONFIGURED_MESSAGE)
-        return
-
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    accumulated: list[str] = []
-    try:
-        async with client.messages.stream(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=messages,
-        ) as stream:
-            async for chunk in stream.text_stream:
-                accumulated.append(chunk)
-                yield ("delta", chunk)
-        yield ("done", "".join(accumulated))
-    except anthropic.APIError as e:
-        log.exception("Anthropic API error")
-        yield ("error", f"{type(e).__name__}: {e}")
-    except Exception as e:  # noqa: BLE001
-        log.exception("Unexpected error in Claude stream")
-        yield ("error", f"{type(e).__name__}: {e}")
-
-
-async def _stream_claude(
-    page_text: str,
-    text: str,
-    kind: ExplanationKind,
-    api_key: str | None,
-) -> AsyncIterator[tuple[str, str]]:
-    model = MODEL_DEFINITION if kind == "definition" else MODEL_EXPLANATION
-    system = SYSTEM_DEFINITION if kind == "definition" else SYSTEM_EXPLANATION
-    context = (
+def _page_context(page_text: str) -> str:
+    return (
         f"For context, here is the text of the page the reader is on:\n\n"
         f"<page>\n{page_text}\n</page>\n\n"
         if page_text
         else ""
     )
-    instruction = (
-        context
-        + (
-            f"Highlighted term: {text!r}\n\nDefine it concisely in the context "
-            "of this paper."
-            if kind == "definition"
-            else f"Highlighted passage:\n\n{text}\n\nExplain in clearer terms "
-            "what the authors are saying."
-        )
+
+
+async def _stream_explanation(
+    config,
+    page_text: str,
+    text: str,
+    kind: ExplanationKind,
+) -> AsyncIterator[tuple[str, str]]:
+    system = SYSTEM_DEFINITION if kind == "definition" else SYSTEM_EXPLANATION
+    instruction = _page_context(page_text) + (
+        f"Highlighted term: {text!r}\n\nDefine it concisely in the context "
+        "of this paper."
+        if kind == "definition"
+        else f"Highlighted passage:\n\n{text}\n\nExplain in clearer terms "
+        "what the authors are saying."
     )
-    # Plain text only — no PDF document block — so there's no large prefill.
-    messages = [{"role": "user", "content": instruction}]
-    async for event in _stream_anthropic(
-        model, system, messages, 80 if kind == "definition" else 140, api_key
+    async for event in llm.stream_completion(
+        config,
+        system=system,
+        messages=[llm.user_text(instruction)],
+        max_tokens=80 if kind == "definition" else 140,
+        tier="fast" if kind == "definition" else "good",
     ):
         yield event
 
@@ -389,16 +332,16 @@ async def explain(
         _upsert_pending(conn, annotation_id, kind, body.text)
 
     # Only the highlighted page's text is sent as context (not the whole PDF),
-    # which is what keeps the first explanation fast.
+    # which keeps the first explanation fast and works across all providers.
     page_text = _page_text(settings, doc_id, page_index)
-    api_key = ai.get_api_key(settings)
+    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": kind, "cached": False})
         final_text: str | None = None
         error_text: str | None = None
-        async for event_type, payload in _stream_claude(
-            page_text, body.text, kind, api_key
+        async for event_type, payload in _stream_explanation(
+            config, page_text, body.text, kind
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -415,41 +358,27 @@ async def explain(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _build_chat_messages(pdf_b64: str, body: ChatRequest) -> list[dict]:
-    """Turn the reader's thread into Anthropic messages. The PDF and the
-    tooltip context ride along on the first user turn so the whole document
-    is available (and cached) for the conversation."""
+def _build_chat_messages(page_text: str, body: ChatRequest) -> list[dict]:
+    """Turn the reader's thread into provider-neutral messages. The page text
+    and tooltip context ride along on the first user turn so the model knows
+    what's being discussed."""
     context = (
-        f"The reader highlighted this text from the attached paper:\n\n"
-        f"{body.text!r}\n\nThey were shown this {body.kind}:\n\n"
-        f"{body.content}\n\nThey have follow-up questions below."
+        _page_context(page_text)
+        + f"The reader highlighted this text:\n\n{body.text!r}\n\n"
+        f"They were shown this {body.kind}:\n\n{body.content}\n\n"
+        "They have follow-up questions below."
     )
     out: list[dict] = []
     for i, m in enumerate(body.messages):
         if i == 0 and m.role == "user":
             out.append(
-                {
-                    "role": "user",
-                    "content": [
-                        _pdf_document_block(pdf_b64),
-                        {"type": "text", "text": f"{context}\n\n{m.content}"},
-                    ],
-                }
+                {"role": "user", "content": f"{context}\n\n{m.content}"}
             )
         else:
             out.append({"role": m.role, "content": m.content})
-    # Anthropic requires the conversation to open on a user turn.
+    # Conversations must open on a user turn.
     if not out or out[0]["role"] != "user":
-        out.insert(
-            0,
-            {
-                "role": "user",
-                "content": [
-                    _pdf_document_block(pdf_b64),
-                    {"type": "text", "text": context},
-                ],
-            },
-        )
+        out.insert(0, {"role": "user", "content": context})
     return out
 
 
@@ -465,16 +394,16 @@ async def chat(
         raise HTTPException(status_code=404, detail="document not found")
 
     with db.connect(settings.db_path) as conn:
-        _verify_ownership(conn, doc_id, annotation_id)
+        page_index = _verify_ownership(conn, doc_id, annotation_id)
 
-    pdf_b64 = base64.standard_b64encode(pdf_path.read_bytes()).decode("ascii")
-    messages = _build_chat_messages(pdf_b64, body)
-    api_key = ai.get_api_key(settings)
+    page_text = _page_text(settings, doc_id, page_index)
+    messages = _build_chat_messages(page_text, body)
+    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": body.kind, "cached": False})
-        async for event_type, payload in _stream_anthropic(
-            MODEL_EXPLANATION, SYSTEM_CHAT, messages, 400, api_key
+        async for event_type, payload in llm.stream_completion(
+            config, system=SYSTEM_CHAT, messages=messages, max_tokens=400
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -498,10 +427,9 @@ async def refine(
         raise HTTPException(status_code=404, detail="document not found")
 
     with db.connect(settings.db_path) as conn:
-        _verify_ownership(conn, doc_id, annotation_id)
+        page_index = _verify_ownership(conn, doc_id, annotation_id)
 
     kind = body.kind
-    model = MODEL_DEFINITION if kind == "definition" else MODEL_EXPLANATION
     system = (
         SYSTEM_REFINE_DEFINITION
         if kind == "definition"
@@ -510,24 +438,17 @@ async def refine(
     transcript = "\n".join(
         f"{m.role.upper()}: {m.content}" for m in body.messages
     )
+    page_text = _page_text(settings, doc_id, page_index)
     instruction = (
-        f"Original highlighted text:\n{body.text!r}\n\n"
+        _page_context(page_text)
+        + f"Original highlighted text:\n{body.text!r}\n\n"
         f"The {kind} the reader first saw:\n{body.content}\n\n"
         f"Clarifying conversation:\n{transcript}\n\n"
         f"Rewrite the {kind} so it folds in what helped the reader most. "
         "Output only the revised text."
     )
-    pdf_b64 = base64.standard_b64encode(pdf_path.read_bytes()).decode("ascii")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                _pdf_document_block(pdf_b64),
-                {"type": "text", "text": instruction},
-            ],
-        }
-    ]
-    api_key = ai.get_api_key(settings)
+    messages = [llm.user_text(instruction)]
+    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event(
@@ -535,12 +456,12 @@ async def refine(
         )
         final_text: str | None = None
         error_text: str | None = None
-        async for event_type, payload in _stream_anthropic(
-            model,
-            system,
-            messages,
-            80 if kind == "definition" else 140,
-            api_key,
+        async for event_type, payload in llm.stream_completion(
+            config,
+            system=system,
+            messages=messages,
+            max_tokens=80 if kind == "definition" else 140,
+            tier="fast" if kind == "definition" else "good",
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
