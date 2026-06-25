@@ -15,25 +15,72 @@
   - Streamed over SSE so the tooltip fills in live; cached in SQLite so every later hover is free (zero LLM calls).
   - The PDF is sent with `cache_control: ephemeral`, so prompt caching makes the 2nd+ call per document cheap.
 
-## Run it
+## Run it (local)
 
-The AI features need an `ANTHROPIC_API_KEY`. Everything else (highlights, outline, find) works without one.
+**Prerequisites:** Python 3.12+ and Node.js 18+.
+
+**Easiest — one command** (installs, builds, and tells you how to start):
 
 ```bash
-# Backend
-cd backend
-python3.12 -m venv .venv
-.venv/bin/pip install -e ".[test]"
-export ANTHROPIC_API_KEY=sk-ant-...
-.venv/bin/uvicorn app.main:app --reload --port 8000
-
-# Frontend (separate shell)
-cd frontend
-npm install
-npm run dev     # http://localhost:5173
+curl -fsSL https://raw.githubusercontent.com/Adhvith-Reddy1/ScAI-Reader/main/scripts/install.sh | bash
 ```
 
-The Vite dev server proxies `/documents`, `/healthz`, and the SSE endpoints to the backend on `:8000`.
+**Or from a clone:**
+
+```bash
+git clone https://github.com/Adhvith-Reddy1/ScAI-Reader.git && cd ScAI-Reader
+./scripts/run.sh
+```
+
+On first launch `run.sh` creates the Python venv, installs the backend and
+frontend dependencies, and builds the frontend. Then it starts a single local
+server and opens **http://localhost:8000** in your browser automatically. Stop
+with Ctrl-C; later launches skip straight to starting (rebuilding the frontend
+only if its sources changed). Use a different port with `PORT=9000 ./scripts/run.sh`,
+or skip the auto-open with `NO_OPEN=1`.
+
+### Turning on AI explanations
+
+The AI features (hover explanations, figure walkthroughs) need an LLM provider.
+**Everything else — highlights, outline, find-in-page — works without one.**
+
+You don't need the command line: click **AI** in the top bar (or the first-run
+banner), pick your provider, paste a key, and Save. The key is verified, then
+stored locally on the backend. Until then, AI tooltips show a friendly "Set up
+AI" prompt instead of an error. Supported:
+
+- **Anthropic (Claude)** — key from [console.anthropic.com](https://console.anthropic.com/settings/keys).
+- **OpenAI (GPT)** — key from [platform.openai.com](https://platform.openai.com/api-keys).
+- **OpenRouter** — key from [openrouter.ai/keys](https://openrouter.ai/keys);
+  one key, hundreds of models. Base URL is filled in for you.
+- **OpenAI-compatible** — any other endpoint that speaks the OpenAI API: Groq,
+  Together, Azure OpenAI, or **local models** via Ollama / LM Studio. Enter the
+  base URL (e.g. `http://localhost:11434/v1`) and a model name.
+
+Each path sends only the relevant page's text (plus the page image for figures)
+to the provider — never the whole PDF — so behaviour is consistent across
+providers. Usage is billed to your own provider account.
+
+Advanced/hosted setups can instead export `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` (the latter honours `OPENAI_BASE_URL`); an environment key
+always takes precedence and is managed outside the app.
+
+### Dev mode (hot reload, two servers)
+
+For active frontend work you may prefer Vite's hot-reload dev server:
+
+```bash
+./scripts/setup.sh --dev          # one-time: venv + deps + test toolchain
+
+# Backend (shell 1)
+cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
+# Frontend (shell 2)
+cd frontend && npm run dev        # http://localhost:5173
+```
+
+The Vite dev server proxies `/documents` and `/healthz` to the backend on
+`:8000`. (The single-server `run.sh` path needs no proxy — the API and SPA
+are same-origin.)
 
 ## Architecture
 
@@ -84,10 +131,15 @@ The AI path is not yet covered end-to-end (would need a live key in CI). The cla
 
 ## Configuration
 
+The AI provider is normally set in-app (see "Turning on AI explanations"); it's
+stored at `<data dir>/ai_config.json`. The env vars below are optional overrides
+for advanced/hosted use and always win over the stored config.
+
 | Env var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Required for `/explain`. Without it the SSE stream emits one error event and the tooltip shows "Explanation unavailable". |
-| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, and the render cache. Defaults to `./data`. |
+| `ANTHROPIC_API_KEY` | If set, selects Anthropic and turns AI on; managed outside the app (in-app setter disabled). |
+| `OPENAI_API_KEY` | If set (and no Anthropic key), selects OpenAI. Honours `OPENAI_BASE_URL` for OpenAI-compatible endpoints. |
+| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, the render cache, and `ai_config.json`. Defaults to `./data`. |
 
 ## Roadmap
 

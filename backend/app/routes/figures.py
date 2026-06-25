@@ -16,15 +16,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import ai, llm
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.figures import FigureRegion, detect_figures
@@ -36,9 +35,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents/{doc_id}", tags=["figures"])
 
-# Sonnet handles vision well and keeps the user from waiting on Opus
-# latency for what should be a quick visual gloss.
-MODEL_FIGURE = "claude-sonnet-4-6"
+# Figure explanations need a vision-capable model; the provider's "good" tier
+# default (see app.ai.DEFAULT_MODELS) is used unless the user overrides it.
 
 SYSTEM_FIGURE = (
     "You are an in-page assistant inside an academic PDF reader. The user "
@@ -59,6 +57,15 @@ def _now() -> str:
 
 def _sse_event(data: dict) -> bytes:
     return f"data: {json.dumps(data)}\n\n".encode("utf-8")
+
+
+def _error_sse(message: str) -> bytes:
+    """Error frame, tagged with a code when AI isn't configured so the UI can
+    offer one-click setup instead of showing a raw error."""
+    frame: dict = {"type": "error", "message": message}
+    if message == ai.AI_NOT_CONFIGURED_MESSAGE:
+        frame["code"] = ai.AI_NOT_CONFIGURED_CODE
+    return _sse_event(frame)
 
 
 def _doc_exists(settings: Settings, doc_id: str) -> bool:
@@ -203,69 +210,38 @@ class FigureExplainRequest(BaseModel):
     label: str = Field(min_length=1, max_length=64)
 
 
-async def _stream_figure(
-    pdf_bytes: bytes,
+def _stream_figure(
+    config,
+    page_text: str,
     page_png_bytes: bytes,
     label: str,
     page_number: int,
 ) -> AsyncIterator[tuple[str, str]]:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        yield ("error", "ANTHROPIC_API_KEY not set on backend")
-        return
-
-    client = anthropic.AsyncAnthropic()
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
     page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
+    context = (
+        f"For context, here is the text of page {page_number}:\n\n"
+        f"<page>\n{page_text}\n</page>\n\n"
+        if page_text
+        else ""
+    )
     instruction = (
-        f"Focus on {label} (page {page_number}). The full page image is "
+        context
+        + f"Focus on {label} (page {page_number}). The full page image is "
         "attached to disambiguate which figure I mean. Explain it for a "
         "reader who's mid-paragraph and wants to keep reading the paper."
     )
-
-    accumulated: list[str] = []
-    try:
-        async with client.messages.stream(
-            model=MODEL_FIGURE,
-            max_tokens=200,
-            system=SYSTEM_FIGURE,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": pdf_b64,
-                            },
-                            # Cache the heavy PDF prefix so subsequent figure
-                            # explanations on the same doc reuse it.
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": page_b64,
-                            },
-                        },
-                        {"type": "text", "text": instruction},
-                    ],
-                }
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                llm.image_part("image/png", page_b64),
+                llm.text_part(instruction),
             ],
-        ) as stream:
-            async for chunk in stream.text_stream:
-                accumulated.append(chunk)
-                yield ("delta", chunk)
-        yield ("done", "".join(accumulated))
-    except anthropic.APIError as e:
-        log.exception("Anthropic API error")
-        yield ("error", f"{type(e).__name__}: {e}")
-    except Exception as e:  # noqa: BLE001
-        log.exception("Unexpected error in figure stream")
-        yield ("error", f"{type(e).__name__}: {e}")
+        }
+    ]
+    return llm.stream_completion(
+        config, system=SYSTEM_FIGURE, messages=messages, max_tokens=200
+    )
 
 
 @router.get("/figures/{figure_id}/explanation")
@@ -318,21 +294,29 @@ async def explain_figure(
             conn, doc_id, figure_id, body.page - 1, body.label
         )
 
-    # Render the page at 150 DPI; ample resolution for any figure.
+    # Render the page at 150 DPI (ample for any figure) and grab its text — the
+    # image disambiguates the figure, the text grounds the explanation.
     try:
         with PdfiumBackend.open(pdf_path) as backend:
             page_png = backend.render_page(body.page - 1, dpi=150)
+            page = backend.get_page_text(body.page - 1)
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    pdf_bytes = pdf_path.read_bytes()
+    page_text = " ".join(
+        run.text.strip()
+        for col in page.columns
+        for run in col.runs
+        if run.text.strip()
+    )
+    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "cached": False})
         final_text: str | None = None
         error_text: str | None = None
         async for event_type, payload in _stream_figure(
-            pdf_bytes, page_png, body.label, body.page
+            config, page_text, page_png, body.label, body.page
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -341,7 +325,7 @@ async def explain_figure(
                 yield _sse_event({"type": "done", "text": payload})
             elif event_type == "error":
                 error_text = payload
-                yield _sse_event({"type": "error", "message": payload})
+                yield _error_sse(payload)
 
         with db.connect(settings.db_path) as conn:
             _finalize_figure(conn, doc_id, figure_id, final_text, error_text)

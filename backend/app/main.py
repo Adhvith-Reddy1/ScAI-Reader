@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .config import load_dotenv
 from .routes import (
     annotations,
     documents,
@@ -15,10 +16,14 @@ from .routes import (
     outline,
     pages,
     search,
+    settings as settings_routes,
     text,
 )
 from .routes.deps import get_settings
 from .storage import db
+
+# Load .env (if present) before settings/clients read os.environ.
+load_dotenv()
 
 
 @asynccontextmanager
@@ -47,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(figures.router)
     app.include_router(outline.router)
     app.include_router(search.router)
+    app.include_router(settings_routes.router)
 
     @app.get("/healthz")
     def health() -> dict:

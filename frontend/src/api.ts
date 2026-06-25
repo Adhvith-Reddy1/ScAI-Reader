@@ -213,11 +213,14 @@ export async function getExplanation(
   return r.json() as Promise<Explanation>;
 }
 
+/** Error code on an SSE error frame when the only problem is a missing key. */
+export const AI_NOT_CONFIGURED_CODE = "ai_not_configured";
+
 export interface ExplainCallbacks {
   onMeta?: (kind: ExplanationKind, cached: boolean) => void;
   onDelta: (chunk: string) => void;
   onDone: (full: string) => void;
-  onError: (message: string) => void;
+  onError: (message: string, code?: string) => void;
 }
 
 export interface ChatTurn {
@@ -228,7 +231,7 @@ export interface ChatTurn {
 export interface ChatStreamCallbacks {
   onDelta: (chunk: string) => void;
   onDone: (full: string) => void;
-  onError: (message: string) => void;
+  onError: (message: string, code?: string) => void;
 }
 
 /**
@@ -243,7 +246,7 @@ async function consumeSSE(
       | { type: "meta"; kind?: ExplanationKind; cached?: boolean }
       | { type: "delta"; text: string }
       | { type: "done"; text: string }
-      | { type: "error"; message: string },
+      | { type: "error"; message: string; code?: string },
   ) => void,
   onAbortError: (e: Error) => void,
 ): Promise<void> {
@@ -306,7 +309,8 @@ function streamChatLike(
       (event) => {
         if (event.type === "delta") callbacks.onDelta(event.text);
         else if (event.type === "done") callbacks.onDone(event.text);
-        else if (event.type === "error") callbacks.onError(event.message);
+        else if (event.type === "error")
+          callbacks.onError(event.message, event.code);
       },
       (e) => callbacks.onError(e.message),
     );
@@ -389,7 +393,7 @@ export interface FigureExplainCallbacks {
   onMeta?: (cached: boolean) => void;
   onDelta: (chunk: string) => void;
   onDone: (full: string) => void;
-  onError: (message: string) => void;
+  onError: (message: string, code?: string) => void;
 }
 
 export function streamFigureExplanation(
@@ -443,11 +447,12 @@ export function streamFigureExplanation(
               | { type: "meta"; cached: boolean }
               | { type: "delta"; text: string }
               | { type: "done"; text: string }
-              | { type: "error"; message: string };
+              | { type: "error"; message: string; code?: string };
             if (event.type === "meta") callbacks.onMeta?.(event.cached);
             else if (event.type === "delta") callbacks.onDelta(event.text);
             else if (event.type === "done") callbacks.onDone(event.text);
-            else if (event.type === "error") callbacks.onError(event.message);
+            else if (event.type === "error")
+              callbacks.onError(event.message, event.code);
           } catch { /* ignore malformed */ }
         }
       }
@@ -523,7 +528,7 @@ export function streamExplanation(
               | { type: "meta"; kind: ExplanationKind; cached: boolean }
               | { type: "delta"; text: string }
               | { type: "done"; text: string }
-              | { type: "error"; message: string };
+              | { type: "error"; message: string; code?: string };
             if (event.type === "meta") {
               callbacks.onMeta?.(event.kind, event.cached);
             } else if (event.type === "delta") {
@@ -531,7 +536,7 @@ export function streamExplanation(
             } else if (event.type === "done") {
               callbacks.onDone(event.text);
             } else if (event.type === "error") {
-              callbacks.onError(event.message);
+              callbacks.onError(event.message, event.code);
             }
           } catch {
             // ignore malformed frame
@@ -542,4 +547,79 @@ export function streamExplanation(
   })();
 
   return () => ctrl.abort();
+}
+
+// --- AI setup (provider + key) ---------------------------------------------
+
+export type AiProvider =
+  | "anthropic"
+  | "openai"
+  | "openrouter"
+  | "openai_compatible";
+
+export interface AiStatus {
+  configured: boolean;
+  source: "env" | "stored" | null;
+  provider: AiProvider | null;
+  model: string | null;
+  base_url: string | null;
+  editable: boolean;
+}
+
+export interface AiConfigInput {
+  provider: AiProvider;
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+}
+
+export interface AiConfigResult {
+  configured: boolean;
+  source: "env" | "stored" | null;
+  provider: AiProvider | null;
+  model: string | null;
+  validated: boolean;
+  warning: string | null;
+}
+
+/** Current AI provider/status on the backend. */
+export async function getAiStatus(): Promise<AiStatus> {
+  const r = await fetch("/settings/ai");
+  if (!r.ok) throw new Error(`AI status failed (${r.status})`);
+  return r.json() as Promise<AiStatus>;
+}
+
+/**
+ * Save (and by default verify) the AI provider config. Rejects with the
+ * backend's human-readable message when something is malformed or refused.
+ */
+export async function saveAiConfig(input: AiConfigInput): Promise<AiConfigResult> {
+  const r = await fetch("/settings/ai", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: input.provider,
+      api_key: input.apiKey,
+      model: input.model,
+      base_url: input.baseUrl,
+    }),
+  });
+  if (!r.ok) {
+    let detail = `save failed (${r.status})`;
+    try {
+      const j = (await r.json()) as { detail?: string };
+      if (j.detail) detail = j.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(detail);
+  }
+  return r.json() as Promise<AiConfigResult>;
+}
+
+/** Remove the stored provider config. */
+export async function clearAiKey(): Promise<AiStatus> {
+  const r = await fetch("/settings/ai", { method: "DELETE" });
+  if (!r.ok) throw new Error(`remove failed (${r.status})`);
+  return r.json() as Promise<AiStatus>;
 }
