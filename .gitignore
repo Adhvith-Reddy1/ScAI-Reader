@@ -24,3 +24,6 @@ backend/tests/_failures/
 
 # Claude Code agent worktrees (per-session, tooling state)
 .claude/worktrees/
+
+# Local environment file (may hold ANTHROPIC_API_KEY)
+.env

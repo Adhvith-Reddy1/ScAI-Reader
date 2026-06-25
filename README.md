@@ -15,25 +15,50 @@
   - Streamed over SSE so the tooltip fills in live; cached in SQLite so every later hover is free (zero LLM calls).
   - The PDF is sent with `cache_control: ephemeral`, so prompt caching makes the 2nd+ call per document cheap.
 
-## Run it
+## Run it (local, one command)
 
-The AI features need an `ANTHROPIC_API_KEY`. Everything else (highlights, outline, find) works without one.
+**Prerequisites:** Python 3.12+ and Node.js 18+.
 
 ```bash
-# Backend
-cd backend
-python3.12 -m venv .venv
-.venv/bin/pip install -e ".[test]"
-export ANTHROPIC_API_KEY=sk-ant-...
-.venv/bin/uvicorn app.main:app --reload --port 8000
-
-# Frontend (separate shell)
-cd frontend
-npm install
-npm run dev     # http://localhost:5173
+git clone <repo-url> && cd ScAI-Reader
+./scripts/run.sh
 ```
 
-The Vite dev server proxies `/documents`, `/healthz`, and the SSE endpoints to the backend on `:8000`.
+That's it. On first launch `run.sh` creates the Python venv, installs the
+backend and frontend dependencies, builds the frontend, and scaffolds a
+`.env`. Then it starts a single local server and prints the URL — open
+**http://localhost:8000** in your browser. Stop with Ctrl-C; later launches
+skip straight to starting (and rebuild the frontend only if its sources
+changed).
+
+The AI features (hover explanations, figure walkthroughs) need an
+`ANTHROPIC_API_KEY`. Everything else — highlights, outline, find-in-page —
+works without one. To enable AI, put your key in `.env`:
+
+```bash
+# .env was created for you on first run; just fill it in
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Get a key at https://console.anthropic.com/. Use a different port with
+`PORT=9000 ./scripts/run.sh`.
+
+### Dev mode (hot reload, two servers)
+
+For active frontend work you may prefer Vite's hot-reload dev server:
+
+```bash
+./scripts/setup.sh --dev          # one-time: venv + deps + test toolchain
+
+# Backend (shell 1)
+cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
+# Frontend (shell 2)
+cd frontend && npm run dev        # http://localhost:5173
+```
+
+The Vite dev server proxies `/documents` and `/healthz` to the backend on
+`:8000`. (The single-server `run.sh` path needs no proxy — the API and SPA
+are same-origin.)
 
 ## Architecture
 

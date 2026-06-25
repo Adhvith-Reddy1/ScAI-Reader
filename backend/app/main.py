@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .config import load_dotenv
 from .routes import (
     annotations,
     documents,
@@ -19,6 +20,9 @@ from .routes import (
 )
 from .routes.deps import get_settings
 from .storage import db
+
+# Load .env (if present) before settings/clients read os.environ.
+load_dotenv()
 
 
 @asynccontextmanager
