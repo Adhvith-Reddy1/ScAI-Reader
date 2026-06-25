@@ -1262,3 +1262,15 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .ai-setup-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+.ai-setup-advanced {
+  align-self: flex-start;
+  margin: -2px 0 10px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-setup-advanced:hover { filter: brightness(1.15); }

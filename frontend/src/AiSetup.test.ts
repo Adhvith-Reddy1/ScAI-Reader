@@ -89,6 +89,40 @@ describe("openAiSetup", () => {
     expect(feedback.dataset.kind).toBe("ok");
   });
 
+  it("hides the model behind Advanced for cloud providers", async () => {
+    stubStatus({ configured: false });
+    openAiSetup();
+    await flush();
+    const modelField = document.querySelector(
+      ".ai-setup-model-field",
+    ) as HTMLElement;
+    const advanced = document.querySelector(
+      ".ai-setup-advanced",
+    ) as HTMLButtonElement;
+    // Default provider (anthropic): model hidden, Advanced offered.
+    expect(modelField.hidden).toBe(true);
+    expect(advanced.hidden).toBe(false);
+    advanced.click();
+    expect(modelField.hidden).toBe(false);
+  });
+
+  it("shows the model inline and required for OpenAI-compatible", async () => {
+    stubStatus({ configured: false });
+    openAiSetup();
+    await flush();
+    const sel = document.querySelector(".ai-setup-provider") as HTMLSelectElement;
+    sel.value = "openai_compatible";
+    sel.dispatchEvent(new Event("change"));
+    const modelField = document.querySelector(
+      ".ai-setup-model-field",
+    ) as HTMLElement;
+    const advanced = document.querySelector(
+      ".ai-setup-advanced",
+    ) as HTMLButtonElement;
+    expect(modelField.hidden).toBe(false);
+    expect(advanced.hidden).toBe(true);
+  });
+
   it("shows the base URL field for an OpenAI-compatible provider", async () => {
     stubStatus({ configured: false });
     openAiSetup();
