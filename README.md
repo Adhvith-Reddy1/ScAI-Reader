@@ -51,9 +51,11 @@ AI" prompt instead of an error. Supported:
 
 - **Anthropic (Claude)** — key from [console.anthropic.com](https://console.anthropic.com/settings/keys).
 - **OpenAI (GPT)** — key from [platform.openai.com](https://platform.openai.com/api-keys).
-- **OpenAI-compatible** — any endpoint that speaks the OpenAI API: OpenRouter,
-  Groq, Together, Azure OpenAI, or **local models** via Ollama / LM Studio.
-  Enter the base URL (e.g. `http://localhost:11434/v1`) and a model name.
+- **OpenRouter** — key from [openrouter.ai/keys](https://openrouter.ai/keys);
+  one key, hundreds of models. Base URL is filled in for you.
+- **OpenAI-compatible** — any other endpoint that speaks the OpenAI API: Groq,
+  Together, Azure OpenAI, or **local models** via Ollama / LM Studio. Enter the
+  base URL (e.g. `http://localhost:11434/v1`) and a model name.
 
 Each path sends only the relevant page's text (plus the page image for figures)
 to the provider — never the whole PDF — so behaviour is consistent across

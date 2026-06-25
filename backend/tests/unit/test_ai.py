@@ -96,6 +96,28 @@ def test_resolve_model_user_override_wins(settings):
     assert cfg.resolve_model("good") == "gpt-4.1"
 
 
+def test_openrouter_defaults_base_url_and_model(settings):
+    ai.set_provider_config(settings, "openrouter", "sk-or-abc")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.provider == "openrouter"
+    # Base URL is supplied by the preset, not the user.
+    assert cfg.resolve_base_url() == "https://openrouter.ai/api/v1"
+    assert cfg.resolve_model("good") == ai.DEFAULT_MODELS["openrouter"]["good"]
+
+
+def test_openrouter_key_accepted_without_format_hint(settings):
+    # OpenRouter keys (sk-or-...) aren't OpenAI/Anthropic shaped; accept them.
+    assert ai.key_format_hint("openrouter", "sk-or-v1-xyz") is None
+
+
+def test_explicit_base_url_overrides_preset(settings):
+    ai.set_provider_config(
+        settings, "openrouter", "sk-or-x", base_url="https://proxy/v1"
+    )
+    cfg = ai.get_provider_config(settings)
+    assert cfg.resolve_base_url() == "https://proxy/v1"
+
+
 def test_clear_stored_config(settings):
     ai.set_provider_config(settings, "anthropic", "sk-ant-abc")
     ai.clear_stored_config(settings)

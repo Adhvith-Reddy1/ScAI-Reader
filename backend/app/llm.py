@@ -130,7 +130,7 @@ async def _stream_openai(
     import openai
 
     client = openai.AsyncOpenAI(
-        api_key=config.api_key, base_url=config.base_url or None
+        api_key=config.api_key, base_url=config.resolve_base_url()
     )
     o_messages = [{"role": "system", "content": system}]
     o_messages += [
@@ -188,7 +188,7 @@ async def stream_completion(
 
     if config.provider == "anthropic":
         gen = _stream_anthropic(config, model, system, messages, max_tokens)
-    else:  # openai or openai_compatible
+    else:  # openai / openrouter / openai_compatible
         gen = _stream_openai(config, model, system, messages, max_tokens)
     async for event in gen:
         yield event
@@ -218,7 +218,7 @@ def validate_config(config: ProviderConfig) -> tuple[bool, str | None]:
             import openai
 
             client = openai.OpenAI(
-                api_key=config.api_key, base_url=config.base_url or None
+                api_key=config.api_key, base_url=config.resolve_base_url()
             )
             try:
                 client.models.list()

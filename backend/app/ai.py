@@ -29,8 +29,17 @@ AI_NOT_CONFIGURED_MESSAGE = (
 AI_NOT_CONFIGURED_CODE = "ai_not_configured"
 
 # Recognised providers. "openai_compatible" is OpenAI's wire protocol pointed at
-# a custom base URL (covers Azure, OpenRouter, Groq, Together, Ollama, …).
-PROVIDERS = ("anthropic", "openai", "openai_compatible")
+# a custom base URL (covers Azure, Groq, Together, Ollama, …); "openrouter" is a
+# named preset for that protocol with a fixed base URL.
+PROVIDERS = ("anthropic", "openai", "openrouter", "openai_compatible")
+
+# Providers that speak the OpenAI wire protocol (handled by the OpenAI client).
+OPENAI_FAMILY = ("openai", "openrouter", "openai_compatible")
+
+# Fixed base URLs for named presets. openai_compatible supplies its own.
+DEFAULT_BASE_URLS: dict[str, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+}
 
 # Per-provider default models for the two quality tiers the app uses: "fast"
 # for short glossary definitions, "good" for explanations/chat/figures. A
@@ -38,6 +47,7 @@ PROVIDERS = ("anthropic", "openai", "openai_compatible")
 DEFAULT_MODELS: dict[str, dict[str, str]] = {
     "anthropic": {"fast": "claude-haiku-4-5", "good": "claude-sonnet-4-6"},
     "openai": {"fast": "gpt-4o-mini", "good": "gpt-4o"},
+    "openrouter": {"fast": "openai/gpt-4o-mini", "good": "openai/gpt-4o"},
     # openai_compatible has no sensible default — the model is required.
 }
 
@@ -56,6 +66,10 @@ class ProviderConfig:
         if self.model:
             return self.model
         return DEFAULT_MODELS.get(self.provider, {}).get(tier, "")
+
+    def resolve_base_url(self) -> str | None:
+        """The base URL to talk to: an explicit one wins, else a preset's."""
+        return self.base_url or DEFAULT_BASE_URLS.get(self.provider)
 
 
 def _config_path(settings: Settings) -> Path:

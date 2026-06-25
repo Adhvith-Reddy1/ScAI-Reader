@@ -56,9 +56,20 @@ const PROVIDERS: { value: AiProvider; meta: ProviderMeta }[] = [
     },
   },
   {
+    value: "openrouter",
+    meta: {
+      label: "OpenRouter",
+      keyPlaceholder: "sk-or-...",
+      keyUrl: "https://openrouter.ai/keys",
+      keyUrlLabel: "OpenRouter",
+      modelPlaceholder: "openai/gpt-4o (default)",
+      needsBaseUrl: false,
+    },
+  },
+  {
     value: "openai_compatible",
     meta: {
-      label: "OpenAI-compatible (OpenRouter, Groq, Ollama, …)",
+      label: "OpenAI-compatible (Groq, Together, Ollama, …)",
       keyPlaceholder: "key (any value for local servers)",
       keyUrl: "",
       keyUrlLabel: "",

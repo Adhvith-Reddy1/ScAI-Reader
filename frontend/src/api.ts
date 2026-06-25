@@ -551,7 +551,11 @@ export function streamExplanation(
 
 // --- AI setup (provider + key) ---------------------------------------------
 
-export type AiProvider = "anthropic" | "openai" | "openai_compatible";
+export type AiProvider =
+  | "anthropic"
+  | "openai"
+  | "openrouter"
+  | "openai_compatible";
 
 export interface AiStatus {
   configured: boolean;

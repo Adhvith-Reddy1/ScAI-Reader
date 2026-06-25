@@ -100,6 +100,21 @@ def test_openai_compatible_requires_base_url_and_model(app_client):
 
 
 @pytest.mark.integration
+def test_save_openrouter_without_base_url(app_client):
+    # OpenRouter needs no base URL from the user (it's a preset).
+    r = app_client.put(
+        "/settings/ai",
+        json={
+            "provider": "openrouter",
+            "api_key": "sk-or-v1-abc",
+            "validate_key": False,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["provider"] == "openrouter"
+
+
+@pytest.mark.integration
 def test_unknown_provider_rejected(app_client):
     r = app_client.put(
         "/settings/ai",
