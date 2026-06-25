@@ -2,68 +2,81 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { buildExplainButton } from "./ExplainButton.ts";
 import { getExplainMode, _resetForTest } from "./explainMode.ts";
 
-describe("ExplainButton", () => {
+describe("ExplainButton (split button)", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     _resetForTest();
   });
 
-  it("renders button + hidden popover", () => {
+  it("renders the button group + caret + hidden popover", () => {
     const root = buildExplainButton();
     document.body.appendChild(root);
     expect(root.querySelector(".explain-button")).not.toBeNull();
+    expect(root.querySelector(".explain-caret")).not.toBeNull();
     expect(
       (root.querySelector(".explain-popover") as HTMLDivElement).hidden,
     ).toBe(true);
   });
 
-  it("opens popover on button click", () => {
+  it("main button activates with the current color, without opening popover", () => {
     const root = buildExplainButton();
     document.body.appendChild(root);
     (root.querySelector(".explain-button") as HTMLButtonElement).click();
+    expect(getExplainMode()).toEqual({ active: true, color: "blue" });
+    expect(
+      (root.querySelector(".explain-popover") as HTMLDivElement).hidden,
+    ).toBe(true);
+  });
+
+  it("main button toggles off on a second click (color retained)", () => {
+    const root = buildExplainButton();
+    document.body.appendChild(root);
+    const button = root.querySelector(".explain-button") as HTMLButtonElement;
+    button.click();
+    expect(getExplainMode().active).toBe(true);
+    button.click();
+    expect(getExplainMode()).toEqual({ active: false, color: "blue" });
+  });
+
+  it("caret opens the color popover", () => {
+    const root = buildExplainButton();
+    document.body.appendChild(root);
+    (root.querySelector(".explain-caret") as HTMLButtonElement).click();
     expect(
       (root.querySelector(".explain-popover") as HTMLDivElement).hidden,
     ).toBe(false);
   });
 
-  it("picking a swatch activates explain mode with that color", () => {
+  it("picking a swatch sets color and activates", () => {
     const root = buildExplainButton();
     document.body.appendChild(root);
-    (root.querySelector(".explain-button") as HTMLButtonElement).click();
+    (root.querySelector(".explain-caret") as HTMLButtonElement).click();
     (root.querySelector('.explain-popover [data-color="green"]') as HTMLButtonElement).click();
     expect(getExplainMode()).toEqual({ active: true, color: "green" });
+    expect(
+      (root.querySelector(".explain-popover") as HTMLDivElement).hidden,
+    ).toBe(true);
   });
 
-  it("Off button deactivates", () => {
+  it("after choosing a color, the main button reactivates that color", () => {
     const root = buildExplainButton();
     document.body.appendChild(root);
-    (root.querySelector(".explain-button") as HTMLButtonElement).click();
+    const button = root.querySelector(".explain-button") as HTMLButtonElement;
+    (root.querySelector(".explain-caret") as HTMLButtonElement).click();
     (root.querySelector('.explain-popover [data-color="red"]') as HTMLButtonElement).click();
-    expect(getExplainMode().active).toBe(true);
-
-    (root.querySelector(".explain-button") as HTMLButtonElement).click(); // open
-    (root.querySelector(".explain-off") as HTMLButtonElement).click();
+    button.click(); // off
     expect(getExplainMode().active).toBe(false);
+    button.click(); // on again — keeps red
+    expect(getExplainMode()).toEqual({ active: true, color: "red" });
   });
 
   it("button reflects active state via data attrs", () => {
     const root = buildExplainButton();
     document.body.appendChild(root);
     const button = root.querySelector(".explain-button") as HTMLButtonElement;
-    button.click();
+    (root.querySelector(".explain-caret") as HTMLButtonElement).click();
     (root.querySelector('.explain-popover [data-color="pink"]') as HTMLButtonElement).click();
     expect(button.dataset.active).toBe("true");
     expect(button.dataset.color).toBe("pink");
-  });
-
-  it("clicking button while active toggles off", () => {
-    const root = buildExplainButton();
-    document.body.appendChild(root);
-    const button = root.querySelector(".explain-button") as HTMLButtonElement;
-    button.click();
-    (root.querySelector('.explain-popover [data-color="blue"]') as HTMLButtonElement).click();
-    expect(getExplainMode().active).toBe(true);
-    button.click();
-    expect(getExplainMode().active).toBe(false);
   });
 });

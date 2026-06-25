@@ -305,26 +305,52 @@ body {
 .hl-button-root {
   position: relative;
 }
+.hl-button-group {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
+}
+.hl-button-group[data-active="true"] {
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+}
 .hl-button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: none;
   color: var(--text);
   padding: 6px 12px;
-  border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
-  transition: background 80ms ease, border-color 80ms ease;
+  transition: background 80ms ease;
 }
 .hl-button:hover {
   background: rgba(255, 255, 255, 0.05);
 }
 .hl-button[data-active="true"] {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+}
+.hl-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--muted);
+  padding: 0 7px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+.hl-caret:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
 }
 .hl-indicator {
   width: 12px;
@@ -367,19 +393,6 @@ body {
 }
 .hl-popover .swatch:hover {
   transform: scale(1.12);
-}
-.hl-popover .hl-off {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--muted);
-  padding: 4px 10px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.hl-popover .hl-off:hover {
-  color: var(--text);
-  border-color: rgba(255, 255, 255, 0.4);
 }
 
 /* Show a marker cursor over selectable text while in highlight mode. */
@@ -1275,26 +1288,50 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 }
 .ai-setup-advanced:hover { filter: brightness(1.15); }
 
-/* --- Explain tool: separate nav button + color popover ------------------- */
+/* --- Explain tool: split button + color popover ------------------------- */
 .explain-button-root { position: relative; }
+.explain-button-group {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
+}
+.explain-button-group[data-active="true"] {
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+}
 .explain-button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: none;
   color: var(--text);
   padding: 6px 12px;
-  border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
-  transition: background 80ms ease, border-color 80ms ease;
+  transition: background 80ms ease;
 }
 .explain-button:hover { background: rgba(255, 255, 255, 0.05); }
-.explain-button[data-active="true"] {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+.explain-button[data-active="true"] { background: rgba(255, 255, 255, 0.08); }
+.explain-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--muted);
+  padding: 0 7px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+.explain-caret:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
 }
 .explain-indicator {
   width: 12px;
@@ -1334,20 +1371,6 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   transition: transform 80ms ease;
 }
 .explain-popover .swatch:hover { transform: scale(1.12); }
-.explain-popover .explain-off {
-  align-self: flex-start;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--muted);
-  padding: 4px 10px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.explain-popover .explain-off:hover {
-  color: var(--text);
-  border-color: rgba(255, 255, 255, 0.4);
-}
 
 /* Marker cursor over selectable text while in explain mode. */
 html[data-explain-active="true"] .text-column { cursor: cell; }
