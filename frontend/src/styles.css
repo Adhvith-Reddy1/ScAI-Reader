@@ -22,14 +22,28 @@ body {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   padding: 10px 16px;
   background: var(--surface);
   border-bottom: 1px solid rgba(255,255,255,0.06);
   box-shadow: 0 1px 0 rgba(0,0,0,0.2);
 }
 
-.brand { font-weight: 600; letter-spacing: 0.2px; }
+/* Related controls cluster into groups; thin separators divide the clusters. */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toolbar-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.brand { font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
 
 .upload span {
   display: inline-block;
@@ -40,10 +54,22 @@ body {
   cursor: pointer;
   font-size: 14px;
   user-select: none;
+  white-space: nowrap;
 }
 .upload span:hover { filter: brightness(1.1); }
 
-.info { color: var(--muted); font-size: 13px; }
+/* Document title: takes the slack in the middle, truncates instead of
+   wrapping the whole bar to a second row. Full text shown on hover. */
+.info {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
 
 .main-area {
   flex: 1;
@@ -352,13 +378,13 @@ body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
 }
-.hl-indicator {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+.hl-icon {
+  display: inline-flex;
+  align-items: center;
+  /* color is set inline to the current highlight color; the SVG inherits it */
+  filter: drop-shadow(0 0 0.5px rgba(0, 0, 0, 0.4));
 }
+.hl-icon svg { display: block; }
 .hl-label {
   font-weight: 500;
   letter-spacing: 0.1px;
@@ -1097,8 +1123,6 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 
 /* --- AI setup: nav button, status dot, first-run nudge, dialog ----------- */
 
-#ai-setup-slot { margin-left: auto; }
-
 .ai-setup-button {
   display: inline-flex;
   align-items: center;
@@ -1110,7 +1134,11 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
+/* Status tint so it reads as a state, not a color-swatch like the tools. */
+.ai-setup-button[data-configured="true"] { border-color: rgba(76, 175, 80, 0.5); }
+.ai-setup-button[data-configured="false"] { border-color: rgba(224, 160, 32, 0.45); }
 .ai-setup-button:hover { background: rgba(255, 255, 255, 0.06); }
 .ai-status-dot {
   width: 8px;
@@ -1333,13 +1361,12 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
 }
-.explain-indicator {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+.explain-icon {
+  display: inline-flex;
+  align-items: center;
+  filter: drop-shadow(0 0 0.5px rgba(0, 0, 0, 0.4));
 }
+.explain-icon svg { display: block; }
 .explain-label { font-weight: 500; letter-spacing: 0.1px; }
 
 .explain-popover {

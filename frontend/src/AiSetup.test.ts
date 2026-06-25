@@ -37,6 +37,7 @@ describe("buildAiSetupButton", () => {
     await flush();
     expect(btn.dataset.configured).toBe("false");
     expect(btn.title).toMatch(/set up/i);
+    expect(btn.textContent).toContain("AI off");
   });
 
   it("reflects configured status", async () => {
@@ -44,6 +45,7 @@ describe("buildAiSetupButton", () => {
     const btn = buildAiSetupButton();
     await flush();
     expect(btn.dataset.configured).toBe("true");
+    expect(btn.textContent).toContain("AI on");
   });
 
   it("opens the dialog on click", async () => {

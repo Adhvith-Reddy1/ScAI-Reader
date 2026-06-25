@@ -241,6 +241,8 @@ async function renderDocument(
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
+  // The bar truncates the title with an ellipsis; show the full text on hover.
+  docInfo.title = docInfo.textContent;
   if (pageList) {
     pageList.dispose();
     pageList = null;
