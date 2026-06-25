@@ -10,6 +10,7 @@ import {
   setDocumentBounds,
   setViewport,
 } from "./fit.ts";
+import { buildAiSetupButton, maybeShowAiNudge } from "./AiSetup.ts";
 import { buildEraseButton } from "./EraseButton.ts";
 import { subscribeEraseMode } from "./eraseMode.ts";
 import { buildFindBar } from "./FindBar.ts";
@@ -55,6 +56,12 @@ buttonSlot.appendChild(buildHighlightButton());
 eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
+
+const aiSetupSlot = document.getElementById("ai-setup-slot") as HTMLElement;
+aiSetupSlot.appendChild(buildAiSetupButton());
+
+const bannerSlot = document.getElementById("banner-slot") as HTMLElement;
+void maybeShowAiNudge(bannerSlot);
 
 const findBar = buildFindBar();
 viewer.appendChild(findBar.element);

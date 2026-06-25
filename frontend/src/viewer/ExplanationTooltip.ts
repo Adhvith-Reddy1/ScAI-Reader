@@ -12,7 +12,8 @@
  * the cursor against each blue annotation group's bounding rect.
  */
 
-import type { DocumentMeta } from "../api.ts";
+import { AI_NOT_CONFIGURED_CODE, type DocumentMeta } from "../api.ts";
+import { openAiSetup } from "../AiSetup.ts";
 import {
   getChat,
   getExplanationState,
@@ -453,8 +454,27 @@ function render(annotationId: string): void {
     body.textContent = state.content;
   } else if (state.status === "error") {
     el.classList.add("is-error");
-    title.textContent = "Explanation unavailable";
-    body.textContent = state.error;
+    if (state.code === AI_NOT_CONFIGURED_CODE) {
+      // Not a failure so much as "not turned on yet" — guide the reader to
+      // setup instead of showing a dead-end error.
+      title.textContent = "AI isn't set up yet";
+      body.textContent = "";
+      const msg = document.createElement("span");
+      msg.textContent =
+        "Turn on AI explanations with a one-time Anthropic API key. ";
+      const setup = document.createElement("button");
+      setup.type = "button";
+      setup.className = "explanation-setup-ai";
+      setup.textContent = "Set up AI →";
+      setup.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAiSetup();
+      });
+      body.append(msg, setup);
+    } else {
+      title.textContent = "Explanation unavailable";
+      body.textContent = state.error;
+    }
   } else {
     el.classList.add("is-empty");
     title.textContent = "Explanation";

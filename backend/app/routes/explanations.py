@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import AsyncIterator, Literal
 
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import ai
 from ..config import Settings
 from ..pdf.pdfium_backend import PdfiumBackend
 from ..storage import db, files
@@ -252,6 +252,15 @@ def _sse_event(data: dict) -> bytes:
     return f"data: {json.dumps(data)}\n\n".encode("utf-8")
 
 
+def _error_sse(message: str) -> bytes:
+    """Error frame, tagged with a code when AI simply isn't configured so the
+    UI can offer one-click setup instead of showing a raw error."""
+    frame: dict = {"type": "error", "message": message}
+    if message == ai.AI_NOT_CONFIGURED_MESSAGE:
+        frame["code"] = ai.AI_NOT_CONFIGURED_CODE
+    return _sse_event(frame)
+
+
 def _pdf_document_block(pdf_b64: str) -> dict:
     """An Anthropic `document` content block carrying the whole PDF. The
     cache_control marker lets follow-up calls for the same document hit
@@ -272,6 +281,7 @@ async def _stream_anthropic(
     system: str,
     messages: list[dict],
     max_tokens: int,
+    api_key: str | None,
 ) -> AsyncIterator[tuple[str, str]]:
     """Yields (event_type, payload) tuples.
 
@@ -280,11 +290,11 @@ async def _stream_anthropic(
       "done"   -> payload is the full accumulated text
       "error"  -> payload is the error message
     """
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        yield ("error", "ANTHROPIC_API_KEY not set on backend")
+    if not api_key:
+        yield ("error", ai.AI_NOT_CONFIGURED_MESSAGE)
         return
 
-    client = anthropic.AsyncAnthropic()
+    client = anthropic.AsyncAnthropic(api_key=api_key)
     accumulated: list[str] = []
     try:
         async with client.messages.stream(
@@ -309,6 +319,7 @@ async def _stream_claude(
     page_text: str,
     text: str,
     kind: ExplanationKind,
+    api_key: str | None,
 ) -> AsyncIterator[tuple[str, str]]:
     model = MODEL_DEFINITION if kind == "definition" else MODEL_EXPLANATION
     system = SYSTEM_DEFINITION if kind == "definition" else SYSTEM_EXPLANATION
@@ -331,7 +342,7 @@ async def _stream_claude(
     # Plain text only — no PDF document block — so there's no large prefill.
     messages = [{"role": "user", "content": instruction}]
     async for event in _stream_anthropic(
-        model, system, messages, 80 if kind == "definition" else 140
+        model, system, messages, 80 if kind == "definition" else 140, api_key
     ):
         yield event
 
@@ -380,13 +391,14 @@ async def explain(
     # Only the highlighted page's text is sent as context (not the whole PDF),
     # which is what keeps the first explanation fast.
     page_text = _page_text(settings, doc_id, page_index)
+    api_key = ai.get_api_key(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": kind, "cached": False})
         final_text: str | None = None
         error_text: str | None = None
         async for event_type, payload in _stream_claude(
-            page_text, body.text, kind
+            page_text, body.text, kind, api_key
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -395,7 +407,7 @@ async def explain(
                 yield _sse_event({"type": "done", "text": payload})
             elif event_type == "error":
                 error_text = payload
-                yield _sse_event({"type": "error", "message": payload})
+                yield _error_sse(payload)
 
         with db.connect(settings.db_path) as conn:
             _finalize(conn, annotation_id, final_text, error_text)
@@ -457,18 +469,19 @@ async def chat(
 
     pdf_b64 = base64.standard_b64encode(pdf_path.read_bytes()).decode("ascii")
     messages = _build_chat_messages(pdf_b64, body)
+    api_key = ai.get_api_key(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": body.kind, "cached": False})
         async for event_type, payload in _stream_anthropic(
-            MODEL_EXPLANATION, SYSTEM_CHAT, messages, 400
+            MODEL_EXPLANATION, SYSTEM_CHAT, messages, 400, api_key
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
             elif event_type == "done":
                 yield _sse_event({"type": "done", "text": payload})
             elif event_type == "error":
-                yield _sse_event({"type": "error", "message": payload})
+                yield _error_sse(payload)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -514,6 +527,7 @@ async def refine(
             ],
         }
     ]
+    api_key = ai.get_api_key(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event(
@@ -526,6 +540,7 @@ async def refine(
             system,
             messages,
             80 if kind == "definition" else 140,
+            api_key,
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -534,7 +549,7 @@ async def refine(
                 yield _sse_event({"type": "done", "text": payload})
             elif event_type == "error":
                 error_text = payload
-                yield _sse_event({"type": "error", "message": payload})
+                yield _error_sse(payload)
 
         # Only overwrite the stored tooltip on a clean rewrite — a failed
         # refine must not wipe the explanation the reader already had.

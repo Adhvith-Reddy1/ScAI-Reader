@@ -16,6 +16,7 @@ from .routes import (
     outline,
     pages,
     search,
+    settings as settings_routes,
     text,
 )
 from .routes.deps import get_settings
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(figures.router)
     app.include_router(outline.router)
     app.include_router(search.router)
+    app.include_router(settings_routes.router)
 
     @app.get("/healthz")
     def health() -> dict:

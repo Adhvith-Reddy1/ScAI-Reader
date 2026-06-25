@@ -15,33 +15,46 @@
   - Streamed over SSE so the tooltip fills in live; cached in SQLite so every later hover is free (zero LLM calls).
   - The PDF is sent with `cache_control: ephemeral`, so prompt caching makes the 2nd+ call per document cheap.
 
-## Run it (local, one command)
+## Run it (local)
 
 **Prerequisites:** Python 3.12+ and Node.js 18+.
 
+**Easiest — one command** (installs, builds, and tells you how to start):
+
 ```bash
-git clone <repo-url> && cd ScAI-Reader
+curl -fsSL https://raw.githubusercontent.com/Adhvith-Reddy1/ScAI-Reader/main/scripts/install.sh | bash
+```
+
+**Or from a clone:**
+
+```bash
+git clone https://github.com/Adhvith-Reddy1/ScAI-Reader.git && cd ScAI-Reader
 ./scripts/run.sh
 ```
 
-That's it. On first launch `run.sh` creates the Python venv, installs the
-backend and frontend dependencies, builds the frontend, and scaffolds a
-`.env`. Then it starts a single local server and prints the URL — open
-**http://localhost:8000** in your browser. Stop with Ctrl-C; later launches
-skip straight to starting (and rebuild the frontend only if its sources
-changed).
+On first launch `run.sh` creates the Python venv, installs the backend and
+frontend dependencies, and builds the frontend. Then it starts a single local
+server and opens **http://localhost:8000** in your browser automatically. Stop
+with Ctrl-C; later launches skip straight to starting (rebuilding the frontend
+only if its sources changed). Use a different port with `PORT=9000 ./scripts/run.sh`,
+or skip the auto-open with `NO_OPEN=1`.
 
-The AI features (hover explanations, figure walkthroughs) need an
-`ANTHROPIC_API_KEY`. Everything else — highlights, outline, find-in-page —
-works without one. To enable AI, put your key in `.env`:
+### Turning on AI explanations
 
-```bash
-# .env was created for you on first run; just fill it in
-ANTHROPIC_API_KEY=sk-ant-...
-```
+The AI features (hover explanations, figure walkthroughs) use Anthropic's
+Claude and need an API key. **Everything else — highlights, outline,
+find-in-page — works without one.**
 
-Get a key at https://console.anthropic.com/. Use a different port with
-`PORT=9000 ./scripts/run.sh`.
+You don't need the command line: click **AI** in the top bar (or the first-run
+banner), follow the link to create a key at
+[console.anthropic.com](https://console.anthropic.com/settings/keys), paste it,
+and Save. The key is verified, then stored locally on the backend (usage is
+billed to your Anthropic account). Until then, AI tooltips show a friendly
+"Set up AI" prompt instead of an error.
+
+Advanced/hosted setups can instead export `ANTHROPIC_API_KEY` (or put it in
+`.env`); an environment key always takes precedence and is managed outside the
+app.
 
 ### Dev mode (hot reload, two servers)
 
@@ -109,10 +122,14 @@ The AI path is not yet covered end-to-end (would need a live key in CI). The cla
 
 ## Configuration
 
+The AI key is normally set in-app (see "Turning on AI explanations"); it's
+stored at `<data dir>/ai_config.json`. The env var below is an optional
+override for advanced/hosted use and always wins over the stored key.
+
 | Env var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Required for `/explain`. Without it the SSE stream emits one error event and the tooltip shows "Explanation unavailable". |
-| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, and the render cache. Defaults to `./data`. |
+| `ANTHROPIC_API_KEY` | Optional override for the in-app key. When set, AI is on and the key is managed outside the app (the in-app setter is disabled). |
+| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, the render cache, and `ai_config.json`. Defaults to `./data`. |
 
 ## Roadmap
 

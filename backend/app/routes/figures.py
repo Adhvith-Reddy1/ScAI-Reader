@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -25,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import ai
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.figures import FigureRegion, detect_figures
@@ -59,6 +59,15 @@ def _now() -> str:
 
 def _sse_event(data: dict) -> bytes:
     return f"data: {json.dumps(data)}\n\n".encode("utf-8")
+
+
+def _error_sse(message: str) -> bytes:
+    """Error frame, tagged with a code when AI isn't configured so the UI can
+    offer one-click setup instead of showing a raw error."""
+    frame: dict = {"type": "error", "message": message}
+    if message == ai.AI_NOT_CONFIGURED_MESSAGE:
+        frame["code"] = ai.AI_NOT_CONFIGURED_CODE
+    return _sse_event(frame)
 
 
 def _doc_exists(settings: Settings, doc_id: str) -> bool:
@@ -208,12 +217,13 @@ async def _stream_figure(
     page_png_bytes: bytes,
     label: str,
     page_number: int,
+    api_key: str | None,
 ) -> AsyncIterator[tuple[str, str]]:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        yield ("error", "ANTHROPIC_API_KEY not set on backend")
+    if not api_key:
+        yield ("error", ai.AI_NOT_CONFIGURED_MESSAGE)
         return
 
-    client = anthropic.AsyncAnthropic()
+    client = anthropic.AsyncAnthropic(api_key=api_key)
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
     page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
     instruction = (
@@ -326,13 +336,14 @@ async def explain_figure(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     pdf_bytes = pdf_path.read_bytes()
+    api_key = ai.get_api_key(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "cached": False})
         final_text: str | None = None
         error_text: str | None = None
         async for event_type, payload in _stream_figure(
-            pdf_bytes, page_png, body.label, body.page
+            pdf_bytes, page_png, body.label, body.page, api_key
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
@@ -341,7 +352,7 @@ async def explain_figure(
                 yield _sse_event({"type": "done", "text": payload})
             elif event_type == "error":
                 error_text = payload
-                yield _sse_event({"type": "error", "message": payload})
+                yield _error_sse(payload)
 
         with db.connect(settings.db_path) as conn:
             _finalize_figure(conn, doc_id, figure_id, final_text, error_text)

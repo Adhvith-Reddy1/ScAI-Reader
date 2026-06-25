@@ -1081,3 +1081,165 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .figure-card.is-error {
   border-color: rgba(244, 67, 54, 0.6);
 }
+
+/* --- AI setup: nav button, status dot, first-run nudge, dialog ----------- */
+
+#ai-setup-slot { margin-left: auto; }
+
+.ai-setup-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-setup-button:hover { background: rgba(255, 255, 255, 0.06); }
+.ai-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4);
+}
+.ai-setup-button[data-configured="true"] .ai-status-dot { background: #4caf50; }
+.ai-setup-button[data-configured="false"] .ai-status-dot { background: #e0a020; }
+
+.ai-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
+  background: rgba(79, 140, 255, 0.12);
+  border-bottom: 1px solid rgba(79, 140, 255, 0.3);
+  font-size: 13px;
+  color: var(--text);
+}
+.ai-nudge-actions { display: inline-flex; gap: 8px; flex-shrink: 0; }
+.ai-nudge-setup {
+  padding: 4px 12px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-nudge-setup:hover { filter: brightness(1.1); }
+.ai-nudge-dismiss {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-nudge-dismiss:hover { color: var(--text); }
+
+.ai-setup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.ai-setup-dialog {
+  position: relative;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 24px 24px 20px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.ai-setup-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.ai-setup-intro { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.ai-setup-steps { margin: 0 0 16px; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.ai-setup-steps code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.ai-setup-link { color: var(--accent); }
+.ai-setup-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-setup-close:hover { color: var(--text); }
+.ai-setup-form { display: flex; gap: 8px; margin-bottom: 10px; }
+.ai-setup-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ai-setup-save {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.ai-setup-save:hover { filter: brightness(1.1); }
+.ai-setup-save:disabled { opacity: 0.6; cursor: default; }
+.ai-setup-feedback { margin: 0 0 8px; font-size: 13px; min-height: 18px; }
+.ai-setup-feedback[data-kind="error"] { color: #ff6b6b; }
+.ai-setup-feedback[data-kind="ok"] { color: #4caf50; }
+.ai-setup-feedback[data-kind="info"] { color: var(--muted); }
+.ai-setup-configured {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ai-setup-on { color: #4caf50; font-size: 14px; }
+.ai-setup-remove {
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-setup-remove:hover { color: var(--text); border-color: rgba(244, 67, 54, 0.5); }
+
+.explanation-setup-ai {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.explanation-setup-ai:hover { filter: brightness(1.1); }

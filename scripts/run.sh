@@ -33,11 +33,28 @@ else
   AI="disabled (set ANTHROPIC_API_KEY in .env to enable)"
 fi
 
+URL="http://localhost:${PORT}"
+
 say "Starting ScAI-Reader"
-echo "  URL:          http://localhost:${PORT}"
+echo "  URL:          ${URL}"
 echo "  AI features:  ${AI}"
 echo "  Stop:         Ctrl-C"
 echo
+
+# Open the browser once the server is accepting connections (best-effort).
+# Set NO_OPEN=1 to skip (e.g. on a headless machine).
+if [ "${NO_OPEN:-0}" != "1" ]; then
+  ( for _ in $(seq 1 40); do
+      if curl -fsS "${URL}/healthz" >/dev/null 2>&1; then
+        if command -v open >/dev/null 2>&1; then open "$URL"          # macOS
+        elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" # Linux
+        elif command -v powershell.exe >/dev/null 2>&1; then powershell.exe -NoProfile start "$URL"  # Windows/WSL
+        fi
+        break
+      fi
+      sleep 0.5
+    done ) >/dev/null 2>&1 &
+fi
 
 cd backend
 exec ./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$PORT"

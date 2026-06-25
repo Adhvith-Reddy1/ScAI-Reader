@@ -85,7 +85,8 @@ def test_chat_without_key_streams_error(app_client, simple_pdf):
     assert r.status_code == 200
     body = _sse_text(r)
     assert '"type": "meta"' in body
-    assert "ANTHROPIC_API_KEY not set" in body
+    assert "AI isn't set up yet" in body
+    assert "ai_not_configured" in body
 
 
 @pytest.mark.integration
@@ -106,7 +107,7 @@ def test_refine_without_key_does_not_overwrite(app_client, simple_pdf):
         f"/documents/{doc_id}/annotations/{ann_id}/refine", json=_chat_body()
     )
     assert r.status_code == 200
-    assert "ANTHROPIC_API_KEY not set" in _sse_text(r)
+    assert "AI isn't set up yet" in _sse_text(r)
 
     # A failed refine must not have written a (bogus) explanation row.
     got = app_client.get(
@@ -128,7 +129,7 @@ def test_explain_uses_page_text_path_and_streams_error(app_client, simple_pdf):
     assert r.status_code == 200
     body = _sse_text(r)
     assert '"type": "meta"' in body
-    assert "ANTHROPIC_API_KEY not set" in body
+    assert "AI isn't set up yet" in body
 
 
 @pytest.mark.integration
