@@ -37,8 +37,14 @@ export function buildExplainButton(): HTMLElement {
   button.className = "explain-button";
   button.setAttribute("aria-label", "Explain");
 
+  // Sparkle (AI) icon tinted to the current color — signals "the AI tool" and
+  // shows the chosen explanation-highlight color at once.
   const indicator = document.createElement("span");
-  indicator.className = "explain-indicator";
+  indicator.className = "explain-icon";
+  indicator.innerHTML =
+    '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">' +
+    '<path fill="currentColor" d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/>' +
+    '</svg>';
   const label = document.createElement("span");
   label.className = "explain-label";
   label.textContent = "Explain";
@@ -78,10 +84,10 @@ export function buildExplainButton(): HTMLElement {
     button.dataset.active = String(s.active);
     button.dataset.color = s.color;
     group.dataset.active = String(s.active);
-    indicator.style.background = SWATCH_FILL[s.color];
+    indicator.style.color = SWATCH_FILL[s.color];
   });
   const init = getExplainMode();
-  indicator.style.background = SWATCH_FILL[init.color];
+  indicator.style.color = SWATCH_FILL[init.color];
 
   return root;
 }

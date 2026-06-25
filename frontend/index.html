@@ -8,19 +8,32 @@
   </head>
   <body>
     <header class="toolbar">
-      <div id="sidebar-toggle-slot"></div>
-      <span class="brand">ScAI-Reader</span>
-      <label class="upload">
-        <input type="file" id="file" accept="application/pdf" hidden />
-        <span>Open PDF…</span>
-      </label>
-      <div id="highlight-button-slot"></div>
-      <div id="explain-button-slot"></div>
-      <div id="erase-button-slot"></div>
-      <div id="zoom-controls-slot"></div>
-      <div id="page-indicator-slot"></div>
+      <div class="toolbar-group">
+        <div id="sidebar-toggle-slot"></div>
+        <span class="brand">ScAI-Reader</span>
+      </div>
+      <span class="toolbar-sep"></span>
+      <div class="toolbar-group">
+        <label class="upload">
+          <input type="file" id="file" accept="application/pdf" hidden />
+          <span>Open PDF…</span>
+        </label>
+      </div>
+      <span class="toolbar-sep"></span>
+      <div class="toolbar-group toolbar-tools">
+        <div id="highlight-button-slot"></div>
+        <div id="explain-button-slot"></div>
+        <div id="erase-button-slot"></div>
+      </div>
+      <span class="toolbar-sep"></span>
+      <div class="toolbar-group">
+        <div id="zoom-controls-slot"></div>
+        <div id="page-indicator-slot"></div>
+      </div>
       <span id="doc-info" class="info"></span>
-      <div id="ai-setup-slot"></div>
+      <div class="toolbar-group">
+        <div id="ai-setup-slot"></div>
+      </div>
     </header>
     <div id="banner-slot"></div>
     <div class="main-area">

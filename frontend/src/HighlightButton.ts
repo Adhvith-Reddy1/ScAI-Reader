@@ -38,8 +38,15 @@ export function buildHighlightButton(): HTMLElement {
   button.className = "hl-button";
   button.setAttribute("aria-label", "Highlight");
 
+  // Marker icon tinted to the current color: conveys the tool *and* the color
+  // in one glyph (no separate dot competing with the AI status indicator).
   const indicator = document.createElement("span");
-  indicator.className = "hl-indicator";
+  indicator.className = "hl-icon";
+  indicator.innerHTML =
+    '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">' +
+    '<path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM' +
+    '20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 ' +
+    '1.83 3.75 3.75 1.83-1.83z"/></svg>';
   const label = document.createElement("span");
   label.className = "hl-label";
   label.textContent = "Highlight";
@@ -81,11 +88,11 @@ export function buildHighlightButton(): HTMLElement {
     button.dataset.active = String(s.active);
     button.dataset.color = s.color;
     group.dataset.active = String(s.active);
-    indicator.style.background = SWATCH_FILL[s.color];
+    indicator.style.color = SWATCH_FILL[s.color];
   });
   // Seed initial visuals.
   const init = getHighlightMode();
-  indicator.style.background = SWATCH_FILL[init.color];
+  indicator.style.color = SWATCH_FILL[init.color];
 
   return root;
 }

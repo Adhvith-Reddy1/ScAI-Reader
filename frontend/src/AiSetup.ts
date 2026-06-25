@@ -111,6 +111,7 @@ export function buildAiSetupButton(): HTMLButtonElement {
 
   const apply = (s: AiStatus): void => {
     btn.dataset.configured = String(s.configured);
+    label.textContent = s.configured ? "AI on" : "AI off";
     btn.title = s.configured
       ? `AI explanations are on (${s.provider ?? "configured"})`
       : "AI explanations are off — click to set up";
