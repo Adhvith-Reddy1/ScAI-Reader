@@ -1287,6 +1287,10 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 
 /* AI setup dialog form fields (provider/model/base URL) */
 .ai-setup-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+/* The `display:flex` above would otherwise override the `hidden` attribute's
+   UA `display:none`, so hidden fields (e.g. Base URL for non-compatible
+   providers) must be explicitly collapsed. */
+.ai-setup-field[hidden] { display: none; }
 .ai-setup-field > span { font-size: 13px; color: var(--muted); }
 .ai-setup-optional { color: var(--muted); opacity: 0.7; }
 .ai-setup-provider,
@@ -1303,18 +1307,6 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .ai-setup-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-
-.ai-setup-advanced {
-  align-self: flex-start;
-  margin: -2px 0 10px;
-  padding: 2px 0;
-  background: none;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 13px;
-}
-.ai-setup-advanced:hover { filter: brightness(1.15); }
 
 /* --- Explain tool: split button + color popover ------------------------- */
 .explain-button-root { position: relative; }

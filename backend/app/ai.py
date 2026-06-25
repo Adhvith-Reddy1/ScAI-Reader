@@ -41,14 +41,22 @@ DEFAULT_BASE_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
-# Per-provider default models for the two quality tiers the app uses: "fast"
-# for short glossary definitions, "good" for explanations/chat/figures. A
-# user-supplied model overrides both tiers.
+# Default model per provider — a fast, low-cost model that the user can
+# override in AI Setup. The two task tiers ("fast" for short definitions,
+# "good" for explanations/chat/figures) share the same default; a user-supplied
+# model overrides both.
 DEFAULT_MODELS: dict[str, dict[str, str]] = {
-    "anthropic": {"fast": "claude-haiku-4-5", "good": "claude-sonnet-4-6"},
-    "openai": {"fast": "gpt-4o-mini", "good": "gpt-4o"},
-    "openrouter": {"fast": "openai/gpt-4o-mini", "good": "openai/gpt-4o"},
+    "anthropic": {"fast": "claude-haiku-4-5", "good": "claude-haiku-4-5"},
+    "openai": {"fast": "gpt-4o-mini", "good": "gpt-4o-mini"},
+    "openrouter": {"fast": "openai/gpt-4o-mini", "good": "openai/gpt-4o-mini"},
     # openai_compatible has no sensible default — the model is required.
+}
+
+# Human-friendly default shown in the UI placeholder per provider.
+DEFAULT_MODEL_LABEL: dict[str, str] = {
+    "anthropic": "claude-haiku-4-5",
+    "openai": "gpt-4o-mini",
+    "openrouter": "openai/gpt-4o-mini",
 }
 
 _CONFIG_FILENAME = "ai_config.json"

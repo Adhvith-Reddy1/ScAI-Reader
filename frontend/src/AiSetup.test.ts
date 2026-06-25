@@ -91,24 +91,33 @@ describe("openAiSetup", () => {
     expect(feedback.dataset.kind).toBe("ok");
   });
 
-  it("hides the model behind Advanced for cloud providers", async () => {
+  it("shows an optional model field for cloud providers (no base URL)", async () => {
     stubStatus({ configured: false });
     openAiSetup();
     await flush();
+    // Default provider (anthropic): model shown and labelled optional; the
+    // base URL is hidden, and the default model is named in the placeholder.
     const modelField = document.querySelector(
       ".ai-setup-model-field",
     ) as HTMLElement;
-    const advanced = document.querySelector(
-      ".ai-setup-advanced",
-    ) as HTMLButtonElement;
-    // Default provider (anthropic): model hidden, Advanced offered.
-    expect(modelField.hidden).toBe(true);
-    expect(advanced.hidden).toBe(false);
-    advanced.click();
+    const baseField = document.querySelector(
+      ".ai-setup-baseurl-field",
+    ) as HTMLElement;
+    const modelInput = document.querySelector(
+      ".ai-setup-model",
+    ) as HTMLInputElement;
+    const modelLabel = document.querySelector(
+      ".ai-setup-model-label",
+    ) as HTMLElement;
     expect(modelField.hidden).toBe(false);
+    expect(baseField.hidden).toBe(true);
+    expect(modelLabel.textContent).toMatch(/optional/i);
+    expect(modelInput.placeholder).toContain("claude-haiku-4-5");
+    // The Advanced toggle is gone.
+    expect(document.querySelector(".ai-setup-advanced")).toBeNull();
   });
 
-  it("shows the model inline and required for OpenAI-compatible", async () => {
+  it("shows the model (required) for OpenAI-compatible", async () => {
     stubStatus({ configured: false });
     openAiSetup();
     await flush();
@@ -118,11 +127,11 @@ describe("openAiSetup", () => {
     const modelField = document.querySelector(
       ".ai-setup-model-field",
     ) as HTMLElement;
-    const advanced = document.querySelector(
-      ".ai-setup-advanced",
-    ) as HTMLButtonElement;
+    const modelLabel = document.querySelector(
+      ".ai-setup-model-label",
+    ) as HTMLElement;
     expect(modelField.hidden).toBe(false);
-    expect(advanced.hidden).toBe(true);
+    expect(modelLabel.textContent).not.toMatch(/optional/i);
   });
 
   it("shows the base URL field for an OpenAI-compatible provider", async () => {

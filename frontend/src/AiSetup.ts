@@ -40,7 +40,7 @@ const PROVIDERS: { value: AiProvider; meta: ProviderMeta }[] = [
       keyPlaceholder: "sk-ant-...",
       keyUrl: "https://console.anthropic.com/settings/keys",
       keyUrlLabel: "Anthropic console",
-      modelPlaceholder: "claude-sonnet-4-6 (default)",
+      modelPlaceholder: "claude-haiku-4-5 (default)",
       needsBaseUrl: false,
     },
   },
@@ -51,7 +51,7 @@ const PROVIDERS: { value: AiProvider; meta: ProviderMeta }[] = [
       keyPlaceholder: "sk-...",
       keyUrl: "https://platform.openai.com/api-keys",
       keyUrlLabel: "OpenAI dashboard",
-      modelPlaceholder: "gpt-4o (default)",
+      modelPlaceholder: "gpt-4o-mini (default)",
       needsBaseUrl: false,
     },
   },
@@ -62,7 +62,7 @@ const PROVIDERS: { value: AiProvider; meta: ProviderMeta }[] = [
       keyPlaceholder: "sk-or-...",
       keyUrl: "https://openrouter.ai/keys",
       keyUrlLabel: "OpenRouter",
-      modelPlaceholder: "openai/gpt-4o (default)",
+      modelPlaceholder: "openai/gpt-4o-mini (default)",
       needsBaseUrl: false,
     },
   },
@@ -172,9 +172,8 @@ export function openAiSetup(): void {
       <input class="ai-setup-input" type="password" autocomplete="off"
         spellcheck="false" placeholder="sk-ant-..." aria-label="API key" />
     </label>
-    <button class="ai-setup-advanced" type="button" hidden>Advanced settings ▾</button>
-    <label class="ai-setup-field ai-setup-model-field" hidden>
-      <span class="ai-setup-model-label">Model</span>
+    <label class="ai-setup-field ai-setup-model-field">
+      <span class="ai-setup-model-label">Model <span class="ai-setup-optional">(optional)</span></span>
       <input class="ai-setup-model" type="text" autocomplete="off"
         spellcheck="false" placeholder="" />
     </label>
@@ -202,9 +201,7 @@ export function openAiSetup(): void {
   ) as HTMLInputElement;
   const input = dialog.querySelector(".ai-setup-input") as HTMLInputElement;
   const modelInput = dialog.querySelector(".ai-setup-model") as HTMLInputElement;
-  const modelField = dialog.querySelector(".ai-setup-model-field") as HTMLElement;
   const modelLabel = dialog.querySelector(".ai-setup-model-label") as HTMLElement;
-  const advancedBtn = dialog.querySelector(".ai-setup-advanced") as HTMLButtonElement;
   const link = dialog.querySelector(".ai-setup-link") as HTMLAnchorElement;
   const saveBtn = dialog.querySelector(".ai-setup-save") as HTMLButtonElement;
   const feedback = dialog.querySelector(".ai-setup-feedback") as HTMLElement;
@@ -213,12 +210,9 @@ export function openAiSetup(): void {
   const onLabel = dialog.querySelector(".ai-setup-on") as HTMLElement;
   const closeBtn = dialog.querySelector(".ai-setup-close") as HTMLButtonElement;
 
-  // For named cloud providers the model has a sensible default, so it's tucked
-  // behind "Advanced settings" to keep the common path to just key + Save. For
-  // OpenAI-compatible endpoints there's no default, so the model is required
-  // and shown inline alongside the base URL.
-  let advancedOpen = false;
-
+  // The dialog is intentionally minimal: provider + key, plus an optional
+  // model. The Base URL only appears for OpenAI-compatible endpoints (the only
+  // case the app can't address on its own), where the model is also required.
   const applyProviderMeta = (): void => {
     const meta = metaFor(providerSel.value as AiProvider);
     input.placeholder = meta.keyPlaceholder;
@@ -231,30 +225,11 @@ export function openAiSetup(): void {
     } else {
       link.hidden = true;
     }
-
-    if (meta.needsBaseUrl) {
-      // Model is required and always visible; no Advanced affordance.
-      advancedBtn.hidden = true;
-      modelField.hidden = false;
-      modelLabel.innerHTML = "Model";
-    } else {
-      // Optional model, collapsed under Advanced by default.
-      advancedOpen = false;
-      advancedBtn.hidden = false;
-      advancedBtn.textContent = "Advanced settings ▾";
-      modelField.hidden = true;
-      modelLabel.innerHTML =
-        'Model <span class="ai-setup-optional">(optional)</span>';
-    }
+    modelLabel.innerHTML = meta.needsBaseUrl
+      ? "Model"
+      : 'Model <span class="ai-setup-optional">(optional)</span>';
   };
   providerSel.addEventListener("change", applyProviderMeta);
-  advancedBtn.addEventListener("click", () => {
-    advancedOpen = !advancedOpen;
-    modelField.hidden = !advancedOpen;
-    advancedBtn.textContent = advancedOpen
-      ? "Advanced settings ▴"
-      : "Advanced settings ▾";
-  });
   applyProviderMeta();
 
   closeBtn.addEventListener("click", closeOverlay);
@@ -290,10 +265,7 @@ export function openAiSetup(): void {
       if (s.provider) providerSel.value = s.provider;
       applyProviderMeta();
       // Keep a previously-set custom model visible so re-saving won't drop it.
-      if (s.model) {
-        modelInput.value = s.model;
-        if (modelField.hidden) advancedBtn.click();
-      }
+      if (s.model) modelInput.value = s.model;
     }
   };
 

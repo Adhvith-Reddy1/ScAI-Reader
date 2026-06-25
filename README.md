@@ -57,6 +57,11 @@ AI" prompt instead of an error. Supported:
   Together, Azure OpenAI, or **local models** via Ollama / LM Studio. Enter the
   base URL (e.g. `http://localhost:11434/v1`) and a model name.
 
+For Anthropic and OpenAI you only need a key — the model defaults to a fast,
+low-cost one (**`claude-haiku-4-5`** for Anthropic, **`gpt-4o-mini`** for
+OpenAI / OpenRouter), and the optional Model field lets you override it.
+OpenAI-compatible endpoints also need a base URL and a model name.
+
 Each path sends only the relevant page's text (plus the page image for figures)
 to the provider — never the whole PDF — so behaviour is consistent across
 providers. Usage is billed to your own provider account.
