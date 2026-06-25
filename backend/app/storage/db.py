@@ -22,11 +22,27 @@ CREATE TABLE IF NOT EXISTS annotations (
     page_index   INTEGER NOT NULL,
     kind         TEXT NOT NULL,               -- highlight | note | ink
     payload      TEXT NOT NULL,               -- JSON
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    session_id   TEXT                         -- anonymous owner; NULL = legacy
 );
 
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
     ON annotations(doc_id, page_index);
+
+-- Which anonymous session uploaded which document, so each visitor sees only
+-- their own library. Documents themselves are content-addressed and shared
+-- (dedup); this table scopes the *library view* per session. filename and
+-- uploaded_at are per session so re-uploads under different names are honoured.
+CREATE TABLE IF NOT EXISTS document_sessions (
+    session_id   TEXT NOT NULL,
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    filename     TEXT NOT NULL,
+    uploaded_at  TEXT NOT NULL,
+    PRIMARY KEY (session_id, doc_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_sessions_session
+    ON document_sessions(session_id);
 
 CREATE TABLE IF NOT EXISTS page_dimensions (
     doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -75,10 +91,19 @@ CREATE TABLE IF NOT EXISTS figure_explanations (
 """
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Schema migrations for DBs created before a column existed. SQLite has no
+    ADD COLUMN IF NOT EXISTS, so we inspect the table first."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(annotations)")}
+    if "session_id" not in cols:
+        conn.execute("ALTER TABLE annotations ADD COLUMN session_id TEXT")
+
+
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager

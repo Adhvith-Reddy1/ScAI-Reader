@@ -1,0 +1,12 @@
+# Keep the build context small and reproducible.
+**/__pycache__/
+**/*.pyc
+backend/.venv/
+backend/data/
+backend/.pytest_cache/
+backend/tests/_failures/
+frontend/node_modules/
+frontend/dist/
+.git/
+*.pdf
+HANDOFF.md

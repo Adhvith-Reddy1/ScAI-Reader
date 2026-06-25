@@ -9,7 +9,7 @@ from ..pdf.backend import PdfError
 from ..pdf.pdfium_backend import PdfiumBackend
 from ..pdf.types import PageText
 from ..storage import db, files
-from .deps import get_settings
+from .deps import get_session_id, get_settings
 
 
 def _flatten_page_text(page: PageText) -> str:
@@ -31,6 +31,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 async def upload_document(
     file: UploadFile,
     settings: Settings = Depends(get_settings),
+    session_id: str = Depends(get_session_id),
 ) -> dict:
     data = await file.read()
     if len(data) == 0:
@@ -97,6 +98,15 @@ async def upload_document(
             "INSERT INTO pages_fts (doc_id, page_index, text) VALUES (?, ?, ?)",
             [(doc_id, i + 1, text) for i, text in enumerate(page_texts)],
         )
+        # Associate this document with the visitor's session so it shows up in
+        # *their* library only. Content is shared (SHA-keyed); the view is not.
+        conn.execute(
+            "INSERT INTO document_sessions (session_id, doc_id, filename, uploaded_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_id, doc_id) DO UPDATE SET "
+            "  filename = excluded.filename, uploaded_at = excluded.uploaded_at",
+            (session_id, doc_id, file.filename or "upload.pdf", now),
+        )
 
     return {
         "id": doc_id,
@@ -108,11 +118,21 @@ async def upload_document(
 
 
 @router.get("")
-def list_documents(settings: Settings = Depends(get_settings)) -> list[dict]:
+def list_documents(
+    settings: Settings = Depends(get_settings),
+    session_id: str = Depends(get_session_id),
+) -> list[dict]:
+    # Only the documents this visitor uploaded. filename/uploaded_at come from
+    # the per-session link row; the rest from the shared document record.
     with db.connect(settings.db_path) as conn:
         rows = conn.execute(
-            "SELECT id, filename, page_count, title, author, size_bytes, uploaded_at "
-            "FROM documents ORDER BY uploaded_at DESC"
+            "SELECT d.id, ds.filename, d.page_count, d.title, d.author, "
+            "       d.size_bytes, ds.uploaded_at "
+            "FROM documents d "
+            "JOIN document_sessions ds ON ds.doc_id = d.id "
+            "WHERE ds.session_id = ? "
+            "ORDER BY ds.uploaded_at DESC",
+            (session_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 

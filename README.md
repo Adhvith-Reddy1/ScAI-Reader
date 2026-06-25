@@ -67,8 +67,53 @@ to the provider — never the whole PDF — so behaviour is consistent across
 providers. Usage is billed to your own provider account.
 
 Advanced/hosted setups can instead export `ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY` (the latter honours `OPENAI_BASE_URL`); an environment key
-always takes precedence and is managed outside the app.
+`OPENAI_API_KEY` (the latter honours `OPENAI_BASE_URL` and `OPENAI_MODEL`); an
+environment key always takes precedence and is managed outside the app.
+
+## Deploy (self-hosted, with Ollama)
+
+To host the app publicly with **no per-call API costs**, run it alongside a
+local [Ollama](https://ollama.com/) model via Docker Compose. This needs a box
+you control with enough RAM (a GPU is strongly recommended — on CPU,
+explanations work but are slow).
+
+```bash
+# On the server (Docker + Compose installed):
+git clone https://github.com/Adhvith-Reddy1/ScAI-Reader.git && cd ScAI-Reader
+docker compose up -d --build
+
+# Pull the model the app will use (must match OLLAMA_MODEL; default llama3.1):
+docker compose exec ollama ollama pull llama3.1
+```
+
+The app is then on port **8000**. Put a TLS-terminating reverse proxy
+(Caddy/nginx/Traefik) in front of it for a real domain, or expose 8000 directly
+for a quick demo.
+
+- **Choosing the model:** set `OLLAMA_MODEL` (e.g. in a `.env` next to the
+  compose file) and pull that same name. Hover **explanations** work with any
+  text model; **figure explanations** need a vision-capable model (e.g.
+  `llama3.2-vision`), since they send the page image.
+- **Data** (uploads, `reader.db`, render cache) persists in the `scai-data`
+  volume; pulled models persist in `ollama-models`.
+- **GPU:** uncomment the `deploy:` block under the `ollama` service in
+  `docker-compose.yml` after installing the NVIDIA Container Toolkit.
+
+### Public-demo behaviour
+
+A hosted instance is safe to share:
+
+- **Per-visitor libraries.** Each visitor gets an anonymous session (an
+  httpOnly cookie — no login). They see and manage only the documents they
+  uploaded; PDFs are de-duplicated by content hash under the hood but never
+  exposed across sessions.
+- **Highlight cap.** Up to **50 highlights per document per visitor** (bounds
+  load on the shared local model); the reader gets a toast when the cap is hit.
+- **Shared AI model.** Everyone's explanations run through the one Ollama model
+  the server is configured with — no per-user keys, no API bills.
+
+Full multi-tenant accounts (named sign-ups, cross-device sync, per-user keys)
+are a later phase; this tier is a zero-friction public demo.
 
 ### Dev mode (hot reload, two servers)
 

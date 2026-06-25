@@ -22,6 +22,7 @@ import { buildLibrary } from "./Library.ts";
 import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
 import { setActivePageList } from "./pageNav.ts";
+import { showToast } from "./toast.ts";
 import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
 import { buildSidebarToggle } from "./SidebarToggle.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
@@ -95,7 +96,7 @@ window.addEventListener("keydown", (e) => {
   // highlights save automatically and there's nothing else to persist client-side.
   if (e.key.toLowerCase() === "s") {
     e.preventDefault();
-    toast("Highlights save automatically — no manual save needed.");
+    showToast("Highlights save automatically — no manual save needed.");
     return;
   }
 
@@ -283,12 +284,3 @@ async function showLibrary(): Promise<void> {
 }
 
 void showLibrary();
-
-function toast(message: string): void {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.textContent = message;
-  document.body.appendChild(el);
-  setTimeout(() => el.classList.add("toast-out"), 1800);
-  setTimeout(() => el.remove(), 2200);
-}
