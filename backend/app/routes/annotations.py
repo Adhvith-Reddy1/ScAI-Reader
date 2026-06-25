@@ -10,9 +10,13 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..storage import db, files
-from .deps import get_settings
+from .deps import get_session_id, get_settings
 
 router = APIRouter(prefix="/documents/{doc_id}/annotations", tags=["annotations"])
+
+# Cap highlights per document per visitor — bounds load on the shared (free,
+# self-hosted) AI model and keeps any one visitor from flooding a doc.
+HIGHLIGHTS_PER_DOC_LIMIT = 50
 
 HighlightColor = Literal["yellow", "blue", "red", "green", "pink"]
 """Edge-style 5-color palette."""
@@ -54,6 +58,7 @@ def create_annotation(
     doc_id: str,
     body: CreateHighlight,
     settings: Settings = Depends(get_settings),
+    session_id: str = Depends(get_session_id),
 ) -> dict:
     if not body.rects:
         raise HTTPException(status_code=422, detail="rects must not be empty")
@@ -77,11 +82,25 @@ def create_annotation(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="document not found")
+        # Enforce the per-visitor, per-document highlight cap.
+        count = conn.execute(
+            "SELECT COUNT(*) FROM annotations WHERE doc_id = ? AND session_id = ?",
+            (doc_id, session_id),
+        ).fetchone()[0]
+        if count >= HIGHLIGHTS_PER_DOC_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Highlight limit reached ({HIGHLIGHTS_PER_DOC_LIMIT} per "
+                    "document). Delete some highlights to add more."
+                ),
+            )
         conn.execute(
-            "INSERT INTO annotations (id, doc_id, page_index, kind, payload, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO annotations "
+            "(id, doc_id, page_index, kind, payload, created_at, session_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (annotation_id, doc_id, body.page - 1, "highlight",
-             json.dumps(payload), now),
+             json.dumps(payload), now, session_id),
         )
 
     return {
@@ -101,6 +120,7 @@ def list_annotations(
     doc_id: str,
     page: int | None = None,
     settings: Settings = Depends(get_settings),
+    session_id: str = Depends(get_session_id),
 ) -> list[dict]:
     if not files.pdf_path(settings, doc_id).exists():
         raise HTTPException(status_code=404, detail="document not found")
@@ -109,6 +129,8 @@ def list_annotations(
         # LEFT JOIN so highlights without an explanation still come back.
         # Frontend uses this to seed its explanation cache so the tooltip
         # opens instantly on hover instead of doing a follow-up GET.
+        # Scope to this visitor's session; NULL = legacy rows (pre-isolation),
+        # kept visible so existing local highlights aren't lost.
         base_select = (
             "SELECT a.id, a.page_index, a.kind, a.payload, a.created_at, "
             "       e.kind AS exp_kind, e.content AS exp_content, "
@@ -116,19 +138,21 @@ def list_annotations(
             "FROM annotations a "
             "LEFT JOIN explanations e ON e.annotation_id = a.id "
         )
+        scope = "(a.session_id = ? OR a.session_id IS NULL) "
         if page is None:
             rows = conn.execute(
-                base_select + "WHERE a.doc_id = ? ORDER BY a.created_at ASC",
-                (doc_id,),
+                base_select + "WHERE a.doc_id = ? AND " + scope
+                + "ORDER BY a.created_at ASC",
+                (doc_id, session_id),
             ).fetchall()
         else:
             if page < 1:
                 raise HTTPException(status_code=400, detail="page must be >= 1")
             rows = conn.execute(
                 base_select
-                + "WHERE a.doc_id = ? AND a.page_index = ? "
-                "ORDER BY a.created_at ASC",
-                (doc_id, page - 1),
+                + "WHERE a.doc_id = ? AND a.page_index = ? AND " + scope
+                + "ORDER BY a.created_at ASC",
+                (doc_id, page - 1, session_id),
             ).fetchall()
 
     out: list[dict] = []
@@ -160,11 +184,14 @@ def delete_annotation(
     doc_id: str,
     annotation_id: str,
     settings: Settings = Depends(get_settings),
+    session_id: str = Depends(get_session_id),
 ) -> None:
     with db.connect(settings.db_path) as conn:
+        # Only delete the visitor's own highlights (or legacy NULL-session ones).
         cur = conn.execute(
-            "DELETE FROM annotations WHERE id = ? AND doc_id = ?",
-            (annotation_id, doc_id),
+            "DELETE FROM annotations WHERE id = ? AND doc_id = ? "
+            "AND (session_id = ? OR session_id IS NULL)",
+            (annotation_id, doc_id, session_id),
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="annotation not found")

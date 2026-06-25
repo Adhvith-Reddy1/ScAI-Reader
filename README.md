@@ -99,9 +99,21 @@ for a quick demo.
 - **GPU:** uncomment the `deploy:` block under the `ollama` service in
   `docker-compose.yml` after installing the NVIDIA Container Toolkit.
 
-> Note: a per-visitor library (anonymous cookie sessions) and a per-document
-> highlight cap are being added for public deployments; until then, treat a
-> public instance as a shared sandbox.
+### Public-demo behaviour
+
+A hosted instance is safe to share:
+
+- **Per-visitor libraries.** Each visitor gets an anonymous session (an
+  httpOnly cookie — no login). They see and manage only the documents they
+  uploaded; PDFs are de-duplicated by content hash under the hood but never
+  exposed across sessions.
+- **Highlight cap.** Up to **50 highlights per document per visitor** (bounds
+  load on the shared local model); the reader gets a toast when the cap is hit.
+- **Shared AI model.** Everyone's explanations run through the one Ollama model
+  the server is configured with — no per-user keys, no API bills.
+
+Full multi-tenant accounts (named sign-ups, cross-device sync, per-user keys)
+are a later phase; this tier is a zero-friction public demo.
 
 ### Dev mode (hot reload, two servers)
 

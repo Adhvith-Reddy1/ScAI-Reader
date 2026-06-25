@@ -153,7 +153,18 @@ export async function createHighlight(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ page, color, rects, text, explain }),
   });
-  if (!r.ok) throw new Error(`save highlight failed (${r.status})`);
+  if (!r.ok) {
+    let detail = `save highlight failed (${r.status})`;
+    try {
+      const j = (await r.json()) as { detail?: string };
+      if (j.detail) detail = j.detail;
+    } catch {
+      /* keep default */
+    }
+    const err = new Error(detail) as Error & { status?: number };
+    err.status = r.status;
+    throw err;
+  }
   return r.json() as Promise<Annotation>;
 }
 

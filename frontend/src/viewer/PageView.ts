@@ -13,6 +13,7 @@ import {
   type Rect,
 } from "../api.ts";
 import { seedFigure } from "../figureStore.ts";
+import { showToast } from "../toast.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToViewport } from "./coords.ts";
 import {
@@ -333,7 +334,12 @@ async function maybeAutoSaveHighlight(
       selectedText || undefined,
       mode.explain,
     );
-  } catch {
+  } catch (e) {
+    // Surface the per-document highlight cap (and only that) to the reader;
+    // other transient save errors stay silent as before.
+    if ((e as { status?: number }).status === 429) {
+      showToast((e as Error).message);
+    }
     return;
   }
   sel.removeAllRanges();

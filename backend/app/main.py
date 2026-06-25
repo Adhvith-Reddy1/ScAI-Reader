@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_dotenv
+from .routes.deps import SESSION_COOKIE
 from .routes import (
     annotations,
     documents,
@@ -42,7 +44,29 @@ def create_app() -> FastAPI:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["*"],
         allow_headers=["*"],
+        allow_credentials=True,
     )
+
+    @app.middleware("http")
+    async def ensure_session(request: Request, call_next):
+        """Give every visitor a stable anonymous session id via an httpOnly
+        cookie, so their library and highlights are scoped to them — no login.
+        Set on the first response and reused thereafter."""
+        sid = request.cookies.get(SESSION_COOKIE)
+        is_new = not sid
+        if is_new:
+            sid = secrets.token_urlsafe(18)
+        request.state.session_id = sid
+        response = await call_next(request)
+        if is_new:
+            response.set_cookie(
+                SESSION_COOKIE,
+                sid,
+                max_age=60 * 60 * 24 * 365,
+                httponly=True,
+                samesite="lax",
+            )
+        return response
 
     app.include_router(documents.router)
     app.include_router(pages.router)
