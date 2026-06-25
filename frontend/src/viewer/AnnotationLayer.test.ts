@@ -18,6 +18,7 @@ function ann(
   id: string,
   color: Annotation["color"],
   rects: Annotation["rects"],
+  explain = false,
 ): Annotation {
   return {
     id,
@@ -26,6 +27,7 @@ function ann(
     color,
     rects,
     text: null,
+    explain,
     created_at: "2026-06-18T00:00:00Z",
   };
 }

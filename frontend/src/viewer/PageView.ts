@@ -23,6 +23,7 @@ import {
 } from "../findState.ts";
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
+import { getExplainMode } from "../explainMode.ts";
 import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
@@ -289,8 +290,17 @@ async function maybeAutoSaveHighlight(
   wrap: HTMLElement,
   state: PageState,
 ): Promise<void> {
-  const mode = getHighlightMode();
-  if (!mode.active) return;
+  // Explain takes precedence if somehow both are on (they're mutually
+  // exclusive). An explain highlight triggers an AI explanation; a plain
+  // highlight from the standard tool does not.
+  const explainMode = getExplainMode();
+  const hlMode = getHighlightMode();
+  const mode = explainMode.active
+    ? { color: explainMode.color, explain: true }
+    : hlMode.active
+      ? { color: hlMode.color, explain: false }
+      : null;
+  if (!mode) return;
   if (!state.geom) return;
 
   const sel = window.getSelection();
@@ -310,7 +320,7 @@ async function maybeAutoSaveHighlight(
   const pageRects: Rect[] = rectsToPageSpace(merged, state.geom);
 
   // Capture the selection text BEFORE we clear it — needed for AI
-  // explanations on blue highlights.
+  // explanations on explanation highlights.
   const selectedText = sel.toString().trim();
 
   let saved;
@@ -321,6 +331,7 @@ async function maybeAutoSaveHighlight(
       mode.color,
       pageRects,
       selectedText || undefined,
+      mode.explain,
     );
   } catch {
     return;
@@ -328,9 +339,9 @@ async function maybeAutoSaveHighlight(
   sel.removeAllRanges();
   await refreshAnnotations(meta, pageNumber, wrap, state);
 
-  // Blue highlights eagerly generate an AI definition/explanation so that
-  // by the time the user hovers, the response is partially or fully ready.
-  if (saved && mode.color === "blue" && selectedText) {
+  // Explanation highlights eagerly generate an AI definition/explanation so
+  // that by the time the user hovers, the response is partially or fully ready.
+  if (saved && mode.explain && selectedText) {
     startExplanation(meta.id, saved.id, selectedText);
   }
 }

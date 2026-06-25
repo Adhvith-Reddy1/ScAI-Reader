@@ -124,10 +124,16 @@ export interface Annotation {
   color: HighlightColor;
   rects: Rect[];
   text: string | null;
+  /**
+   * Whether this is an explanation highlight (triggers an AI definition/
+   * explanation). Decoupled from color — the reader picks the color via the
+   * Explain tool. Legacy blue highlights report `true` for back-compat.
+   */
+  explain: boolean;
   created_at: string;
   /**
-   * Server-side cached explanation, included only for blue highlights that
-   * have a `status: "complete"` row in the explanations table. Frontend
+   * Server-side cached explanation, included only for explanation highlights
+   * that have a `status: "complete"` row in the explanations table. Frontend
    * seeds explanationStore from this so the first hover renders instantly
    * with no follow-up network call.
    */
@@ -140,11 +146,12 @@ export async function createHighlight(
   color: HighlightColor,
   rects: Rect[],
   text?: string,
+  explain = false,
 ): Promise<Annotation> {
   const r = await fetch(`/documents/${docId}/annotations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page, color, rects, text }),
+    body: JSON.stringify({ page, color, rects, text, explain }),
   });
   if (!r.ok) throw new Error(`save highlight failed (${r.status})`);
   return r.json() as Promise<Annotation>;

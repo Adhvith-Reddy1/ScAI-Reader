@@ -32,6 +32,54 @@ def test_create_highlight(app_client, simple_pdf):
     assert body["kind"] == "highlight"
     assert len(body["rects"]) == 1
     assert body["id"]
+    # Plain highlight by default — no AI explanation.
+    assert body["explain"] is False
+
+
+@pytest.mark.integration
+def test_explanation_highlight_any_color(app_client, simple_pdf):
+    # Explanation highlights are flagged independently of color.
+    doc_id = _upload(app_client, simple_pdf)
+    r = app_client.post(
+        f"/documents/{doc_id}/annotations",
+        json={**_highlight(color="green"), "explain": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["explain"] is True
+    assert r.json()["color"] == "green"
+
+    listed = app_client.get(f"/documents/{doc_id}/annotations").json()
+    assert listed[0]["explain"] is True
+    assert listed[0]["color"] == "green"
+
+
+@pytest.mark.integration
+def test_legacy_blue_highlight_reads_as_explanation(app_client, simple_pdf):
+    # Rows saved before the flag existed (no "explain" key) should still be
+    # treated as explanation highlights when blue.
+    import json
+
+    from app.routes.deps import get_settings
+    from app.storage import db
+
+    settings = app_client.app.dependency_overrides[get_settings]()
+    doc_id = _upload(app_client, simple_pdf)
+    with db.connect(settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO annotations (id, doc_id, page_index, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "legacy1",
+                doc_id,
+                0,
+                "highlight",
+                json.dumps({"color": "blue", "rects": _DEFAULT_RECT}),
+                "2026-06-01T00:00:00Z",
+            ),
+        )
+    listed = app_client.get(f"/documents/{doc_id}/annotations").json()
+    legacy = next(a for a in listed if a["id"] == "legacy1")
+    assert legacy["explain"] is True
 
 
 @pytest.mark.integration
