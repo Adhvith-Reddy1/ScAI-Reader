@@ -75,7 +75,8 @@ environment key always takes precedence and is managed outside the app.
 To host the app publicly with **no per-call API costs**, run it alongside a
 local [Ollama](https://ollama.com/) model via Docker Compose. This needs a box
 you control with enough RAM (a GPU is strongly recommended — on CPU,
-explanations work but are slow).
+explanations work but are slow). Full details, architecture, and operations are
+in **[docs/HOSTING.md](docs/HOSTING.md)**.
 
 ```bash
 # On the server (Docker + Compose installed):
