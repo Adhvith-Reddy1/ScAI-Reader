@@ -19,6 +19,11 @@ frontend/dist/
 frontend/.vite/
 frontend/tsconfig.tsbuildinfo
 
+# Playwright (E2E) output
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/
+
 # Test artifacts (diff images on failures)
 backend/tests/_failures/
 
