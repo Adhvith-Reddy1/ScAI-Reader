@@ -1,0 +1,26 @@
+# Build artifacts and deps are recreated inside the image.
+**/node_modules
+**/.venv
+frontend/dist
+frontend/.vite
+frontend/tsconfig.tsbuildinfo
+
+# Ephemeral runtime data (uploaded PDFs, render cache, reader.db).
+backend/data
+
+# Python caches / test artifacts.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/.benchmarks
+backend/tests/_failures
+
+# Playwright output.
+frontend/test-results
+frontend/playwright-report
+frontend/.playwright
+
+# VCS and local env.
+.git
+.gitignore
+.env
