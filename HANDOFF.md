@@ -6,6 +6,27 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Browser-storage migration + Fly hosting — 2026-06-30
+
+**Architecture changed: the browser is now the source of truth for personal
+data.** PDFs, highlights, AI explanations, and view state live in IndexedDB
+(`frontend/src/storage/localStore.ts`); the FastAPI server is a **stateless
+worker** that renders, searches, and proxies AI but persists nothing personal.
+Older sections below describe the previous server-stored (SQLite) model — treat
+the current model as authoritative.
+
+- AI is provided server-side via OpenRouter free models (`OPENROUTER_API_KEY` +
+  `OPENROUTER_MODEL=openrouter/free`); the browser talks to the stateless
+  `/documents/{id}/ai/explain|chat|refine` and `/figures/{id}/ai-explain`
+  endpoints and caches results locally.
+- The server DB keeps only `documents` / `page_dimensions` / `pages_fts`
+  (render + find-in-page infra, ephemeral); the `annotations` / `explanations`
+  / `figure_explanations` tables and their routes were removed.
+- Hosting: single Fly.io machine, no volume — see `docs/DEPLOY.md`. Build via
+  the root `Dockerfile`. Implementation specs in `docs/specs/`.
+
+---
+
 ## Explanation latency: page-text context + faster models — 2026-06-21
 
 ### Why

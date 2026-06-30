@@ -89,31 +89,39 @@ are same-origin.)
 
 ## Architecture
 
+The browser is the **source of truth for personal data**; the server is a
+**stateless worker** that renders, searches, and proxies AI but persists nothing
+personal. This makes hosting cheap and private with no login (see
+[docs/DEPLOY.md](docs/DEPLOY.md) — single Fly.io machine, no volume).
+
 ```
-                          Anthropic API
-                              ▲
-                              │ messages.stream (SSE)
-                              │ PDF + cache_control=ephemeral
-                              │
-Browser ◄──── HTTP ────► FastAPI ────► PdfiumBackend (pypdfium2)
-                              │
-                              ▼
-                            SQLite
-                            ├── documents       (SHA-256 keyed)
-                            ├── annotations      (highlights)
-                            ├── explanations     (AI cache, FK→annotation)
-                            ├── page_dimensions  (zoom/layout)
-                            └── pages_fts         (find-in-page, FTS5)
+        Browser (IndexedDB = source of truth)        FastAPI (stateless worker)
+        ├── documents      (PDF bytes + metadata) ──upload──► PdfiumBackend (render,
+        ├── annotations    (highlights)                       text, search, figures)
+        ├── explanations   (AI answer cache)       ◄──SSE──── AI proxy → OpenRouter /
+        └── viewState      (page / zoom / sidebar)            Anthropic / OpenAI
+
+  server-side, ephemeral (no volume; survives one session, re-derived on demand):
+        reader.db → documents · page_dimensions · pages_fts (find-in-page, FTS5)
 ```
 
-PDF internals go through `app.pdf.backend.PdfBackend` so an alternate backend can slot in behind the same contract tests.
+The browser holds each PDF's bytes and re-supplies them to the server on open
+(idempotent, keyed by SHA-256), so a cold/stateless server can render. PDF
+internals go through `app.pdf.backend.PdfBackend` so an alternate backend can
+slot in behind the same contract tests.
 
-### Key flow: blue highlight → AI explanation
+### Key flow: explanation highlight → AI explanation
 
-1. Drag-select in blue mode. `PageView.maybeAutoSaveHighlight` captures the selection text and `POST`s the highlight (`color: blue` + text).
-2. On success it fires `POST /documents/{id}/annotations/{ann_id}/explain`. The server classifies definition vs. explanation, opens a stream to Claude with the PDF attached, and relays tokens as `data: {"type":"delta",...}` SSE frames.
-3. On `done`, the server writes `status="complete"` + the text into `explanations`.
-4. Hovering for 200ms anchors a tooltip above the highlight. Its content is pre-seeded into `explanationStore` from the inline `explanation` field on `GET /annotations` — so reopens cost zero LLM calls and zero extra requests.
+1. Drag-select with the Explain tool. `PageView.maybeAutoSaveHighlight` mints a
+   client-side highlight (`crypto.randomUUID()`) and persists it to IndexedDB
+   via `storage/localStore` — no network call.
+2. It then calls the stateless `POST /documents/{id}/ai/explain` (selection text
+   + page; no annotation id). The server classifies definition vs. explanation,
+   streams tokens as `data: {"type":"delta",...}` SSE frames, and **stores
+   nothing**.
+3. On `done`, the client writes the result into the local `explanations` cache.
+4. Hovering for 200ms anchors a tooltip; its content is pre-seeded from the
+   local cache — so reopens cost zero LLM calls and zero network requests.
 
 ## Tests
 
@@ -130,21 +138,22 @@ cd frontend && npm test                            # vitest
 | Unit (frontend) | `frontend/src/**/*.test.ts` | Selection geometry, coord transforms, sidebar/highlight/erase/find state |
 | Contract | `backend/tests/contract/test_backend_contract.py` | The `PdfBackend` interface spec, run against every backend |
 | Visual golden | `backend/tests/contract/test_visual_goldens.py` | Rendered PNGs vs. baselines (SHA-256 → pixel → SSIM ladder) |
-| Integration | `backend/tests/integration/` | FastAPI stack: annotations, documents, search, outline, concurrent renders |
-
-The AI path is not yet covered end-to-end (would need a live key in CI). The classifier heuristic, SSE framing, and persistence are each testable in isolation and worth adding.
+| Integration | `backend/tests/integration/` | FastAPI stack: documents/render, text, search, outline, figure detection, the stateless `/ai/*` endpoints, concurrent renders |
+| Browser-storage E2E | `frontend/e2e*/` (Playwright) | Library/highlights/explanations persist across reload (real Chromium) |
 
 ## Configuration
 
 The AI provider is normally set in-app (see "Turning on AI explanations"); it's
 stored at `<data dir>/ai_config.json`. The env vars below are optional overrides
-for advanced/hosted use and always win over the stored config.
+for advanced/hosted use and always win over the stored config. For a full
+hosted setup see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 | Env var | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | If set, selects Anthropic and turns AI on; managed outside the app (in-app setter disabled). |
-| `OPENAI_API_KEY` | If set (and no Anthropic key), selects OpenAI. Honours `OPENAI_BASE_URL` for OpenAI-compatible endpoints. |
-| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, the render cache, and `ai_config.json`. Defaults to `./data`. |
+| `OPENROUTER_API_KEY` | If set (and no Anthropic key), selects OpenRouter. Pair with `OPENROUTER_MODEL` (recommended: `openrouter/free`). Base URL is built in. |
+| `OPENAI_API_KEY` | If set (and no Anthropic/OpenRouter key), selects OpenAI. Honours `OPENAI_BASE_URL` and `OPENAI_MODEL` for OpenAI-compatible endpoints. |
+| `PDF_READER_DATA_DIR` | On-disk root for `reader.db`, uploaded PDFs, the render cache, and `ai_config.json`. **Ephemeral** — personal data (library, highlights, explanations) lives in the browser, so this can be lost/reset without data loss. Defaults to `./data`. |
 
 ## Roadmap
 

@@ -31,22 +31,6 @@ export async function uploadDocumentBlob(
   return r.json() as Promise<DocumentMeta>;
 }
 
-export interface LibraryDocument {
-  id: string;
-  filename: string;
-  page_count: number;
-  title: string | null;
-  author: string | null;
-  size_bytes: number;
-  uploaded_at: string;
-}
-
-export async function listDocuments(): Promise<LibraryDocument[]> {
-  const r = await fetch("/documents");
-  if (!r.ok) throw new Error(`list documents failed (${r.status})`);
-  return r.json() as Promise<LibraryDocument[]>;
-}
-
 export function pageImageUrl(docId: string, pageNumber: number, dpi = 150): string {
   return `/documents/${docId}/pages/${pageNumber}.png?dpi=${dpi}`;
 }
@@ -147,35 +131,6 @@ export interface Annotation {
   created_at: string;
 }
 
-export async function createHighlight(
-  docId: string,
-  page: number,
-  color: HighlightColor,
-  rects: Rect[],
-  text?: string,
-  explain = false,
-): Promise<Annotation> {
-  const r = await fetch(`/documents/${docId}/annotations`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page, color, rects, text, explain }),
-  });
-  if (!r.ok) throw new Error(`save highlight failed (${r.status})`);
-  return r.json() as Promise<Annotation>;
-}
-
-export async function listAnnotations(
-  docId: string,
-  page?: number,
-): Promise<Annotation[]> {
-  const url = page == null
-    ? `/documents/${docId}/annotations`
-    : `/documents/${docId}/annotations?page=${page}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`list annotations failed (${r.status})`);
-  return r.json() as Promise<Annotation[]>;
-}
-
 export interface OutlineNode {
   title: string;
   page: number | null;
@@ -187,18 +142,6 @@ export async function fetchOutline(docId: string): Promise<OutlineNode[]> {
   if (!r.ok) throw new Error(`outline fetch failed (${r.status})`);
   const body = (await r.json()) as { doc_id: string; nodes: OutlineNode[] };
   return body.nodes;
-}
-
-export async function deleteAnnotation(
-  docId: string,
-  annotationId: string,
-): Promise<void> {
-  const r = await fetch(`/documents/${docId}/annotations/${annotationId}`, {
-    method: "DELETE",
-  });
-  if (!r.ok && r.status !== 204) {
-    throw new Error(`delete annotation failed (${r.status})`);
-  }
 }
 
 export type ExplanationKind = "definition" | "explanation";
