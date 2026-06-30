@@ -1,17 +1,20 @@
 import {
-  createHighlight,
-  deleteAnnotation,
   fetchPageFigures,
   fetchPageText,
-  listAnnotations,
   pageImageUrl,
-  type Annotation,
   type DocumentMeta,
   type PageDimension,
   type PageFigure,
   type PageText,
   type Rect,
 } from "../api.ts";
+import {
+  deleteAnnotation,
+  listAnnotations,
+  putAnnotation,
+  type LocalAnnotation,
+} from "../storage/localStore.ts";
+import { makeHighlight } from "./highlightModel.ts";
 import { seedFigure } from "../figureStore.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToViewport } from "./coords.ts";
@@ -24,7 +27,7 @@ import {
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
 import { getExplainMode } from "../explainMode.ts";
-import { seedExplanation, startExplanation } from "../explanationStore.ts";
+import { startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import { dismissExplanationFor } from "./ExplanationTooltip.ts";
@@ -231,21 +234,15 @@ async function refreshAnnotations(
   state: PageState,
 ): Promise<void> {
   if (!state.geom) return;
-  let annotations: Annotation[];
+  let annotations: LocalAnnotation[];
   try {
     annotations = await listAnnotations(meta.id, pageNumber);
   } catch {
     annotations = [];
   }
 
-  // Prime the explanation store with whatever the server has cached for
-  // these highlights. Hovering won't hit the network — the tooltip pops
-  // straight to the ready state.
-  for (const ann of annotations) {
-    if (ann.explanation) {
-      seedExplanation(ann.id, ann.explanation.kind, ann.explanation.content);
-    }
-  }
+  // Explanation seeding/caching now lives in the browser too and is wired up
+  // by Spec 06 (from the local explanations store); nothing to prime here.
 
   if (state.annotationLayer) state.annotationLayer.remove();
   const svg = buildAnnotationLayer(
@@ -323,16 +320,18 @@ async function maybeAutoSaveHighlight(
   // explanations on explanation highlights.
   const selectedText = sel.toString().trim();
 
-  let saved;
+  // Highlights live in the browser now: the client mints the id/created_at and
+  // persists to IndexedDB. No network call.
+  const saved = makeHighlight({
+    docId: meta.id,
+    page: pageNumber,
+    color: mode.color,
+    rects: pageRects,
+    text: selectedText || null,
+    explain: mode.explain,
+  });
   try {
-    saved = await createHighlight(
-      meta.id,
-      pageNumber,
-      mode.color,
-      pageRects,
-      selectedText || undefined,
-      mode.explain,
-    );
+    await putAnnotation(saved);
   } catch {
     return;
   }
@@ -341,7 +340,8 @@ async function maybeAutoSaveHighlight(
 
   // Explanation highlights eagerly generate an AI definition/explanation so
   // that by the time the user hovers, the response is partially or fully ready.
-  if (saved && mode.explain && selectedText) {
+  // (Spec 06 repoints this at the stateless endpoint + local explanation cache.)
+  if (mode.explain && selectedText) {
     startExplanation(meta.id, saved.id, selectedText);
   }
 }
