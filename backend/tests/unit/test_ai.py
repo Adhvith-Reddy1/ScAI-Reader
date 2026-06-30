@@ -21,8 +21,15 @@ def settings(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_unconfigured_by_default(settings):
@@ -72,6 +79,48 @@ def test_openai_env_used_when_no_anthropic(settings, monkeypatch):
     assert cfg.api_key == "sk-env"
     assert cfg.base_url == "https://example/v1"
     assert cfg.source == "env"
+
+
+def test_openrouter_env_selects_preset_with_model(settings, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    monkeypatch.setenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.provider == "openrouter"
+    assert cfg.api_key == "sk-or-env"
+    assert cfg.source == "env"
+    # Base URL comes from the preset; the model from the env override.
+    assert cfg.resolve_base_url() == "https://openrouter.ai/api/v1"
+    assert cfg.resolve_model("good") == "meta-llama/llama-3.3-70b-instruct:free"
+    assert cfg.resolve_model("fast") == "meta-llama/llama-3.3-70b-instruct:free"
+
+
+def test_openrouter_env_without_model_falls_back_to_preset_default(
+    settings, monkeypatch
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.resolve_model("good") == ai.DEFAULT_MODELS["openrouter"]["good"]
+
+
+def test_openrouter_env_wins_over_openai(settings, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.provider == "openrouter"
+
+
+def test_openai_env_model_override(settings, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4.1-mini")
+    cfg = ai.get_provider_config(settings)
+    assert cfg.provider == "openai"
+    assert cfg.resolve_model("good") == "gpt-4.1-mini"
+
+
+def test_error_code_maps_known_messages():
+    assert ai.error_code(ai.AI_NOT_CONFIGURED_MESSAGE) == ai.AI_NOT_CONFIGURED_CODE
+    assert ai.error_code(ai.AI_RATE_LIMITED_MESSAGE) == ai.AI_RATE_LIMITED_CODE
+    assert ai.error_code("some unrelated error") is None
 
 
 def test_legacy_config_without_provider_defaults_to_anthropic(settings):

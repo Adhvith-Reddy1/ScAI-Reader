@@ -112,6 +112,9 @@ async def _stream_anthropic(
                 accumulated.append(chunk)
                 yield ("delta", chunk)
         yield ("done", "".join(accumulated))
+    except anthropic.RateLimitError:
+        log.warning("Anthropic rate limit / quota hit")
+        yield ("error", ai.AI_RATE_LIMITED_MESSAGE)
     except anthropic.APIError as e:
         log.exception("Anthropic API error")
         yield ("error", f"{type(e).__name__}: {e}")
@@ -153,6 +156,9 @@ async def _stream_openai(
                 accumulated.append(delta)
                 yield ("delta", delta)
         yield ("done", "".join(accumulated))
+    except openai.RateLimitError:
+        log.warning("OpenAI/OpenRouter rate limit / quota hit")
+        yield ("error", ai.AI_RATE_LIMITED_MESSAGE)
     except openai.APIError as e:
         log.exception("OpenAI API error")
         yield ("error", f"{type(e).__name__}: {e}")

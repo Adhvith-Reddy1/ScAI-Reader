@@ -252,8 +252,9 @@ def _error_sse(message: str) -> bytes:
     """Error frame, tagged with a code when AI simply isn't configured so the
     UI can offer one-click setup instead of showing a raw error."""
     frame: dict = {"type": "error", "message": message}
-    if message == ai.AI_NOT_CONFIGURED_MESSAGE:
-        frame["code"] = ai.AI_NOT_CONFIGURED_CODE
+    code = ai.error_code(message)
+    if code:
+        frame["code"] = code
     return _sse_event(frame)
 
 

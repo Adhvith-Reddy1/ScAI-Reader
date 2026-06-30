@@ -6,9 +6,12 @@ supports Anthropic natively and any OpenAI-compatible endpoint (OpenAI, Azure
 OpenAI, OpenRouter, Groq, Together, and local servers like Ollama/LM Studio via
 a custom base URL).
 
-Environment variables still win when present (advanced/hosted setups):
-``ANTHROPIC_API_KEY`` selects Anthropic, otherwise ``OPENAI_API_KEY`` selects
-OpenAI. The actual streaming lives in ``app.llm`` (which imports from here).
+Environment variables still win when present (advanced/hosted setups), checked
+in order: ``ANTHROPIC_API_KEY`` selects Anthropic; ``OPENROUTER_API_KEY``
+selects OpenRouter (base URL supplied by the preset, model from
+``OPENROUTER_MODEL``); otherwise ``OPENAI_API_KEY`` selects OpenAI (honouring
+``OPENAI_BASE_URL`` and ``OPENAI_MODEL``). The actual streaming lives in
+``app.llm`` (which imports from here).
 """
 
 from __future__ import annotations
@@ -27,6 +30,26 @@ AI_NOT_CONFIGURED_MESSAGE = (
 )
 # Stable code on the SSE error frame so the UI can offer one-click setup.
 AI_NOT_CONFIGURED_CODE = "ai_not_configured"
+
+# Shown when the provider rejects a call for rate-limit / quota reasons. With a
+# shared server-side key and no per-user identity, every reader draws on the
+# same budget, so a busy moment should read as "try again" rather than a raw
+# error string.
+AI_RATE_LIMITED_MESSAGE = (
+    "The AI is busy right now (too many requests in a short time). "
+    "Wait a few seconds and try again."
+)
+AI_RATE_LIMITED_CODE = "ai_rate_limited"
+
+
+def error_code(message: str) -> str | None:
+    """Stable code for a known error message so the UI can special-case it
+    (one-click setup, a friendly "busy" notice). None for unknown messages."""
+    if message == AI_NOT_CONFIGURED_MESSAGE:
+        return AI_NOT_CONFIGURED_CODE
+    if message == AI_RATE_LIMITED_MESSAGE:
+        return AI_RATE_LIMITED_CODE
+    return None
 
 # Recognised providers. "openai_compatible" is OpenAI's wire protocol pointed at
 # a custom base URL (covers Azure, Groq, Together, Ollama, …); "openrouter" is a
@@ -105,11 +128,27 @@ def get_provider_config(settings: Settings) -> ProviderConfig | None:
     env_anthropic = os.environ.get("ANTHROPIC_API_KEY")
     if env_anthropic and env_anthropic.strip():
         return ProviderConfig("anthropic", env_anthropic.strip(), source="env")
+
+    # OpenRouter preset: a hosted deploy only needs the key + a model; the
+    # base URL comes from the preset. Lets the server provide free/low-cost
+    # models to all readers without any in-app setup.
+    env_openrouter = os.environ.get("OPENROUTER_API_KEY")
+    if env_openrouter and env_openrouter.strip():
+        model = (
+            os.environ.get("OPENROUTER_MODEL")
+            or os.environ.get("OPENAI_MODEL")
+            or None
+        )
+        return ProviderConfig(
+            "openrouter", env_openrouter.strip(), model=model, source="env"
+        )
+
     env_openai = os.environ.get("OPENAI_API_KEY")
     if env_openai and env_openai.strip():
         base = os.environ.get("OPENAI_BASE_URL") or None
+        model = os.environ.get("OPENAI_MODEL") or None
         return ProviderConfig(
-            "openai", env_openai.strip(), base_url=base, source="env"
+            "openai", env_openai.strip(), model=model, base_url=base, source="env"
         )
 
     stored = _read_stored(settings)
