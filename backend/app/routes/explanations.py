@@ -383,6 +383,16 @@ def _build_chat_messages(page_text: str, body: ChatRequest) -> list[dict]:
     return out
 
 
+def _stream_chat(config, page_text: str, body) -> AsyncIterator[tuple[str, str]]:
+    """Stream a chat reply. `body` need only expose `text`, `kind`, `content`
+    and `messages`, so the stateless endpoint can reuse this with its own
+    request model."""
+    messages = _build_chat_messages(page_text, body)
+    return llm.stream_completion(
+        config, system=SYSTEM_CHAT, messages=messages, max_tokens=400
+    )
+
+
 @router.post("/chat")
 async def chat(
     doc_id: str,
@@ -398,14 +408,11 @@ async def chat(
         page_index = _verify_ownership(conn, doc_id, annotation_id)
 
     page_text = _page_text(settings, doc_id, page_index)
-    messages = _build_chat_messages(page_text, body)
     config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _sse_event({"type": "meta", "kind": body.kind, "cached": False})
-        async for event_type, payload in llm.stream_completion(
-            config, system=SYSTEM_CHAT, messages=messages, max_tokens=400
-        ):
+        async for event_type, payload in _stream_chat(config, page_text, body):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
             elif event_type == "done":
@@ -414,6 +421,39 @@ async def chat(
                 yield _error_sse(payload)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _stream_refine(
+    config,
+    page_text: str,
+    text: str,
+    kind: ExplanationKind,
+    content: str,
+    messages: list,
+) -> AsyncIterator[tuple[str, str]]:
+    """Stream a tooltip rewrite. Shared by the annotation-scoped refine and the
+    stateless refine; the latter just doesn't persist the result."""
+    system = (
+        SYSTEM_REFINE_DEFINITION
+        if kind == "definition"
+        else SYSTEM_REFINE_EXPLANATION
+    )
+    transcript = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+    instruction = (
+        _page_context(page_text)
+        + f"Original highlighted text:\n{text!r}\n\n"
+        f"The {kind} the reader first saw:\n{content}\n\n"
+        f"Clarifying conversation:\n{transcript}\n\n"
+        f"Rewrite the {kind} so it folds in what helped the reader most. "
+        "Output only the revised text."
+    )
+    return llm.stream_completion(
+        config,
+        system=system,
+        messages=[llm.user_text(instruction)],
+        max_tokens=80 if kind == "definition" else 140,
+        tier="fast" if kind == "definition" else "good",
+    )
 
 
 @router.post("/refine")
@@ -431,24 +471,7 @@ async def refine(
         page_index = _verify_ownership(conn, doc_id, annotation_id)
 
     kind = body.kind
-    system = (
-        SYSTEM_REFINE_DEFINITION
-        if kind == "definition"
-        else SYSTEM_REFINE_EXPLANATION
-    )
-    transcript = "\n".join(
-        f"{m.role.upper()}: {m.content}" for m in body.messages
-    )
     page_text = _page_text(settings, doc_id, page_index)
-    instruction = (
-        _page_context(page_text)
-        + f"Original highlighted text:\n{body.text!r}\n\n"
-        f"The {kind} the reader first saw:\n{body.content}\n\n"
-        f"Clarifying conversation:\n{transcript}\n\n"
-        f"Rewrite the {kind} so it folds in what helped the reader most. "
-        "Output only the revised text."
-    )
-    messages = [llm.user_text(instruction)]
     config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
@@ -457,12 +480,8 @@ async def refine(
         )
         final_text: str | None = None
         error_text: str | None = None
-        async for event_type, payload in llm.stream_completion(
-            config,
-            system=system,
-            messages=messages,
-            max_tokens=80 if kind == "definition" else 140,
-            tier="fast" if kind == "definition" else "good",
+        async for event_type, payload in _stream_refine(
+            config, page_text, body.text, kind, body.content, body.messages
         ):
             if event_type == "delta":
                 yield _sse_event({"type": "delta", "text": payload})
