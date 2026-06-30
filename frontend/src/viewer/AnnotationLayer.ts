@@ -70,7 +70,7 @@ export function buildAnnotationLayer(
     // own bottom-left Delete button), regardless of color. Plain highlights get
     // the standalone hover Delete pill anchored at the bottom-left.
     if (ann.explain && doc) {
-      bindBlueAnnotation(group, doc, ann.id, ann.text ?? null, onDelete);
+      bindBlueAnnotation(group, doc, ann.id, ann.page, ann.text ?? null, onDelete);
     } else {
       bindHighlightActions(group, ann.id, onDelete);
     }

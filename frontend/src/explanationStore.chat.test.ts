@@ -6,20 +6,18 @@ const streamChatMock = vi.fn();
 const streamRefineMock = vi.fn();
 
 vi.mock("./api.ts", () => ({
-  getExplanation: vi.fn(),
   streamExplanation: vi.fn(),
-  streamChat: (
-    docId: string,
-    annId: string,
-    body: unknown,
-    cb: ChatStreamCallbacks,
-  ) => streamChatMock(docId, annId, body, cb) ?? (() => {}),
-  streamRefine: (
-    docId: string,
-    annId: string,
-    body: unknown,
-    cb: ChatStreamCallbacks,
-  ) => streamRefineMock(docId, annId, body, cb) ?? (() => {}),
+  streamChat: (docId: string, body: unknown, cb: ChatStreamCallbacks) =>
+    streamChatMock(docId, body, cb) ?? (() => {}),
+  streamRefine: (docId: string, body: unknown, cb: ChatStreamCallbacks) =>
+    streamRefineMock(docId, body, cb) ?? (() => {}),
+}));
+
+// The store now write-throughs completed refines to the browser cache; stub it
+// so these chat tests stay focused on conversation/refine behaviour.
+vi.mock("./storage/localStore.ts", () => ({
+  getExplanation: vi.fn().mockResolvedValue(null),
+  putExplanation: vi.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -32,7 +30,7 @@ import {
 } from "./explanationStore.ts";
 
 function lastCallbacks(mock: typeof streamChatMock): ChatStreamCallbacks {
-  return mock.mock.calls[mock.mock.calls.length - 1][3];
+  return mock.mock.calls[mock.mock.calls.length - 1][2];
 }
 
 describe("explanationStore chat", () => {
@@ -44,7 +42,7 @@ describe("explanationStore chat", () => {
 
   it("appends a user turn + a placeholder assistant turn and streams into it", () => {
     seedExplanation("a", "definition", "original");
-    sendChatMessage("doc", "a", "entropy", "  why here?  ");
+    sendChatMessage("doc", "a", "entropy", "  why here?  ", 1);
 
     const chat = getChat("a");
     expect(chat.messages).toEqual([
@@ -55,7 +53,7 @@ describe("explanationStore chat", () => {
 
     // The request carries the current tooltip content/kind and only the turns
     // up to (and including) the question — never the empty placeholder.
-    const [, , body] = streamChatMock.mock.calls[0];
+    const [, body] = streamChatMock.mock.calls[0];
     expect(body).toMatchObject({
       text: "entropy",
       kind: "definition",
@@ -74,19 +72,19 @@ describe("explanationStore chat", () => {
 
   it("ignores blank questions and is a no-op while a reply is in flight", () => {
     seedExplanation("a", "explanation", "x");
-    sendChatMessage("doc", "a", "t", "   ");
+    sendChatMessage("doc", "a", "t", "   ", 1);
     expect(streamChatMock).not.toHaveBeenCalled();
 
-    sendChatMessage("doc", "a", "t", "first");
+    sendChatMessage("doc", "a", "t", "first", 1);
     expect(streamChatMock).toHaveBeenCalledTimes(1);
     // Still streaming → second send is dropped.
-    sendChatMessage("doc", "a", "t", "second");
+    sendChatMessage("doc", "a", "t", "second", 1);
     expect(streamChatMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops the empty assistant turn and records the error on failure", () => {
     seedExplanation("a", "definition", "x");
-    sendChatMessage("doc", "a", "t", "q");
+    sendChatMessage("doc", "a", "t", "q", 1);
     lastCallbacks(streamChatMock).onError("boom");
 
     const chat = getChat("a");
@@ -97,10 +95,10 @@ describe("explanationStore chat", () => {
 
   it("refine streams into the body and leaves it as the ready content", () => {
     seedExplanation("a", "definition", "old text");
-    sendChatMessage("doc", "a", "entropy", "q");
+    sendChatMessage("doc", "a", "entropy", "q", 1);
     lastCallbacks(streamChatMock).onDone("an answer");
 
-    refineFromChat("doc", "a", "entropy");
+    refineFromChat("doc", "a", "entropy", 1);
     expect(getChat("a").refining).toBe(true);
 
     const cb = lastCallbacks(streamRefineMock);
@@ -117,10 +115,10 @@ describe("explanationStore chat", () => {
 
   it("refine failure restores the original explanation text", () => {
     seedExplanation("a", "explanation", "keep me");
-    sendChatMessage("doc", "a", "t", "q");
+    sendChatMessage("doc", "a", "t", "q", 1);
     lastCallbacks(streamChatMock).onDone("a");
 
-    refineFromChat("doc", "a", "t");
+    refineFromChat("doc", "a", "t", 1);
     lastCallbacks(streamRefineMock).onError("nope");
 
     const st = getExplanationState("a");
@@ -130,7 +128,7 @@ describe("explanationStore chat", () => {
 
   it("refine is a no-op when there's no conversation yet", () => {
     seedExplanation("a", "definition", "x");
-    refineFromChat("doc", "a", "t");
+    refineFromChat("doc", "a", "t", 1);
     expect(streamRefineMock).not.toHaveBeenCalled();
   });
 });

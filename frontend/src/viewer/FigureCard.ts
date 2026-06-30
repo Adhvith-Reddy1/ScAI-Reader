@@ -153,7 +153,7 @@ export function showFigureCard(
   // Kick off the stream if we don't already have content.
   const state = getFigureState(docId, figure.figure_id);
   if (state.status === "idle") {
-    startFigureExplanation(docId, figure.figure_id, figure.page, figure.label);
+    void startFigureExplanation(docId, figure.figure_id, figure.page, figure.label);
   }
 }
 

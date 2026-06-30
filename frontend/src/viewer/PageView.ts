@@ -13,6 +13,7 @@ import {
   type Rect,
 } from "../api.ts";
 import { seedFigure } from "../figureStore.ts";
+import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToViewport } from "./coords.ts";
 import {
@@ -238,12 +239,18 @@ async function refreshAnnotations(
     annotations = [];
   }
 
-  // Prime the explanation store with whatever the server has cached for
-  // these highlights. Hovering won't hit the network — the tooltip pops
-  // straight to the ready state.
+  // Prime the explanation store from the browser cache (Spec 02/06) for these
+  // highlights. On a cache hit, hovering won't hit the network — the tooltip
+  // pops straight to the ready state.
   for (const ann of annotations) {
-    if (ann.explanation) {
-      seedExplanation(ann.id, ann.explanation.kind, ann.explanation.content);
+    if (!ann.explain) continue;
+    try {
+      const cached = await getCachedExplanation(meta.id, ann.id);
+      if (cached && cached.status === "complete" && cached.content) {
+        seedExplanation(ann.id, cached.kind, cached.content);
+      }
+    } catch {
+      /* cache unavailable — first hover will stream instead */
     }
   }
 
@@ -342,7 +349,7 @@ async function maybeAutoSaveHighlight(
   // Explanation highlights eagerly generate an AI definition/explanation so
   // that by the time the user hovers, the response is partially or fully ready.
   if (saved && mode.explain && selectedText) {
-    startExplanation(meta.id, saved.id, selectedText);
+    void startExplanation(meta.id, saved.id, selectedText, pageNumber);
   }
 }
 
@@ -354,9 +361,16 @@ async function loadFigures(
   try {
     const resp = await fetchPageFigures(meta.id, pageNumber);
     state.figures = resp.figures;
-    // Seed the store so re-opening doesn't re-stream.
+    // Seed the store from the browser cache so re-opening doesn't re-stream.
     for (const f of resp.figures) {
-      if (f.explanation) seedFigure(meta.id, f.figure_id, f.explanation.content);
+      try {
+        const cached = await getCachedExplanation(meta.id, f.figure_id);
+        if (cached && cached.status === "complete" && cached.content) {
+          seedFigure(meta.id, f.figure_id, cached.content);
+        }
+      } catch {
+        /* cache unavailable — hovering the figure will stream instead */
+      }
     }
   } catch {
     state.figures = [];

@@ -131,13 +131,6 @@ export interface Annotation {
    */
   explain: boolean;
   created_at: string;
-  /**
-   * Server-side cached explanation, included only for explanation highlights
-   * that have a `status: "complete"` row in the explanations table. Frontend
-   * seeds explanationStore from this so the first hover renders instantly
-   * with no follow-up network call.
-   */
-  explanation?: { kind: ExplanationKind; content: string };
 }
 
 export async function createHighlight(
@@ -195,30 +188,6 @@ export async function deleteAnnotation(
 }
 
 export type ExplanationKind = "definition" | "explanation";
-export type ExplanationStatus = "pending" | "complete" | "error";
-
-export interface Explanation {
-  annotation_id: string;
-  kind: ExplanationKind;
-  text: string;
-  content: string | null;
-  status: ExplanationStatus;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export async function getExplanation(
-  docId: string,
-  annotationId: string,
-): Promise<Explanation | null> {
-  const r = await fetch(
-    `/documents/${docId}/annotations/${annotationId}/explanation`,
-  );
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`get explanation failed (${r.status})`);
-  return r.json() as Promise<Explanation>;
-}
 
 /** Error code on an SSE error frame when the only problem is a missing key. */
 export const AI_NOT_CONFIGURED_CODE = "ai_not_configured";
@@ -329,38 +298,35 @@ export interface ChatRequestBody {
   text: string;
   kind: ExplanationKind;
   content: string;
+  /** Page the highlight sits on, so the stateless server can re-extract context. */
+  page?: number;
   messages: ChatTurn[];
 }
 
-/** Streams an assistant reply to a follow-up chat turn on a highlight. */
+/**
+ * Streams an assistant reply to a follow-up chat turn on a highlight.
+ * Stateless endpoint (Spec 03): keyed by the document + page/text in the body,
+ * not by a server-stored annotation. The client owns the conversation cache.
+ */
 export function streamChat(
   docId: string,
-  annotationId: string,
   body: ChatRequestBody,
   callbacks: ChatStreamCallbacks,
 ): () => void {
-  return streamChatLike(
-    `/documents/${docId}/annotations/${annotationId}/chat`,
-    body,
-    callbacks,
-  );
+  return streamChatLike(`/documents/${docId}/ai/chat`, body, callbacks);
 }
 
 /**
  * Streams a rewritten definition/explanation that folds in the useful parts
- * of the conversation. On the server this also persists the new text.
+ * of the conversation. The stateless endpoint persists nothing — the client
+ * caches the result (write-through in explanationStore).
  */
 export function streamRefine(
   docId: string,
-  annotationId: string,
   body: ChatRequestBody,
   callbacks: ChatStreamCallbacks,
 ): () => void {
-  return streamChatLike(
-    `/documents/${docId}/annotations/${annotationId}/refine`,
-    body,
-    callbacks,
-  );
+  return streamChatLike(`/documents/${docId}/ai/refine`, body, callbacks);
 }
 
 export interface FigureBBox {
@@ -376,7 +342,6 @@ export interface PageFigure {
   page: number;
   bbox: FigureBBox;
   caption_bbox: FigureBBox;
-  explanation?: { content: string };
 }
 
 export interface PageFiguresResponse {
@@ -414,7 +379,7 @@ export function streamFigureExplanation(
   void (async () => {
     let r: Response;
     try {
-      r = await fetch(`/documents/${docId}/figures/${figureId}/explain`, {
+      r = await fetch(`/documents/${docId}/figures/${figureId}/ai-explain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ page, label }),
@@ -469,12 +434,15 @@ export function streamFigureExplanation(
 }
 
 /**
- * Streams an explanation from the backend via Server-Sent Events.
+ * Streams an explanation from the stateless backend via Server-Sent Events
+ * (Spec 03 `/ai/explain`). The request carries the highlighted `text` and the
+ * `page` it sits on — no annotation id — so the server re-extracts page context
+ * and persists nothing. The client owns caching (explanationStore write-through).
  * Returns an abort function so callers can cancel if the user navigates away.
  */
 export function streamExplanation(
   docId: string,
-  annotationId: string,
+  page: number,
   text: string,
   callbacks: ExplainCallbacks,
 ): () => void {
@@ -483,15 +451,12 @@ export function streamExplanation(
   void (async () => {
     let r: Response;
     try {
-      r = await fetch(
-        `/documents/${docId}/annotations/${annotationId}/explain`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-          signal: ctrl.signal,
-        },
-      );
+      r = await fetch(`/documents/${docId}/ai/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, page }),
+        signal: ctrl.signal,
+      });
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         callbacks.onError((e as Error).message);

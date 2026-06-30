@@ -10,13 +10,16 @@
  */
 
 import {
-  getExplanation,
   streamChat,
   streamExplanation,
   streamRefine,
   type ChatTurn,
   type ExplanationKind,
 } from "./api.ts";
+import {
+  getExplanation as getCachedExplanation,
+  putExplanation,
+} from "./storage/localStore.ts";
 
 export type ExplanationState =
   | { status: "idle" }
@@ -77,6 +80,31 @@ function setState(entry: Entry, next: ExplanationState): void {
   notify(entry);
 }
 
+/**
+ * Persist a completed explanation to the browser cache (Spec 02). Best-effort:
+ * a failed cache write must never break the live tooltip, so errors are
+ * swallowed. Refine writes the same `[docId, annotationId]` key, overwriting.
+ */
+function writeThroughCache(
+  docId: string,
+  annotationId: string,
+  kind: ExplanationKind,
+  text: string,
+  content: string,
+): void {
+  void putExplanation({
+    docId,
+    annotationId,
+    kind,
+    text,
+    content,
+    status: "complete",
+    updated_at: new Date().toISOString(),
+  }).catch(() => {
+    /* cache write is best-effort; the tooltip already has the content */
+  });
+}
+
 function currentContentKind(entry: Entry): {
   content: string;
   kind: ExplanationKind;
@@ -121,24 +149,44 @@ export function seedExplanation(
 }
 
 /**
- * Kick off an explanation stream and broadcast progress to subscribers.
- * If one is already in flight or completed, this is a no-op.
+ * Kick off an explanation. Cache-first (Spec 06): a completed explanation in
+ * IndexedDB renders instantly with no network/LLM call. On a miss, stream from
+ * the stateless `/ai/explain` endpoint (keyed by `page` + `text`, not an
+ * annotation id) and write the result through to the cache on completion.
+ * If a stream is already in flight or completed, this is a no-op.
  */
-export function startExplanation(
+export async function startExplanation(
   docId: string,
   annotationId: string,
   text: string,
-): void {
+  page: number,
+): Promise<void> {
   const entry = ensureEntry(annotationId);
-  if (
-    entry.state.status === "loading" ||
-    entry.state.status === "ready"
-  ) {
+  if (entry.state.status === "loading" || entry.state.status === "ready") {
     return;
   }
+
+  // Cache-first read. A hit short-circuits the network entirely.
+  let cached;
+  try {
+    cached = await getCachedExplanation(docId, annotationId);
+  } catch {
+    cached = null;
+  }
+  // State may have advanced while we awaited the cache (e.g. another hover).
+  if (entry.state.status !== "idle") return;
+  if (cached && cached.status === "complete" && cached.content) {
+    setState(entry, {
+      status: "ready",
+      content: cached.content,
+      kind: cached.kind,
+    });
+    return;
+  }
+
   setState(entry, { status: "loading", content: "" });
 
-  entry.abort = streamExplanation(docId, annotationId, text, {
+  entry.abort = streamExplanation(docId, page, text, {
     onMeta: (kind) => {
       if (entry.state.status === "loading") {
         setState(entry, { ...entry.state, kind });
@@ -159,6 +207,7 @@ export function startExplanation(
           : "explanation";
       setState(entry, { status: "ready", content: full, kind });
       entry.abort = undefined;
+      writeThroughCache(docId, annotationId, kind, text, full);
     },
     onError: (message, code) => {
       setState(entry, { status: "error", error: message, code });
@@ -168,12 +217,9 @@ export function startExplanation(
 }
 
 /**
- * Lazily hydrate state from the backend if we haven't seen this annotation
- * before. If the backend has a complete explanation, jump straight to ready.
- * If pending, we'll wait — the caller can decide to startExplanation.
- *
- * Returns true if state is now ready or loading, false if there's nothing
- * stored server-side either.
+ * Lazily hydrate state from the browser cache (Spec 02) if we haven't seen this
+ * annotation before. A complete cached explanation jumps straight to ready with
+ * no network call; a miss returns false so the caller can start a fresh stream.
  */
 export async function hydrateExplanation(
   docId: string,
@@ -182,30 +228,24 @@ export async function hydrateExplanation(
   const entry = ensureEntry(annotationId);
   if (entry.state.status !== "idle") return true;
 
-  let server;
+  let cached;
   try {
-    server = await getExplanation(docId, annotationId);
+    cached = await getCachedExplanation(docId, annotationId);
   } catch {
     return false;
   }
-  if (server == null) return false;
+  if (cached == null) return false;
 
-  if (server.status === "complete" && server.content) {
+  if (cached.status === "complete" && cached.content) {
+    // Re-check: state may have advanced while the cache read was in flight.
+    if (entry.state.status !== "idle") return true;
     setState(entry, {
       status: "ready",
-      content: server.content,
-      kind: server.kind,
+      content: cached.content,
+      kind: cached.kind,
     });
     return true;
   }
-  if (server.status === "error") {
-    setState(entry, {
-      status: "error",
-      error: server.error ?? "unknown error",
-    });
-    return true;
-  }
-  // pending — caller may start a fresh stream
   return false;
 }
 
@@ -224,6 +264,7 @@ export function sendChatMessage(
   annotationId: string,
   text: string,
   userText: string,
+  page: number,
 ): void {
   const trimmed = userText.trim();
   if (!trimmed) return;
@@ -242,8 +283,7 @@ export function sendChatMessage(
   const last = entry.chat.messages[entry.chat.messages.length - 1];
   entry.chatAbort = streamChat(
     docId,
-    annotationId,
-    { text, kind, content, messages: outgoing },
+    { text, kind, content, page, messages: outgoing },
     {
       onDelta: (chunk) => {
         last.content += chunk;
@@ -278,6 +318,7 @@ export function refineFromChat(
   docId: string,
   annotationId: string,
   text: string,
+  page: number,
 ): void {
   const entry = ensureEntry(annotationId);
   if (entry.chat.refining || entry.chat.streaming) return;
@@ -291,8 +332,13 @@ export function refineFromChat(
   let acc = "";
   entry.refineAbort = streamRefine(
     docId,
-    annotationId,
-    { text, kind, content: originalContent, messages: entry.chat.messages.slice() },
+    {
+      text,
+      kind,
+      content: originalContent,
+      page,
+      messages: entry.chat.messages.slice(),
+    },
     {
       onDelta: (chunk) => {
         acc += chunk;
@@ -302,10 +348,13 @@ export function refineFromChat(
         notify(entry);
       },
       onDone: (full) => {
-        setState(entry, { status: "ready", content: full || acc, kind });
+        const finalText = full || acc;
+        setState(entry, { status: "ready", content: finalText, kind });
         entry.chat.refining = false;
         entry.refineAbort = undefined;
         notify(entry);
+        // Refine overwrites the cached explanation for this highlight.
+        writeThroughCache(docId, annotationId, kind, text, finalText);
       },
       onError: (message) => {
         // Restore what the reader had — a failed rewrite shouldn't blank it.

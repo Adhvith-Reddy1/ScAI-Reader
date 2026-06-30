@@ -5,6 +5,10 @@
  */
 
 import { streamFigureExplanation } from "./api.ts";
+import {
+  getExplanation as getCachedExplanation,
+  putExplanation,
+} from "./storage/localStore.ts";
 
 export type FigureState =
   | { status: "idle" }
@@ -68,16 +72,31 @@ export function seedFigure(
   setState(entry, { status: "ready", content });
 }
 
-export function startFigureExplanation(
+export async function startFigureExplanation(
   docId: string,
   figureId: string,
   page: number,
   label: string,
-): void {
+): Promise<void> {
   const entry = ensureEntry(docId, figureId);
   if (entry.state.status === "loading" || entry.state.status === "ready") {
     return;
   }
+
+  // Cache-first: figure explanations are cached in the same `explanations`
+  // store, reusing the `annotationId` slot for the figure id (Spec 06).
+  let cached;
+  try {
+    cached = await getCachedExplanation(docId, figureId);
+  } catch {
+    cached = null;
+  }
+  if (entry.state.status !== "idle") return; // advanced while awaiting
+  if (cached && cached.status === "complete" && cached.content) {
+    setState(entry, { status: "ready", content: cached.content });
+    return;
+  }
+
   setState(entry, { status: "loading", content: "" });
 
   entry.abort = streamFigureExplanation(docId, figureId, page, label, {
@@ -92,6 +111,17 @@ export function startFigureExplanation(
     onDone: (full) => {
       setState(entry, { status: "ready", content: full });
       entry.abort = undefined;
+      void putExplanation({
+        docId,
+        annotationId: figureId,
+        kind: "explanation",
+        text: label,
+        content: full,
+        status: "complete",
+        updated_at: new Date().toISOString(),
+      }).catch(() => {
+        /* best-effort cache write */
+      });
     },
     onError: (message) => {
       setState(entry, { status: "error", error: message });
