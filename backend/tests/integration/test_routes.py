@@ -19,7 +19,7 @@ def test_health_endpoint(app_client):
 
 
 @pytest.mark.integration
-def test_upload_then_list(app_client, simple_pdf):
+def test_upload_returns_metadata(app_client, simple_pdf):
     with simple_pdf.open("rb") as f:
         r = app_client.post(
             "/documents",
@@ -32,10 +32,6 @@ def test_upload_then_list(app_client, simple_pdf):
     assert body["id"] == expected_id
     assert body["page_count"] == 2
     assert body["title"] == "Simple Two Page"
-
-    listing = app_client.get("/documents").json()
-    assert len(listing) == 1
-    assert listing[0]["id"] == expected_id
 
 
 @pytest.mark.integration
@@ -107,20 +103,6 @@ def test_render_invalid_dpi_is_400(app_client, simple_pdf):
 
 
 @pytest.mark.integration
-def test_get_document_metadata(app_client, simple_pdf):
-    with simple_pdf.open("rb") as f:
-        doc_id = app_client.post(
-            "/documents",
-            files={"file": ("s.pdf", f, "application/pdf")},
-        ).json()["id"]
-    r = app_client.get(f"/documents/{doc_id}")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["page_count"] == 2
-    assert body["title"] == "Simple Two Page"
-
-
-@pytest.mark.integration
 def test_dimensions_endpoint_returns_per_page_sizes(app_client, simple_pdf):
     with simple_pdf.open("rb") as f:
         doc_id = app_client.post(
@@ -178,5 +160,3 @@ def test_duplicate_upload_is_idempotent(app_client, simple_pdf):
     with simple_pdf.open("rb") as f:
         b = app_client.post("/documents", files={"file": ("b.pdf", f, "application/pdf")})
     assert a.json()["id"] == b.json()["id"]
-    listing = app_client.get("/documents").json()
-    assert len(listing) == 1

@@ -107,29 +107,6 @@ async def upload_document(
     }
 
 
-@router.get("")
-def list_documents(settings: Settings = Depends(get_settings)) -> list[dict]:
-    with db.connect(settings.db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, filename, page_count, title, author, size_bytes, uploaded_at "
-            "FROM documents ORDER BY uploaded_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@router.get("/{doc_id}")
-def get_document(doc_id: str, settings: Settings = Depends(get_settings)) -> dict:
-    with db.connect(settings.db_path) as conn:
-        row = conn.execute(
-            "SELECT id, filename, page_count, title, author, size_bytes, uploaded_at "
-            "FROM documents WHERE id = ?",
-            (doc_id,),
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="document not found")
-    return dict(row)
-
-
 @router.get("/{doc_id}/dimensions")
 def get_dimensions(doc_id: str, settings: Settings = Depends(get_settings)) -> dict:
     """Per-page sizes in PDF points. Used by the frontend to reserve scroll
