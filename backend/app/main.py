@@ -17,6 +17,7 @@ from .routes import (
     pages,
     search,
     settings as settings_routes,
+    stateless_ai,
     text,
 )
 from .routes.deps import get_settings
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(annotations.router)
     app.include_router(explanations.router)
     app.include_router(figures.router)
+    app.include_router(stateless_ai.router)
     app.include_router(outline.router)
     app.include_router(search.router)
     app.include_router(settings_routes.router)

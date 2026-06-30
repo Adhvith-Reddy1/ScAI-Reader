@@ -1,17 +1,20 @@
 import {
-  createHighlight,
-  deleteAnnotation,
   fetchPageFigures,
   fetchPageText,
-  listAnnotations,
   pageImageUrl,
-  type Annotation,
   type DocumentMeta,
   type PageDimension,
   type PageFigure,
   type PageText,
   type Rect,
 } from "../api.ts";
+import {
+  deleteAnnotation,
+  listAnnotations,
+  putAnnotation,
+  type LocalAnnotation,
+} from "../storage/localStore.ts";
+import { makeHighlight } from "./highlightModel.ts";
 import { seedFigure } from "../figureStore.ts";
 import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
 import { showFigureCard } from "./FigureCard.ts";
@@ -232,7 +235,7 @@ async function refreshAnnotations(
   state: PageState,
 ): Promise<void> {
   if (!state.geom) return;
-  let annotations: Annotation[];
+  let annotations: LocalAnnotation[];
   try {
     annotations = await listAnnotations(meta.id, pageNumber);
   } catch {
@@ -330,16 +333,18 @@ async function maybeAutoSaveHighlight(
   // explanations on explanation highlights.
   const selectedText = sel.toString().trim();
 
-  let saved;
+  // Highlights live in the browser now: the client mints the id/created_at and
+  // persists to IndexedDB. No network call.
+  const saved = makeHighlight({
+    docId: meta.id,
+    page: pageNumber,
+    color: mode.color,
+    rects: pageRects,
+    text: selectedText || null,
+    explain: mode.explain,
+  });
   try {
-    saved = await createHighlight(
-      meta.id,
-      pageNumber,
-      mode.color,
-      pageRects,
-      selectedText || undefined,
-      mode.explain,
-    );
+    await putAnnotation(saved);
   } catch {
     return;
   }
@@ -348,7 +353,8 @@ async function maybeAutoSaveHighlight(
 
   // Explanation highlights eagerly generate an AI definition/explanation so
   // that by the time the user hovers, the response is partially or fully ready.
-  if (saved && mode.explain && selectedText) {
+  // (Spec 06 points this at the stateless /ai/explain endpoint + local cache.)
+  if (mode.explain && selectedText) {
     void startExplanation(meta.id, saved.id, selectedText, pageNumber);
   }
 }

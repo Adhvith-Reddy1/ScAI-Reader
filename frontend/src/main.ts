@@ -1,10 +1,18 @@
 import {
   fetchDocumentDimensions,
   uploadDocument,
+  uploadDocumentBlob,
   type DocumentDimensions,
   type DocumentMeta,
-  type LibraryDocument,
 } from "./api.ts";
+import {
+  deleteDocument,
+  estimateUsage,
+  getDocument,
+  getViewState,
+  putDocument,
+  putViewState,
+} from "./storage/localStore.ts";
 import {
   clearDocument,
   setDocumentBounds,
@@ -18,11 +26,17 @@ import { subscribeExplainMode } from "./explainMode.ts";
 import { buildFindBar } from "./FindBar.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
-import { buildLibrary } from "./Library.ts";
+import { buildLibrary, type LibraryItem } from "./Library.ts";
 import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
-import { setActivePageList } from "./pageNav.ts";
-import { initSidebar, mountSidebarPanel } from "./sidebar.ts";
+import { setActivePageList, subscribePageInfo, jumpToPage } from "./pageNav.ts";
+import {
+  initSidebar,
+  isSidebarVisible,
+  mountSidebarPanel,
+  setSidebarVisible,
+  subscribeSidebarVisibility,
+} from "./sidebar.ts";
 import { buildSidebarToggle } from "./SidebarToggle.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
@@ -33,7 +47,7 @@ import {
   zoomInAtViewerCenter,
   zoomOutAtViewerCenter,
 } from "./viewerZoom.ts";
-import { getZoom, setZoom } from "./zoom.ts";
+import { getZoom, setZoom, subscribeZoom } from "./zoom.ts";
 
 const fileInput = document.getElementById("file") as HTMLInputElement;
 const viewer = document.getElementById("viewer") as HTMLElement;
@@ -221,11 +235,38 @@ fileInput.addEventListener("change", async () => {
   docInfo.textContent = "Uploading…";
   try {
     const meta = await uploadDocument(file);
+    await persistUpload(file, meta);
     await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
   }
 });
+
+/**
+ * Save an uploaded PDF (bytes + metadata) to the browser-local library, so it
+ * survives reload and re-supplies itself to the server on later opens. Warns
+ * (non-blocking) when storage is nearly full so a failed write isn't a mystery.
+ */
+async function persistUpload(file: File, meta: DocumentMeta): Promise<void> {
+  const est = await estimateUsage();
+  if (est && est.quotaBytes > 0 && est.usageBytes / est.quotaBytes > 0.9) {
+    toast("Storage is almost full — remove old PDFs if saving fails.");
+  }
+  try {
+    await putDocument({
+      id: meta.id,
+      filename: file.name,
+      page_count: meta.page_count,
+      title: meta.title,
+      author: meta.author,
+      size_bytes: file.size,
+      added_at: new Date().toISOString(),
+      blob: file,
+    });
+  } catch {
+    toast("Couldn't save this PDF to your library (storage may be full).");
+  }
+}
 
 let pageList: PageListHandle | null = null;
 
@@ -235,9 +276,9 @@ function pushViewportSize(): void {
 pushViewportSize();
 window.addEventListener("resize", pushViewportSize);
 
-async function renderDocument(
-  meta: DocumentMeta | LibraryDocument,
-): Promise<void> {
+async function renderDocument(meta: DocumentMeta): Promise<void> {
+  currentDocId = meta.id;
+  lastKnownPage = 1;
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
@@ -268,6 +309,41 @@ async function renderDocument(
   setActivePageList(pageList, meta.page_count, meta.id);
 }
 
+/**
+ * Open a document from the browser-local library: re-supply its stored bytes
+ * to the server (so a stateless / cold server can render), then restore the
+ * saved zoom / sidebar / page. Upload is idempotent (keyed by SHA-256).
+ */
+async function openDocument(item: LibraryItem): Promise<void> {
+  currentDocId = item.id;
+  docInfo.textContent = "Loading…";
+
+  const doc = await getDocument(item.id);
+  if (!doc) {
+    toast("That document is no longer stored locally.");
+    void showLibrary();
+    return;
+  }
+
+  // Restore zoom + sidebar before building the layout to avoid a reflow flash.
+  const vs = await getViewState(item.id);
+  if (vs) {
+    setZoom(vs.zoom);
+    setSidebarVisible(vs.sidebarOpen);
+  }
+
+  let meta: DocumentMeta;
+  try {
+    meta = await uploadDocumentBlob(doc.blob, doc.filename);
+  } catch (err) {
+    docInfo.textContent = `Error: ${(err as Error).message}`;
+    return;
+  }
+
+  await renderDocument(meta);
+  if (vs && vs.lastPage > 1) jumpToPage(vs.lastPage);
+}
+
 async function showLibrary(): Promise<void> {
   if (pageList) {
     pageList.dispose();
@@ -275,12 +351,47 @@ async function showLibrary(): Promise<void> {
   }
   setActivePageList(null);
   clearDocument();
+  currentDocId = null;
   viewer.innerHTML = "";
-  const library = await buildLibrary((doc) => {
-    void renderDocument(doc);
-  });
+  const library = await buildLibrary(
+    (item) => void openDocument(item),
+    async (id) => {
+      await deleteDocument(id);
+    },
+  );
   viewer.appendChild(library);
 }
+
+// --- View-state persistence ------------------------------------------------
+// While a document is open, remember its zoom / current page / sidebar state so
+// reopening it (even in a new session) lands where the reader left off. Writes
+// are debounced — zoom and page changes can fire many times a second.
+let currentDocId: string | null = null;
+let lastKnownPage = 1;
+let viewStateTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleViewStatePersist(): void {
+  if (viewStateTimer != null) clearTimeout(viewStateTimer);
+  viewStateTimer = setTimeout(() => {
+    viewStateTimer = null;
+    if (!currentDocId) return;
+    void putViewState({
+      docId: currentDocId,
+      lastPage: lastKnownPage,
+      zoom: getZoom(),
+      sidebarOpen: isSidebarVisible(),
+    });
+  }, 400);
+}
+
+subscribeZoom(() => scheduleViewStatePersist());
+subscribeSidebarVisibility(() => scheduleViewStatePersist());
+subscribePageInfo((info) => {
+  if (info && info.doc_id === currentDocId) {
+    lastKnownPage = info.current;
+    scheduleViewStatePersist();
+  }
+});
 
 void showLibrary();
 
