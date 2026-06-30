@@ -61,6 +61,9 @@ let pinned = false;
 // Context for the pinned annotation, captured on show().
 let activeDoc: DocumentMeta | null = null;
 let activeText: string | null = null;
+// Page the active highlight sits on — sent to the stateless AI endpoints so
+// the server can re-extract page context (Spec 06).
+let activePage: number | null = null;
 let activeGroup: SVGGElement | null = null;
 let activeOnDelete: ((annotationId: string) => void) | null = null;
 // The reader's preferred panel size, remembered across opens (and reloads via
@@ -98,6 +101,7 @@ interface BlueRegistration {
   group: SVGGElement;
   doc: DocumentMeta;
   annotationId: string;
+  page: number;
   text: string | null;
   onDelete: (annotationId: string) => void;
 }
@@ -180,7 +184,7 @@ function ensureTooltip(): HTMLDivElement {
     // Kick the rewrite off in the background and close immediately so the
     // reader can keep reading — the box text updates whenever the model
     // finishes, ready for the next time they hover.
-    refineFromChat(doc.id, id, text);
+    refineFromChat(doc.id, id, text, activePage ?? 1);
     pinned = false;
     hide();
   });
@@ -270,7 +274,13 @@ function submitChat(): void {
   if (!activeDoc || !activeAnnotationId || !activeText || !inputEl) return;
   const value = inputEl.value;
   if (!value.trim()) return;
-  sendChatMessage(activeDoc.id, activeAnnotationId, activeText, value);
+  sendChatMessage(
+    activeDoc.id,
+    activeAnnotationId,
+    activeText,
+    value,
+    activePage ?? 1,
+  );
   inputEl.value = "";
 }
 
@@ -358,6 +368,7 @@ function hide(): void {
   activeAnnotationId = null;
   activeDoc = null;
   activeText = null;
+  activePage = null;
   activeGroup = null;
   activeOnDelete = null;
   // The panel must be re-placed next open, but the reader's chosen size is
@@ -551,6 +562,7 @@ async function show(
   activeAnnotationId = annotationId;
   activeDoc = doc;
   activeText = text;
+  activePage = registration.page;
   activeGroup = registration.group;
   activeOnDelete = registration.onDelete;
   clearSubscription();
@@ -572,7 +584,7 @@ async function show(
     const hydrated = await hydrateExplanation(doc.id, annotationId);
     if (activeAnnotationId !== annotationId) return;
     if (!hydrated && text) {
-      startExplanation(doc.id, annotationId, text);
+      void startExplanation(doc.id, annotationId, text, registration.page);
     }
   }
 }
@@ -658,6 +670,7 @@ export function bindBlueAnnotation(
   group: SVGGElement,
   doc: DocumentMeta,
   annotationId: string,
+  page: number,
   text: string | null,
   onDelete: (annotationId: string) => void,
 ): () => void {
@@ -682,6 +695,7 @@ export function bindBlueAnnotation(
       group,
       doc,
       annotationId,
+      page,
       text,
       onDelete,
     });
@@ -737,6 +751,7 @@ export function _resetForTest(): void {
   pendingAnnotationId = null;
   activeDoc = null;
   activeText = null;
+  activePage = null;
   activeGroup = null;
   activeOnDelete = null;
   tooltipEl?.remove();

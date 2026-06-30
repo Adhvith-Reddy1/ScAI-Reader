@@ -9,19 +9,25 @@ import type { ChatStreamCallbacks, DocumentMeta } from "../api.ts";
 // Capture the stream callbacks so tests can complete a chat turn, and observe
 // refine kick-offs. hydrate/start are inert so state comes from seedExplanation.
 const streamChatMock = vi.fn(
-  (_d: string, _a: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
+  (_d: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
 );
 const streamRefineMock = vi.fn(
-  (_d: string, _a: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
+  (_d: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
 );
 
 vi.mock("../api.ts", () => ({
-  getExplanation: vi.fn(async () => null),
   streamExplanation: vi.fn(() => () => {}),
-  streamChat: (d: string, a: string, b: unknown, cb: ChatStreamCallbacks) =>
-    streamChatMock(d, a, b, cb) ?? (() => {}),
-  streamRefine: (d: string, a: string, b: unknown, cb: ChatStreamCallbacks) =>
-    streamRefineMock(d, a, b, cb) ?? (() => {}),
+  streamChat: (d: string, b: unknown, cb: ChatStreamCallbacks) =>
+    streamChatMock(d, b, cb) ?? (() => {}),
+  streamRefine: (d: string, b: unknown, cb: ChatStreamCallbacks) =>
+    streamRefineMock(d, b, cb) ?? (() => {}),
+}));
+
+// The browser cache is consulted on hover (hydrate) — stub it to a miss so the
+// tooltip's state is driven solely by seedExplanation in these UI tests.
+vi.mock("../storage/localStore.ts", () => ({
+  getExplanation: vi.fn().mockResolvedValue(null),
+  putExplanation: vi.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -89,7 +95,7 @@ async function openAndPin(group: SVGGElement): Promise<HTMLElement> {
 }
 
 function lastChatCallbacks(): ChatStreamCallbacks {
-  return streamChatMock.mock.calls[streamChatMock.mock.calls.length - 1][3];
+  return streamChatMock.mock.calls[streamChatMock.mock.calls.length - 1][2];
 }
 
 describe("ExplanationTooltip pin / chat / resize", () => {
@@ -110,7 +116,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("opens the chat and hides the footer (Delete) when pinned", async () => {
     seedExplanation("a", "definition", "A measure of disorder.");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
 
     const tip = await openAndPin(group);
 
@@ -128,7 +134,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
     const onDelete = vi.fn();
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", onDelete);
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", onDelete);
     await Promise.resolve();
     hoverInto(group);
     vi.advanceTimersByTime(300);
@@ -144,7 +150,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("clicking outside the panel closes it", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
     expect(tip.style.display).toBe("flex");
 
@@ -157,7 +163,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("Update explanation closes the panel and refines in the background", async () => {
     seedExplanation("a", "definition", "old");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
 
     // Ask a follow-up, then complete the assistant reply so the conversation
@@ -184,7 +190,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("caps the pinned panel height (grow-then-scroll) when not resized", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
 
     // A bounded max-height is applied so the thread (overflow-y:auto) scrolls
@@ -199,7 +205,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("dragging the SE handle resizes the panel", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
 
     stubRect(tip, {
@@ -231,7 +237,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("remembers the resized size after close and reopen", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
 
     stubRect(tip, { width: 380, height: 260 });
@@ -266,7 +272,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("Escape closes a pinned conversation", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
     expect(tip.style.display).toBe("flex");
 
@@ -277,7 +283,7 @@ describe("ExplanationTooltip pin / chat / resize", () => {
   it("dismissExplanationFor closes a panel pinned to the deleted highlight", async () => {
     seedExplanation("a", "definition", "x");
     const group = buildBlueHighlight();
-    bindBlueAnnotation(group, DOC, "a", "entropy", vi.fn());
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
     const tip = await openAndPin(group);
     expect(tip.style.display).toBe("flex");
 

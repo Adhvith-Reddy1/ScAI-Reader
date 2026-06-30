@@ -16,6 +16,7 @@ import {
 } from "../storage/localStore.ts";
 import { makeHighlight } from "./highlightModel.ts";
 import { seedFigure } from "../figureStore.ts";
+import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToViewport } from "./coords.ts";
 import {
@@ -27,7 +28,7 @@ import {
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getHighlightMode } from "../highlightMode.ts";
 import { getExplainMode } from "../explainMode.ts";
-import { startExplanation } from "../explanationStore.ts";
+import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import { dismissExplanationFor } from "./ExplanationTooltip.ts";
@@ -241,8 +242,20 @@ async function refreshAnnotations(
     annotations = [];
   }
 
-  // Explanation seeding/caching now lives in the browser too and is wired up
-  // by Spec 06 (from the local explanations store); nothing to prime here.
+  // Prime the explanation store from the browser cache (Spec 02/06) for these
+  // highlights. On a cache hit, hovering won't hit the network — the tooltip
+  // pops straight to the ready state.
+  for (const ann of annotations) {
+    if (!ann.explain) continue;
+    try {
+      const cached = await getCachedExplanation(meta.id, ann.id);
+      if (cached && cached.status === "complete" && cached.content) {
+        seedExplanation(ann.id, cached.kind, cached.content);
+      }
+    } catch {
+      /* cache unavailable — first hover will stream instead */
+    }
+  }
 
   if (state.annotationLayer) state.annotationLayer.remove();
   const svg = buildAnnotationLayer(
@@ -340,9 +353,9 @@ async function maybeAutoSaveHighlight(
 
   // Explanation highlights eagerly generate an AI definition/explanation so
   // that by the time the user hovers, the response is partially or fully ready.
-  // (Spec 06 repoints this at the stateless endpoint + local explanation cache.)
+  // (Spec 06 points this at the stateless /ai/explain endpoint + local cache.)
   if (mode.explain && selectedText) {
-    startExplanation(meta.id, saved.id, selectedText);
+    void startExplanation(meta.id, saved.id, selectedText, pageNumber);
   }
 }
 
@@ -354,9 +367,16 @@ async function loadFigures(
   try {
     const resp = await fetchPageFigures(meta.id, pageNumber);
     state.figures = resp.figures;
-    // Seed the store so re-opening doesn't re-stream.
+    // Seed the store from the browser cache so re-opening doesn't re-stream.
     for (const f of resp.figures) {
-      if (f.explanation) seedFigure(meta.id, f.figure_id, f.explanation.content);
+      try {
+        const cached = await getCachedExplanation(meta.id, f.figure_id);
+        if (cached && cached.status === "complete" && cached.content) {
+          seedFigure(meta.id, f.figure_id, cached.content);
+        }
+      } catch {
+        /* cache unavailable — hovering the figure will stream instead */
+      }
     }
   } catch {
     state.figures = [];
