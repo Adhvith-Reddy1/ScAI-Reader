@@ -16,18 +16,6 @@ CREATE TABLE IF NOT EXISTS documents (
     uploaded_at  TEXT NOT NULL                -- ISO-8601
 );
 
-CREATE TABLE IF NOT EXISTS annotations (
-    id           TEXT PRIMARY KEY,
-    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_index   INTEGER NOT NULL,
-    kind         TEXT NOT NULL,               -- highlight | note | ink
-    payload      TEXT NOT NULL,               -- JSON
-    created_at   TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_annotations_doc_page
-    ON annotations(doc_id, page_index);
-
 CREATE TABLE IF NOT EXISTS page_dimensions (
     doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     page_index   INTEGER NOT NULL,
@@ -46,31 +34,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
     page_index  UNINDEXED,
     text,
     tokenize = "unicode61 remove_diacritics 2"
-);
-
-CREATE TABLE IF NOT EXISTS explanations (
-    annotation_id TEXT PRIMARY KEY
-                  REFERENCES annotations(id) ON DELETE CASCADE,
-    kind          TEXT NOT NULL,               -- definition | explanation
-    text          TEXT NOT NULL,               -- the highlighted text
-    content       TEXT,                        -- AI response (null while pending)
-    status        TEXT NOT NULL,               -- pending | complete | error
-    error         TEXT,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS figure_explanations (
-    figure_id     TEXT NOT NULL,               -- e.g. p3_Figure_2
-    doc_id        TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_index    INTEGER NOT NULL,
-    label         TEXT NOT NULL,               -- "Figure 2", "Table 1"
-    content       TEXT,                        -- AI response (null while pending)
-    status        TEXT NOT NULL,               -- pending | complete | error
-    error         TEXT,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL,
-    PRIMARY KEY (doc_id, figure_id)
 );
 """
 

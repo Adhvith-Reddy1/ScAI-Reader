@@ -17,7 +17,6 @@ import pytest
 
 from app import ai, llm
 from app.routes import explanations as exp
-from app.storage import db
 
 
 # ---------------------------------------------------------------------------
@@ -30,18 +29,6 @@ def _upload(client, pdf_path):
         return client.post(
             "/documents", files={"file": ("s.pdf", f, "application/pdf")}
         ).json()["id"]
-
-
-def _row_counts(db_path) -> dict[str, int]:
-    with db.connect(db_path) as conn:
-        return {
-            "explanations": conn.execute(
-                "SELECT COUNT(*) FROM explanations"
-            ).fetchone()[0],
-            "figure_explanations": conn.execute(
-                "SELECT COUNT(*) FROM figure_explanations"
-            ).fetchone()[0],
-        }
 
 
 def _fake_stream(*frames):
@@ -83,7 +70,6 @@ def test_explain_streams_and_writes_nothing(
         llm, "stream_completion", _fake_stream(("delta", "Hi"), ("done", "Hi"))
     )
     doc_id = _upload(app_client, simple_pdf)
-    before = _row_counts(tmp_settings.db_path)
 
     r = app_client.post(
         f"/documents/{doc_id}/ai/explain",
@@ -94,9 +80,6 @@ def test_explain_streams_and_writes_nothing(
     assert '"type": "meta"' in body
     assert '"type": "delta"' in body
     assert '"type": "done"' in body
-
-    assert _row_counts(tmp_settings.db_path) == before
-    assert before["explanations"] == 0
 
 
 @pytest.mark.integration
@@ -120,7 +103,6 @@ def test_chat_streams_and_writes_nothing(
     )
     assert r.status_code == 200
     assert '"type": "done"' in r.text
-    assert _row_counts(tmp_settings.db_path)["explanations"] == 0
 
 
 @pytest.mark.integration
@@ -148,8 +130,6 @@ def test_refine_streams_and_writes_nothing(
     body = r.text
     assert '"refined": true' in body
     assert '"type": "done"' in body
-    # Unlike the annotation-scoped refine, nothing is persisted.
-    assert _row_counts(tmp_settings.db_path)["explanations"] == 0
 
 
 @pytest.mark.integration
@@ -169,7 +149,6 @@ def test_figure_ai_explain_streams_and_writes_nothing(
     )
     assert r.status_code == 200
     assert '"type": "done"' in r.text
-    assert _row_counts(tmp_settings.db_path)["figure_explanations"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -300,5 +279,3 @@ def test_explain_rate_limit_surfaces_friendly_message(
     body = r.text
     assert ai.AI_RATE_LIMITED_MESSAGE in body
     assert ai.AI_RATE_LIMITED_CODE in body
-    # Still nothing persisted on the error path.
-    assert _row_counts(tmp_settings.db_path)["explanations"] == 0
