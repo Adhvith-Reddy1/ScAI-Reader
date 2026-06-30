@@ -13,5 +13,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: false,
+    // Playwright owns `e2e/` (run via `npx playwright test`); Vitest must not
+    // try to collect those specs — its `test()` is not Playwright's.
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 });
