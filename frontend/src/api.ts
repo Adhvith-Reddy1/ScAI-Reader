@@ -7,8 +7,22 @@ export interface DocumentMeta {
 }
 
 export async function uploadDocument(file: File): Promise<DocumentMeta> {
+  return uploadDocumentBlob(file, file.name);
+}
+
+/**
+ * Upload raw PDF bytes for (re-)rendering. The browser is the source of truth
+ * for the library, so each PDF's bytes live in IndexedDB; on open we re-send
+ * them here so a stateless / cold-started server can render the pages. Upload
+ * is idempotent — the server keys by the file's SHA-256, so re-sending the
+ * same bytes returns the same document id.
+ */
+export async function uploadDocumentBlob(
+  blob: Blob,
+  filename: string,
+): Promise<DocumentMeta> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", blob, filename);
   const r = await fetch("/documents", { method: "POST", body: form });
   if (!r.ok) {
     const detail = await r.text();
