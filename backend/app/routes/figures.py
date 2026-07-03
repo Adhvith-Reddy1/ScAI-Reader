@@ -24,7 +24,7 @@ from .. import ai, llm
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.figures import FigureRegion, detect_figures
-from ..pdf.pdfium_backend import PdfiumBackend
+from ..pdf.pdfium_backend import PdfiumBackend, sniff_image_mime
 from ..storage import files
 from .deps import get_settings
 
@@ -135,6 +135,10 @@ def _stream_figure(
     page_number: int,
 ) -> AsyncIterator[tuple[str, str]]:
     page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
+    # render_page's encoding is content-dependent (JPEG for pages with a
+    # raster image — the common case here, since this IS the figure — PNG
+    # otherwise); the vision payload's declared media type must match.
+    media_type = sniff_image_mime(page_png_bytes)
     context = (
         f"For context, here is the text of page {page_number}:\n\n"
         f"<page>\n{page_text}\n</page>\n\n"
@@ -151,7 +155,7 @@ def _stream_figure(
         {
             "role": "user",
             "content": [
-                llm.image_part("image/png", page_b64),
+                llm.image_part(media_type, page_b64),
                 llm.text_part(instruction),
             ],
         }

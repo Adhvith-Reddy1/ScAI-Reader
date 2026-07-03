@@ -58,6 +58,11 @@ def two_column_pdf(fixture_pdfs: dict[str, Path]) -> Path:
     return fixture_pdfs["two_column.pdf"]
 
 
+@pytest.fixture(scope="session")
+def page_with_image_pdf(fixture_pdfs: dict[str, Path]) -> Path:
+    return fixture_pdfs["page_with_image.pdf"]
+
+
 # ---------------------------------------------------------------------------
 # Isolated app settings per integration test
 # ---------------------------------------------------------------------------

@@ -26,6 +26,27 @@ from .types import (
 # behavior either way.
 _PDFIUM_LOCK = threading.RLock()
 
+JPEG_MAGIC = b"\xff\xd8\xff"
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def sniff_image_mime(data: bytes) -> str:
+    """Identify the encoding `render_page` actually used, from magic bytes.
+    Callers (the render route, the figure-explain vision payload) need this
+    to label the response/request correctly, since the format is now
+    content-dependent — see `render_page`."""
+    return "image/jpeg" if data.startswith(JPEG_MAGIC) else "image/png"
+
+
+def _page_has_raster_image(page: pdfium.PdfPage) -> bool:
+    """Whether the page contains at least one embedded raster image object.
+    Cheap — object enumeration, not rendering — sub-millisecond even on a
+    dense page; short-circuits on the first hit. Must be called under
+    `_PDFIUM_LOCK`, same as every other PDFium entry point."""
+    for _ in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE], max_depth=2):
+        return True
+    return False
+
 
 class PdfiumBackend(PdfBackend):
     """PDF backend wrapping pypdfium2 (Apache 2.0, the PDFium engine).
@@ -80,16 +101,36 @@ class PdfiumBackend(PdfBackend):
                 page.close()
 
     def render_page(self, page_index: int, dpi: int) -> bytes:
+        """Render a page to raster bytes at the given DPI.
+
+        Encoding is chosen by content: pages with an embedded raster image
+        (a real figure/photo/plot) render as JPEG, since PNG is a poor,
+        oversized codec for photographic content — roughly 4x larger for the
+        same page in practice, which is real, directly-felt latency on any
+        non-instant network (this is what makes figure-heavy academic papers
+        so much slower to open than plain text). Pages without one keep
+        lossless PNG, which is both small AND crisp for text/line-art — the
+        common case, unaffected by this change. Callers must not assume a
+        fixed format; sniff the result with `sniff_image_mime`.
+        """
         if dpi <= 0:
             raise PdfError(f"dpi must be positive, got {dpi}")
         with _PDFIUM_LOCK:
             page = self._get_page(page_index)
             try:
+                has_image = _page_has_raster_image(page)
                 scale = dpi / 72.0
                 bitmap = page.render(scale=scale)
                 pil_image = bitmap.to_pil()
                 buf = io.BytesIO()
-                pil_image.save(buf, format="PNG", optimize=False, compress_level=6)
+                if has_image:
+                    pil_image.convert("RGB").save(
+                        buf, format="JPEG", quality=85, optimize=False
+                    )
+                else:
+                    pil_image.save(
+                        buf, format="PNG", optimize=False, compress_level=6
+                    )
                 return buf.getvalue()
             finally:
                 page.close()

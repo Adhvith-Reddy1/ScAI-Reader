@@ -151,6 +151,34 @@ def test_figure_ai_explain_streams_and_writes_nothing(
     assert '"type": "done"' in r.text
 
 
+@pytest.mark.integration
+def test_figure_ai_explain_declares_the_real_image_media_type(
+    app_client, page_with_image_pdf, monkeypatch
+):
+    """render_page now returns JPEG for pages with an embedded image (the
+    common case for a figure-explain call, since this IS the figure) — the
+    vision payload's declared media type must match, or a provider could
+    reject/misdecode the attachment."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, page_with_image_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-explain",
+        json={"page": 1, "label": "Figure 1"},
+    )
+    assert r.status_code == 200
+    image_part = captured["messages"][0]["content"][0]
+    assert image_part["kind"] == "image"
+    assert image_part["media_type"] == "image/jpeg"
+    assert image_part["data"]  # base64 payload present
+
+
 # ---------------------------------------------------------------------------
 # kind defaults via classify
 # ---------------------------------------------------------------------------

@@ -87,6 +87,31 @@ def test_render_higher_dpi_yields_more_bytes(backend_opener, simple_pdf):
     assert len(large) > len(small)
 
 
+def test_render_page_with_image_returns_jpeg(backend_opener, page_with_image_pdf):
+    """Pages with an embedded raster image (a figure/photo/plot — the common
+    case in academic papers) render as JPEG, not PNG: PNG is a poor codec for
+    photographic content and produces roughly 4x more bytes for the same
+    page, which is real, felt latency on any non-instant network."""
+    with backend_opener(page_with_image_pdf) as b:
+        jpeg = b.render_page(0, dpi=100)
+    assert jpeg.startswith(b"\xff\xd8\xff")
+
+
+def test_render_jpeg_page_is_much_smaller_than_png_would_be(
+    backend_opener, page_with_image_pdf
+):
+    from PIL import Image
+    import io
+
+    with backend_opener(page_with_image_pdf) as b:
+        jpeg = b.render_page(0, dpi=100)
+    as_png = io.BytesIO()
+    Image.open(io.BytesIO(jpeg)).convert("RGB").save(as_png, format="PNG")
+    # Not a tight bound (exact ratio depends on image content) — just proves
+    # the format choice is doing real, substantial work, not a token gesture.
+    assert len(jpeg) < len(as_png.getvalue()) / 2
+
+
 # ---------------------------------------------------------------------------
 # Text extraction
 # ---------------------------------------------------------------------------
