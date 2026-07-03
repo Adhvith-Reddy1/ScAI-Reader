@@ -68,6 +68,31 @@ def test_render_page_returns_png(app_client, simple_pdf):
 
 
 @pytest.mark.integration
+def test_render_page_with_image_returns_jpeg(app_client, page_with_image_pdf):
+    """A page with an embedded figure/photo renders as JPEG — much smaller
+    over the wire than PNG for the same photographic content — even though
+    the URL keeps its `.png` suffix (browsers decode by Content-Type, not
+    the URL)."""
+    with page_with_image_pdf.open("rb") as f:
+        upload = app_client.post(
+            "/documents",
+            files={"file": ("page_with_image.pdf", f, "application/pdf")},
+        ).json()
+    doc_id = upload["id"]
+
+    r = app_client.get(f"/documents/{doc_id}/pages/1.png?dpi=100")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.content.startswith(b"\xff\xd8\xff")
+
+    # The cached-read path (second request) must report the same, correct
+    # Content-Type — it's sniffed from the cached bytes, not assumed.
+    r2 = app_client.get(f"/documents/{doc_id}/pages/1.png?dpi=100")
+    assert r2.headers["content-type"] == "image/jpeg"
+    assert r2.content == r.content
+
+
+@pytest.mark.integration
 def test_render_page_is_cached(app_client, simple_pdf, tmp_settings):
     with simple_pdf.open("rb") as f:
         upload = app_client.post(

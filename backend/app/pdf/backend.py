@@ -47,7 +47,14 @@ class PdfBackend(ABC):
 
     @abstractmethod
     def render_page(self, page_index: int, dpi: int) -> bytes:
-        """Render a page to PNG bytes at the given DPI. Zero-indexed."""
+        """Render a page to raster bytes at the given DPI. Zero-indexed.
+
+        The encoding is content-dependent: pages with an embedded raster
+        image render as JPEG (much smaller for photographic content than
+        PNG); pages without one render as lossless PNG (small and crisp for
+        text/line-art). Callers must not assume a fixed format — sniff the
+        magic bytes, e.g. via `pdfium_backend.sniff_image_mime`.
+        """
 
     @abstractmethod
     def get_page_text(self, page_index: int) -> PageText:

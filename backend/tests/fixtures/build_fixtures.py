@@ -96,6 +96,34 @@ def build_two_column(path: Path) -> None:
     c.save()
 
 
+def build_page_with_image(path: Path) -> None:
+    """A page with an embedded raster image — exercises the JPEG-for-
+    photographic-content render path (see PdfiumBackend.render_page)."""
+    import io
+
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    # Small gradient raster — enough to register as an Image XObject on the
+    # page; content doesn't need to be photorealistic, just a real image.
+    img = Image.new("RGB", (200, 150))
+    pixels = img.load()
+    for y in range(150):
+        for x in range(200):
+            pixels[x, y] = (x % 256, y % 256, (x + y) % 256)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setTitle("Page With Image")
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, "A page with a figure below.")
+    c.drawImage(ImageReader(buf), 72, 400, width=300, height=225)
+    c.showPage()
+    c.save()
+
+
 def build_all(into: Path = FIXTURES_DIR) -> dict[str, Path]:
     into.mkdir(parents=True, exist_ok=True)
     built: dict[str, Path] = {}
@@ -103,6 +131,7 @@ def build_all(into: Path = FIXTURES_DIR) -> dict[str, Path]:
         "simple_two_page.pdf": build_simple_two_page,
         "outline_doc.pdf": build_outline_doc,
         "two_column.pdf": build_two_column,
+        "page_with_image.pdf": build_page_with_image,
     }
     for name, fn in spec.items():
         target = into / name
