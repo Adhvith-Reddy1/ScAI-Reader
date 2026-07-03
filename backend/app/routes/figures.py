@@ -157,5 +157,5 @@ def _stream_figure(
         }
     ]
     return llm.stream_completion(
-        config, system=SYSTEM_FIGURE, messages=messages, max_tokens=200
+        config, system=SYSTEM_FIGURE, messages=messages, max_tokens=260
     )
