@@ -2,10 +2,15 @@
 
 These mirror the annotation-scoped AI endpoints in ``explanations.py`` and
 ``figures.py`` but **persist nothing**: there are no DB reads or writes. The
-request carries the highlighted text plus a page reference; the server extracts
-that page's text from the PDF this session already uploaded (held only in the
-ephemeral cache) to ground the model, streams the same SSE wire format, and
-keeps no copy. The browser owns the durable highlights/explanations.
+request carries the highlighted text plus a page reference. The browser is the
+preferred source of page-text context: it already fetched and rendered this
+page's text (for the selectable text layer), so it sends that string directly
+in ``page_text``, which we use verbatim. We fall back to re-extracting from the
+PDF this session uploaded (held only in the ephemeral, disk-less cache) only
+when the client didn't supply it — that fallback is inherently fragile, since
+the server's copy can vanish (idle scale-down, a redeploy, a restart) while a
+reader's tab stays open, silently starving the model of context. Either way we
+keep no copy afterward. The browser owns the durable highlights/explanations.
 
 All prompt text and stream logic is imported from the existing route modules so
 prompts live in exactly one place (Shared Contract B in docs/specs/README.md).
@@ -35,19 +40,34 @@ router = APIRouter(prefix="/documents/{doc_id}", tags=["stateless-ai"])
 ExplanationKind = exp.ExplanationKind
 
 
-def _page_text_for(settings: Settings, doc_id: str, page: int | None) -> str:
-    """Page text for grounding when a 1-indexed page is supplied and the PDF is
-    in the cache. Returns "" otherwise — a missing page reference or an evicted
-    PDF just means no page context; the model still answers."""
+def _page_text_for(
+    settings: Settings,
+    doc_id: str,
+    page: int | None,
+    override: str | None = None,
+) -> str:
+    """Page text for grounding. Prefers the browser-supplied ``override`` (the
+    exact text it already rendered) so this never depends on the server's
+    ephemeral PDF cache still being warm. Falls back to re-extracting from a
+    1-indexed page when no override was sent. Returns "" if neither is
+    available or extraction fails — the model still answers, just unguided."""
+    if override:
+        return override
     if page is None:
         return ""
     return exp._page_text(settings, doc_id, page - 1)
+
+
+# Generous cap: a dense page of academic text runs a few thousand characters;
+# this just guards against a pathological payload, not normal use.
+_MAX_PAGE_TEXT_LEN = 20_000
 
 
 class StatelessExplainRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     kind: ExplanationKind | None = None
     page: int | None = Field(default=None, ge=1)
+    page_text: str | None = Field(default=None, max_length=_MAX_PAGE_TEXT_LEN)
 
 
 class StatelessChatRequest(BaseModel):
@@ -55,6 +75,7 @@ class StatelessChatRequest(BaseModel):
     kind: ExplanationKind
     content: str = Field(default="", max_length=8000)
     page: int | None = Field(default=None, ge=1)
+    page_text: str | None = Field(default=None, max_length=_MAX_PAGE_TEXT_LEN)
     messages: list[exp.ChatMessage] = Field(min_length=1)
 
 
@@ -63,6 +84,7 @@ class StatelessRefineRequest(BaseModel):
     kind: ExplanationKind
     content: str = Field(default="", max_length=8000)
     page: int | None = Field(default=None, ge=1)
+    page_text: str | None = Field(default=None, max_length=_MAX_PAGE_TEXT_LEN)
     messages: list[exp.ChatMessage] = Field(min_length=1)
 
 
@@ -73,7 +95,7 @@ async def ai_explain(
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     kind: ExplanationKind = body.kind or exp.classify(body.text)
-    page_text = _page_text_for(settings, doc_id, body.page)
+    page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
     config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
@@ -97,7 +119,7 @@ async def ai_chat(
     body: StatelessChatRequest,
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
-    page_text = _page_text_for(settings, doc_id, body.page)
+    page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
     config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
@@ -123,7 +145,7 @@ async def ai_refine(
     body: StatelessRefineRequest,
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
-    page_text = _page_text_for(settings, doc_id, body.page)
+    page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
     config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:

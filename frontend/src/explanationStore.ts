@@ -160,6 +160,7 @@ export async function startExplanation(
   annotationId: string,
   text: string,
   page: number,
+  pageText?: string,
 ): Promise<void> {
   const entry = ensureEntry(annotationId);
   if (entry.state.status === "loading" || entry.state.status === "ready") {
@@ -186,34 +187,40 @@ export async function startExplanation(
 
   setState(entry, { status: "loading", content: "" });
 
-  entry.abort = streamExplanation(docId, page, text, {
-    onMeta: (kind) => {
-      if (entry.state.status === "loading") {
-        setState(entry, { ...entry.state, kind });
-      }
+  entry.abort = streamExplanation(
+    docId,
+    page,
+    text,
+    {
+      onMeta: (kind) => {
+        if (entry.state.status === "loading") {
+          setState(entry, { ...entry.state, kind });
+        }
+      },
+      onDelta: (chunk) => {
+        if (entry.state.status === "loading") {
+          setState(entry, {
+            ...entry.state,
+            content: entry.state.content + chunk,
+          });
+        }
+      },
+      onDone: (full) => {
+        const kind =
+          entry.state.status === "loading"
+            ? entry.state.kind ?? "explanation"
+            : "explanation";
+        setState(entry, { status: "ready", content: full, kind });
+        entry.abort = undefined;
+        writeThroughCache(docId, annotationId, kind, text, full);
+      },
+      onError: (message, code) => {
+        setState(entry, { status: "error", error: message, code });
+        entry.abort = undefined;
+      },
     },
-    onDelta: (chunk) => {
-      if (entry.state.status === "loading") {
-        setState(entry, {
-          ...entry.state,
-          content: entry.state.content + chunk,
-        });
-      }
-    },
-    onDone: (full) => {
-      const kind =
-        entry.state.status === "loading"
-          ? entry.state.kind ?? "explanation"
-          : "explanation";
-      setState(entry, { status: "ready", content: full, kind });
-      entry.abort = undefined;
-      writeThroughCache(docId, annotationId, kind, text, full);
-    },
-    onError: (message, code) => {
-      setState(entry, { status: "error", error: message, code });
-      entry.abort = undefined;
-    },
-  });
+    pageText,
+  );
 }
 
 /**
@@ -265,6 +272,7 @@ export function sendChatMessage(
   text: string,
   userText: string,
   page: number,
+  pageText?: string,
 ): void {
   const trimmed = userText.trim();
   if (!trimmed) return;
@@ -283,7 +291,7 @@ export function sendChatMessage(
   const last = entry.chat.messages[entry.chat.messages.length - 1];
   entry.chatAbort = streamChat(
     docId,
-    { text, kind, content, page, messages: outgoing },
+    { text, kind, content, page, page_text: pageText, messages: outgoing },
     {
       onDelta: (chunk) => {
         last.content += chunk;
@@ -319,6 +327,7 @@ export function refineFromChat(
   annotationId: string,
   text: string,
   page: number,
+  pageText?: string,
 ): void {
   const entry = ensureEntry(annotationId);
   if (entry.chat.refining || entry.chat.streaming) return;
@@ -337,6 +346,7 @@ export function refineFromChat(
       kind,
       content: originalContent,
       page,
+      page_text: pageText,
       messages: entry.chat.messages.slice(),
     },
     {

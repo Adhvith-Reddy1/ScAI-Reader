@@ -187,6 +187,130 @@ def test_explain_kind_defaults_via_classify(
 
 
 # ---------------------------------------------------------------------------
+# Client-supplied page_text grounds the model without depending on the
+# server's own (ephemeral, disk-less) copy of the PDF still being present.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_explain_uses_client_supplied_page_text_verbatim(app_client, monkeypatch):
+    """The browser already has this page's text (it rendered the text layer
+    with it); when it sends `page_text`, the server must use it as-is rather
+    than trying to re-derive it from a PDF — proven here by never uploading
+    one at all, yet still getting fully-grounded context."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+
+    r = app_client.post(
+        "/documents/never-uploaded/ai/explain",
+        json={
+            "text": "nanobody",
+            "page": 4,
+            "page_text": "Nanobodies are engineered from camelid heavy-chain antibodies.",
+        },
+    )
+    assert r.status_code == 200
+    instruction = captured["messages"][0]["content"]
+    assert "Nanobodies are engineered from camelid" in instruction
+
+
+@pytest.mark.integration
+def test_explain_page_text_overrides_server_extraction(
+    app_client, tmp_settings, simple_pdf, monkeypatch
+):
+    """Even when the PDF IS present (so server-side extraction would succeed),
+    a supplied page_text still wins — it's the more trustworthy source, since
+    it's exactly what the reader is looking at right now."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/ai/explain",
+        json={
+            "text": "term",
+            "page": 1,
+            "page_text": "OVERRIDE-MARKER page content",
+        },
+    )
+    assert r.status_code == 200
+    assert "OVERRIDE-MARKER" in captured["messages"][0]["content"]
+
+
+@pytest.mark.integration
+def test_chat_and_refine_use_client_supplied_page_text(app_client, monkeypatch):
+    captured: list[dict] = []
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured.append({"messages": messages})
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+
+    r = app_client.post(
+        "/documents/never-uploaded/ai/chat",
+        json={
+            "text": "nanobody",
+            "kind": "definition",
+            "content": "A small antibody fragment.",
+            "page": 2,
+            "page_text": "CHAT-MARKER context",
+            "messages": [{"role": "user", "content": "why here?"}],
+        },
+    )
+    assert r.status_code == 200
+    assert "CHAT-MARKER" in captured[0]["messages"][0]["content"]
+
+    r = app_client.post(
+        "/documents/never-uploaded/ai/refine",
+        json={
+            "text": "nanobody",
+            "kind": "definition",
+            "content": "A small antibody fragment.",
+            "page": 2,
+            "page_text": "REFINE-MARKER context",
+            "messages": [{"role": "user", "content": "why here?"}],
+        },
+    )
+    assert r.status_code == 200
+    assert "REFINE-MARKER" in captured[1]["messages"][0]["content"]
+
+
+@pytest.mark.integration
+def test_explain_falls_back_to_server_extraction_without_page_text(
+    app_client, tmp_settings, simple_pdf, monkeypatch
+):
+    """Backward-compatible fallback: omitting page_text still re-derives from
+    the server's cached PDF, exactly as before this fix — proven by the actual
+    fixture text (from simple_two_page.pdf's page 1) showing up in context."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/ai/explain",
+        json={"text": "term", "page": 1},
+    )
+    assert r.status_code == 200
+    assert "Custom PDF Reader" in captured["messages"][0]["content"]
+
+
+# ---------------------------------------------------------------------------
 # Unconfigured provider → coded error frame
 # ---------------------------------------------------------------------------
 

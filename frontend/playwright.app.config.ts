@@ -18,14 +18,22 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const CHROMIUM_PATH =
   process.env.PLAYWRIGHT_CHROMIUM_PATH ?? "/opt/pw-browsers/chromium";
 
-// Fresh, isolated backend storage for this run only.
-const DATA_DIR = mkdtempSync(join(tmpdir(), "scai-e2e-app-"));
+// Fresh, isolated backend storage for this run only. Exported so specs that
+// need to reach into the server's on-disk state (e.g. simulating an evicted
+// ephemeral PDF cache) know where to look.
+export const DATA_DIR = mkdtempSync(join(tmpdir(), "scai-e2e-app-"));
 
 export default defineConfig({
   testDir: "./e2e-app",
   timeout: 30_000,
   expect: { timeout: 10_000 },
-  fullyParallel: true,
+  // All specs here share ONE backend process and on-disk data dir (see
+  // webServer below). Some tests mutate that shared server-side state
+  // directly (e.g. deleting the cached PDF file to simulate an ephemeral-cache
+  // eviction) — running them in parallel workers races against whatever else
+  // is touching the same file/server at that moment. Keep this suite serial.
+  fullyParallel: false,
+  workers: 1,
   reporter: [["list"]],
   use: {
     baseURL: BASE_URL,

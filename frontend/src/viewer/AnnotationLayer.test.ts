@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import type { PageGeometry } from "./coords.ts";
-import type { Annotation } from "../api.ts";
+import type { Annotation, DocumentMeta } from "../api.ts";
 import {
   setEraseMode,
   _resetForTest as _resetEraseForTest,
 } from "../eraseMode.ts";
+
+const bindBlueAnnotationMock = vi.fn((..._args: unknown[]) => () => {});
+vi.mock("./ExplanationTooltip.ts", () => ({
+  bindBlueAnnotation: (...args: unknown[]) => bindBlueAnnotationMock(...args),
+}));
+
+const { buildAnnotationLayer } = await import("./AnnotationLayer.ts");
 
 const geom: PageGeometry = {
   pageWidthPt: 612,
@@ -32,13 +38,46 @@ function ann(
   };
 }
 
+const doc: DocumentMeta = {
+  id: "doc-1",
+  filename: "paper.pdf",
+  page_count: 3,
+  title: null,
+  author: null,
+};
+
 describe("buildAnnotationLayer", () => {
   beforeEach(() => {
     _resetEraseForTest();
+    bindBlueAnnotationMock.mockClear();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
     _resetEraseForTest();
+  });
+
+  it("passes the page text through to bindBlueAnnotation for explain highlights", () => {
+    buildAnnotationLayer(
+      [ann("a", "blue", [{ x0: 0, y0: 0, x1: 50, y1: 12 }], true)],
+      geom,
+      () => {},
+      doc,
+      "flattened page text",
+    );
+    expect(bindBlueAnnotationMock).toHaveBeenCalledTimes(1);
+    const args = bindBlueAnnotationMock.mock.calls[0];
+    // (group, doc, annotationId, page, text, onDelete, pageText)
+    expect(args[6]).toBe("flattened page text");
+  });
+
+  it("passes null page text through when none was available", () => {
+    buildAnnotationLayer(
+      [ann("a", "blue", [{ x0: 0, y0: 0, x1: 50, y1: 12 }], true)],
+      geom,
+      () => {},
+      doc,
+    );
+    expect(bindBlueAnnotationMock.mock.calls[0][6]).toBeNull();
   });
 
   it("renders one <g> per annotation, with rects inside", () => {
