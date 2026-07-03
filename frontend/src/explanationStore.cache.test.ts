@@ -5,7 +5,13 @@ import type { LocalExplanation } from "./storage/localStore.ts";
 // Capture the explain-stream callbacks so tests can drive onDone, and observe
 // whether a stream was started at all (the cache-hit path must NOT start one).
 const streamExplanationMock = vi.fn(
-  (_d: string, _p: number, _t: string, _cb: ExplainCallbacks) => () => {},
+  (
+    _d: string,
+    _p: number,
+    _t: string,
+    _cb: ExplainCallbacks,
+    _pageText?: string,
+  ) => () => {},
 );
 
 vi.mock("./api.ts", () => ({
@@ -14,7 +20,8 @@ vi.mock("./api.ts", () => ({
     p: number,
     t: string,
     cb: ExplainCallbacks,
-  ) => streamExplanationMock(d, p, t, cb) ?? (() => {}),
+    pageText?: string,
+  ) => streamExplanationMock(d, p, t, cb, pageText) ?? (() => {}),
   streamChat: vi.fn(() => () => {}),
   streamRefine: vi.fn(() => () => {}),
 }));
@@ -81,6 +88,13 @@ describe("explanationStore cache-first / write-through", () => {
       page: 3,
       text: "entropy",
     });
+  });
+
+  it("passes the browser-fetched page text through to the stream call", async () => {
+    await startExplanation("doc", "a", "entropy", 3, "flattened page text");
+
+    const [, , , , pageText] = streamExplanationMock.mock.calls[0];
+    expect(pageText).toBe("flattened page text");
   });
 
   it("write-through: a completed stream is persisted to the cache", async () => {

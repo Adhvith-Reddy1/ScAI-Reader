@@ -83,6 +83,24 @@ export async function fetchPageText(
   return r.json() as Promise<PageText>;
 }
 
+/**
+ * Flatten a page's text runs into the same whitespace-joined string the
+ * backend derives from the PDF — but from data the browser already fetched to
+ * build the selectable text layer. Sending this directly to the AI endpoints
+ * means an explanation is grounded in the paper even if the server's own copy
+ * of the PDF is gone (e.g. after an idle restart on a disk-less deploy).
+ */
+export function flattenPageText(page: PageText): string {
+  const parts: string[] = [];
+  for (const col of page.columns) {
+    for (const run of col.runs) {
+      const t = run.text.trim();
+      if (t) parts.push(t);
+    }
+  }
+  return parts.join(" ");
+}
+
 export interface SearchResult {
   page: number;
   /** HTML snippet — matched terms wrapped in <mark>…</mark> by the server. */
@@ -255,8 +273,14 @@ export interface ChatRequestBody {
   text: string;
   kind: ExplanationKind;
   content: string;
-  /** Page the highlight sits on, so the stateless server can re-extract context. */
+  /** Page the highlight sits on; used for the server-side fallback below. */
   page?: number;
+  /**
+   * The page's text, already fetched/flattened client-side (see
+   * `flattenPageText`). Preferred over `page`: the server uses this verbatim
+   * instead of re-deriving it from its own (possibly evicted) PDF cache.
+   */
+  page_text?: string;
   messages: ChatTurn[];
 }
 
@@ -402,6 +426,7 @@ export function streamExplanation(
   page: number,
   text: string,
   callbacks: ExplainCallbacks,
+  pageText?: string,
 ): () => void {
   const ctrl = new AbortController();
 
@@ -411,7 +436,7 @@ export function streamExplanation(
       r = await fetch(`/documents/${docId}/ai/explain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, page }),
+        body: JSON.stringify({ text, page, page_text: pageText }),
         signal: ctrl.signal,
       });
     } catch (e) {

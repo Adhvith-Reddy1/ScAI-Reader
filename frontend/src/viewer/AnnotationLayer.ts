@@ -28,6 +28,7 @@ export function buildAnnotationLayer(
   geom: PageGeometry,
   onDelete: (annotationId: string) => void,
   doc?: DocumentMeta,
+  pageText?: string | null,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("class", "annotation-layer");
@@ -70,7 +71,15 @@ export function buildAnnotationLayer(
     // own bottom-left Delete button), regardless of color. Plain highlights get
     // the standalone hover Delete pill anchored at the bottom-left.
     if (ann.explain && doc) {
-      bindBlueAnnotation(group, doc, ann.id, ann.page, ann.text ?? null, onDelete);
+      bindBlueAnnotation(
+        group,
+        doc,
+        ann.id,
+        ann.page,
+        ann.text ?? null,
+        onDelete,
+        pageText ?? null,
+      );
     } else {
       bindHighlightActions(group, ann.id, onDelete);
     }

@@ -42,7 +42,7 @@ describe("explanationStore chat", () => {
 
   it("appends a user turn + a placeholder assistant turn and streams into it", () => {
     seedExplanation("a", "definition", "original");
-    sendChatMessage("doc", "a", "entropy", "  why here?  ", 1);
+    sendChatMessage("doc", "a", "entropy", "  why here?  ", 1, "page text here");
 
     const chat = getChat("a");
     expect(chat.messages).toEqual([
@@ -58,6 +58,7 @@ describe("explanationStore chat", () => {
       text: "entropy",
       kind: "definition",
       content: "original",
+      page_text: "page text here",
       messages: [{ role: "user", content: "why here?" }],
     });
 
@@ -98,8 +99,11 @@ describe("explanationStore chat", () => {
     sendChatMessage("doc", "a", "entropy", "q", 1);
     lastCallbacks(streamChatMock).onDone("an answer");
 
-    refineFromChat("doc", "a", "entropy", 1);
+    refineFromChat("doc", "a", "entropy", 1, "refine page text");
     expect(getChat("a").refining).toBe(true);
+    expect(streamRefineMock.mock.calls[0][1]).toMatchObject({
+      page_text: "refine page text",
+    });
 
     const cb = lastCallbacks(streamRefineMock);
     cb.onDelta("new ");

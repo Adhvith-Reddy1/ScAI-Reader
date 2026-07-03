@@ -1,6 +1,7 @@
 import {
   fetchPageFigures,
   fetchPageText,
+  flattenPageText,
   pageImageUrl,
   type DocumentMeta,
   type PageDimension,
@@ -272,6 +273,7 @@ async function refreshAnnotations(
       await refreshAnnotations(meta, pageNumber, wrap, state);
     },
     meta,
+    state.text ? flattenPageText(state.text) : null,
   );
   const textLayer = wrap.querySelector(".text-layer");
   if (textLayer) {
@@ -353,9 +355,17 @@ async function maybeAutoSaveHighlight(
 
   // Explanation highlights eagerly generate an AI definition/explanation so
   // that by the time the user hovers, the response is partially or fully ready.
-  // (Spec 06 points this at the stateless /ai/explain endpoint + local cache.)
+  // The page text was already fetched to build this page's text layer, so we
+  // send it directly rather than making the server re-derive it from its own
+  // (possibly-evicted, since we run with no disk) copy of the PDF.
   if (mode.explain && selectedText) {
-    void startExplanation(meta.id, saved.id, selectedText, pageNumber);
+    void startExplanation(
+      meta.id,
+      saved.id,
+      selectedText,
+      pageNumber,
+      state.text ? flattenPageText(state.text) : undefined,
+    );
   }
 }
 
