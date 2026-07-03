@@ -76,6 +76,100 @@ def test_validate_config_network_error_warns_not_raises(monkeypatch):
     assert warning and "couldn't reach" in warning
 
 
+def test_is_gemini_endpoint():
+    assert llm._is_gemini_endpoint(
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
+    assert not llm._is_gemini_endpoint("https://api.openai.com/v1")
+    assert not llm._is_gemini_endpoint(None)
+
+
+def test_gemini_endpoint_disables_thinking_via_reasoning_effort(monkeypatch):
+    """Gemini's OpenAI-compatible endpoint bills hidden "thinking" tokens out
+    of the same max_tokens budget as the visible answer, so a short cap (kept
+    small for snappy tooltips) can get consumed by invisible reasoning and
+    truncate the visible reply to a couple of words. We must explicitly send
+    reasoning_effort="none" for Gemini endpoints to avoid this."""
+    captured: dict = {}
+
+    class _FakeStream:
+        def __aiter__(self):
+            async def gen():
+                return
+                yield  # pragma: no cover - empty async generator
+
+            return gen()
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeStream()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = _FakeChat()
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeClient)
+
+    cfg = ProviderConfig(
+        "openai",
+        "key",
+        model="gemini-2.5-flash",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    _collect(
+        llm.stream_completion(
+            cfg, system="s", messages=[llm.user_text("hi")], max_tokens=80
+        )
+    )
+    assert captured.get("extra_body") == {"reasoning_effort": "none"}
+
+
+def test_non_gemini_endpoint_does_not_send_reasoning_effort(monkeypatch):
+    captured: dict = {}
+
+    class _FakeStream:
+        def __aiter__(self):
+            async def gen():
+                return
+                yield  # pragma: no cover
+
+            return gen()
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeStream()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = _FakeChat()
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeClient)
+
+    cfg = ProviderConfig("openai", "key", model="gpt-4o-mini")
+    _collect(
+        llm.stream_completion(
+            cfg, system="s", messages=[llm.user_text("hi")], max_tokens=80
+        )
+    )
+    assert "extra_body" not in captured
+
+
 def test_validate_config_success(monkeypatch):
     import anthropic
 

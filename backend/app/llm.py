@@ -123,6 +123,10 @@ async def _stream_anthropic(
         yield ("error", f"{type(e).__name__}: {e}")
 
 
+def _is_gemini_endpoint(base_url: str | None) -> bool:
+    return bool(base_url) and "generativelanguage.googleapis.com" in base_url
+
+
 async def _stream_openai(
     config: ProviderConfig,
     model: str,
@@ -132,22 +136,29 @@ async def _stream_openai(
 ) -> AsyncIterator[tuple[str, str]]:
     import openai
 
-    client = openai.AsyncOpenAI(
-        api_key=config.api_key, base_url=config.resolve_base_url()
-    )
+    base_url = config.resolve_base_url()
+    client = openai.AsyncOpenAI(api_key=config.api_key, base_url=base_url)
     o_messages = [{"role": "system", "content": system}]
     o_messages += [
         {"role": m["role"], "content": _openai_content(m["content"])}
         for m in messages
     ]
+    create_kwargs: dict = dict(
+        model=model,
+        messages=o_messages,
+        max_tokens=max_tokens,
+        stream=True,
+    )
+    if _is_gemini_endpoint(base_url):
+        # Unlike OpenAI's reasoning models, Gemini's OpenAI-compatible endpoint
+        # bills hidden "thinking" tokens out of the SAME max_tokens budget as
+        # the visible answer — so a short cap (kept small for snappy tooltips)
+        # gets consumed by invisible reasoning and the visible reply is cut to
+        # a couple of words. Explicitly turn thinking off.
+        create_kwargs["extra_body"] = {"reasoning_effort": "none"}
     accumulated: list[str] = []
     try:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=o_messages,
-            max_tokens=max_tokens,
-            stream=True,
-        )
+        stream = await client.chat.completions.create(**create_kwargs)
         async for chunk in stream:
             if not chunk.choices:
                 continue

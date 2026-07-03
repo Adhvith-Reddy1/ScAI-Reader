@@ -173,7 +173,11 @@ async def _stream_explanation(
         config,
         system=system,
         messages=[llm.user_text(instruction)],
-        max_tokens=80 if kind == "definition" else 140,
+        # Headroom above the ~35/45-word prompt limits: on providers whose
+        # "thinking" tokens share this budget (e.g. Gemini), llm.py disables
+        # thinking explicitly, but this margin protects against any provider
+        # where that isn't fully honored.
+        max_tokens=160 if kind == "definition" else 220,
         tier="fast" if kind == "definition" else "good",
     ):
         yield event
@@ -241,6 +245,6 @@ def _stream_refine(
         config,
         system=system,
         messages=[llm.user_text(instruction)],
-        max_tokens=80 if kind == "definition" else 140,
+        max_tokens=160 if kind == "definition" else 220,
         tier="fast" if kind == "definition" else "good",
     )
