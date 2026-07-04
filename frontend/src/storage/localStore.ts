@@ -205,6 +205,20 @@ export async function getExplanation(
   return (await db.get("explanations", [docId, annotationId])) ?? null;
 }
 
+/**
+ * Every explanation stored for a document — annotation explanations and figure
+ * explanations alike (both live in this store, keyed by `[docId, *]`). Used to
+ * export a document's explanations as a portable bundle. The compound-key range
+ * `[docId] .. [docId, []]` selects all rows whose first key element is `docId`
+ * (an empty array sorts after any string, so it bounds the upper end).
+ */
+export async function listExplanations(
+  docId: string,
+): Promise<LocalExplanation[]> {
+  const db = await getDB();
+  return db.getAll("explanations", IDBKeyRange.bound([docId], [docId, []]));
+}
+
 // View state -------------------------------------------------------------
 
 export async function getViewState(docId: string): Promise<ViewState | null> {

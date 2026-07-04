@@ -20,6 +20,7 @@ import {
   getViewState,
   listAnnotations,
   listDocuments,
+  listExplanations,
   putAnnotation,
   putDocument,
   putExplanation,
@@ -189,6 +190,24 @@ describe("explanations", () => {
     expect((await getExplanation("doc-1", "ann-1"))!.content).toBe("x");
     expect((await getExplanation("doc-1", "ann-2"))!.content).toBe("y");
     expect((await getExplanation("doc-2", "ann-1"))!.content).toBe("z");
+  });
+
+  it("listExplanations returns every row for a doc and isolates others", async () => {
+    await putExplanation(makeExplanation({ annotationId: "ann-1" }));
+    await putExplanation(makeExplanation({ annotationId: "ann-2" }));
+    // Figure explanations share the store (figure id in the annotationId slot).
+    await putExplanation(
+      makeExplanation({ annotationId: "fig-1", kind: "explanation" }),
+    );
+    await putExplanation(makeExplanation({ docId: "doc-2", annotationId: "x" }));
+
+    const forDoc1 = await listExplanations("doc-1");
+    expect(forDoc1.map((e) => e.annotationId).sort()).toEqual([
+      "ann-1",
+      "ann-2",
+      "fig-1",
+    ]);
+    expect(await listExplanations("missing")).toEqual([]);
   });
 });
 
