@@ -18,6 +18,9 @@
  * the document level and dispatch to every registered page wrap.
  */
 
+import { getRotation } from "../rotation.ts";
+import { screenRectToContent } from "./rotate.ts";
+
 const NS = "http://www.w3.org/2000/svg";
 
 const SELECTION_FILL = "rgba(79, 140, 255, 0.4)";
@@ -82,7 +85,26 @@ export function updateLiveSelectionLayer(
 
   const containerRect = wrap.getBoundingClientRect();
   const clientRects = Array.from(range.getClientRects());
-  const lineRects = groupAndMergeByLine(clientRects, containerRect);
+  const rot = getRotation();
+  const lineRects =
+    rot === 0
+      ? groupAndMergeByLine(clientRects, containerRect)
+      : // Rotated: `wrap` (the content box) is spun by CSS, so map each rect
+        // back into its unrotated space, then bucket into lines there. Drawn
+        // into the same content box, the preview spins along with it.
+        mergeLocalRectsByLine(
+          clientRects
+            .filter((r) => r.width > 0 && r.height > 0)
+            .map((r) =>
+              screenRectToContent(
+                r,
+                containerRect,
+                wrap.offsetWidth,
+                wrap.offsetHeight,
+                rot,
+              ),
+            ),
+        );
 
   for (const r of lineRects) {
     const rect = document.createElementNS(NS, "rect");
@@ -97,6 +119,32 @@ export function updateLiveSelectionLayer(
 
 function clearSvg(svg: SVGSVGElement): void {
   while (svg.firstChild) svg.removeChild(svg.firstChild);
+}
+
+/** Bucket already-content-local rects into visual lines (by top edge) and union
+ * each bucket — the rotated-view counterpart of groupAndMergeByLine, which
+ * works on screen-space DOMRects. */
+export function mergeLocalRectsByLine(rects: LineRect[]): LineRect[] {
+  const eligible = [...rects]
+    .filter((r) => r.x1 > r.x0 && r.y1 > r.y0)
+    .sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+  if (eligible.length === 0) return [];
+
+  const lines: LineRect[][] = [];
+  for (const r of eligible) {
+    const tail = lines[lines.length - 1];
+    if (tail && Math.abs(r.y0 - tail[0].y0) < LINE_BUCKET_TOL_PX) {
+      tail.push(r);
+    } else {
+      lines.push([r]);
+    }
+  }
+  return lines.map((line) => ({
+    x0: Math.min(...line.map((r) => r.x0)),
+    y0: Math.min(...line.map((r) => r.y0)),
+    x1: Math.max(...line.map((r) => r.x1)),
+    y1: Math.max(...line.map((r) => r.y1)),
+  }));
 }
 
 export function groupAndMergeByLine(

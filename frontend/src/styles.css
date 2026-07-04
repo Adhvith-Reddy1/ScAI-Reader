@@ -232,6 +232,17 @@ body {
   position: relative;
   margin: 0 auto;
 }
+
+/* Holds the page image + every overlay as one unit. Centered in the wrap and
+   spun by an inline `transform: translate(-50%,-50%) rotate(<deg>)`; the wrap
+   reserves the rotated footprint so scroll layout stays honest. Overlays inside
+   position against this box (inset: 0), so they ride the rotation for free. */
+.page-content {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+}
 /* Vertical gap between pages. Using a sibling selector instead of flex gap
    keeps the viewer a block container so wider-than-viewport pages remain
    horizontally scrollable when zoomed. */
@@ -535,6 +546,34 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 }
 .zoom-btn:hover,
 .zoom-label:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Rotate controls — mirrors the zoom control group. */
+.rotate-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 2px;
+}
+.rotate-button {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  width: 24px;
+  padding: 2px 0;
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+  transition: background 80ms ease;
+}
+.rotate-button:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
