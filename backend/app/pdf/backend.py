@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from .types import (
+    BBox,
     DocumentMetadata,
     OutlineNode,
     PageDimensions,
@@ -59,6 +60,15 @@ class PdfBackend(ABC):
     @abstractmethod
     def get_page_text(self, page_index: int) -> PageText:
         """Extract text runs with bounding boxes for one page."""
+
+    @abstractmethod
+    def get_page_graphics(self, page_index: int) -> tuple[BBox, ...]:
+        """Bounding boxes of non-text page content (images, vector paths,
+        shadings) on one page, in the same top-left-origin coordinate space
+        as :meth:`get_page_text`. Used to tighten a detected figure region to
+        the actual figure content instead of the whole text column — text
+        alone can locate *where* a figure sits (the whitespace gap above a
+        caption) but not its true horizontal/vertical extent."""
 
     @abstractmethod
     def get_outline(self) -> tuple[OutlineNode, ...]:

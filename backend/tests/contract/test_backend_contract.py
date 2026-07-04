@@ -205,3 +205,33 @@ def test_outline_page_indices_within_range(backend_opener, outline_pdf):
     for node in _flatten(outline):
         if node.page_index is not None:
             assert 0 <= node.page_index < n_pages
+
+
+# ---------------------------------------------------------------------------
+# Graphics (non-text page objects, used to tighten figure bboxes)
+# ---------------------------------------------------------------------------
+
+def test_graphics_empty_for_text_only_page(backend_opener, simple_pdf):
+    with backend_opener(simple_pdf) as b:
+        graphics = b.get_page_graphics(0)
+    assert graphics == ()
+
+
+def test_graphics_found_on_page_with_drawn_content(backend_opener, figure_pdf):
+    with backend_opener(figure_pdf) as b:
+        dims = b.page_dimensions(0)
+        graphics = b.get_page_graphics(0)
+    assert len(graphics) > 0
+    for box in graphics:
+        assert box.x1 > box.x0
+        assert box.y1 > box.y0
+        assert box.x0 >= -1
+        assert box.y0 >= -1
+        assert box.x1 <= dims.width_pt + 1
+        assert box.y1 <= dims.height_pt + 1
+
+
+def test_invalid_graphics_page_raises(backend_opener, simple_pdf):
+    with backend_opener(simple_pdf) as b:
+        with pytest.raises(PdfError):
+            b.get_page_graphics(99)
