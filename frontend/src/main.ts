@@ -40,6 +40,13 @@ import {
   subscribeSidebarVisibility,
 } from "./sidebar.ts";
 import { buildSidebarToggle } from "./SidebarToggle.ts";
+import { buildRotateControls } from "./RotateControls.ts";
+import {
+  getRotation,
+  isSideways,
+  setRotation,
+  subscribeRotation,
+} from "./rotation.ts";
 import { buildPageList, type PageListHandle } from "./viewer/PageList.ts";
 import { buildZoomControls } from "./ZoomControls.ts";
 import {
@@ -80,6 +87,8 @@ buttonSlot.appendChild(buildHighlightButton());
 explainSlot.appendChild(buildExplainButton());
 eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
+const rotateSlot = document.getElementById("rotate-controls-slot");
+rotateSlot?.appendChild(buildRotateControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
 
 const aiSetupSlot = document.getElementById("ai-setup-slot") as HTMLElement;
@@ -243,6 +252,7 @@ fileInput.addEventListener("change", async () => {
   try {
     const meta = await uploadDocument(file);
     await persistUpload(file, meta);
+    setRotation(0); // a freshly opened PDF starts upright
     await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
@@ -283,6 +293,18 @@ function pushViewportSize(): void {
 pushViewportSize();
 window.addEventListener("resize", pushViewportSize);
 
+// Natural (unrotated) page bounds for the current doc; the fit calculation gets
+// them swapped when the view is rotated a quarter turn so a rotated page still
+// fits the viewport width.
+let docMaxWidthPt = 0;
+let docMaxHeightPt = 0;
+function applyDocumentBounds(): void {
+  if (docMaxWidthPt <= 0) return;
+  const w = isSideways() ? docMaxHeightPt : docMaxWidthPt;
+  const h = isSideways() ? docMaxWidthPt : docMaxHeightPt;
+  setDocumentBounds(w, h);
+}
+
 async function renderDocument(meta: DocumentMeta): Promise<void> {
   currentDocId = meta.id;
   lastKnownPage = 1;
@@ -308,9 +330,9 @@ async function renderDocument(meta: DocumentMeta): Promise<void> {
     return;
   }
 
-  const maxWidthPt = Math.max(...dims.pages.map((p) => p.width_pt));
-  const maxHeightPt = Math.max(...dims.pages.map((p) => p.height_pt));
-  setDocumentBounds(maxWidthPt, maxHeightPt);
+  docMaxWidthPt = Math.max(...dims.pages.map((p) => p.width_pt));
+  docMaxHeightPt = Math.max(...dims.pages.map((p) => p.height_pt));
+  applyDocumentBounds();
   pushViewportSize();
 
   pageList = buildPageList(meta, dims.pages, viewer);
@@ -334,8 +356,10 @@ async function openDocument(item: LibraryItem): Promise<void> {
     return;
   }
 
-  // Restore zoom + sidebar before building the layout to avoid a reflow flash.
+  // Restore zoom + sidebar + rotation before building the layout to avoid a
+  // reflow flash. Default upright for docs saved before rotation existed.
   const vs = await getViewState(item.id);
+  setRotation(vs?.rotation ?? 0);
   if (vs) {
     setZoom(vs.zoom);
     setSidebarVisible(vs.sidebarOpen);
@@ -365,6 +389,9 @@ async function showLibrary(): Promise<void> {
   // nothing to show — keep it hidden here (and don't disturb the user's
   // open/closed preference, which is restored when a document opens).
   setSidebarEnabled(false);
+  setRotation(0); // next doc starts upright unless its saved state says otherwise
+  docMaxWidthPt = 0;
+  docMaxHeightPt = 0;
   if (pageList) {
     pageList.dispose();
     pageList = null;
@@ -400,6 +427,7 @@ function scheduleViewStatePersist(): void {
       lastPage: lastKnownPage,
       zoom: getZoom(),
       sidebarOpen: isSidebarVisible(),
+      rotation: getRotation(),
     });
   }, 400);
 }
@@ -417,11 +445,20 @@ function flushViewState(): void {
     lastPage: lastKnownPage,
     zoom: getZoom(),
     sidebarOpen: isSidebarVisible(),
+    rotation: getRotation(),
   });
 }
 
 subscribeZoom(() => scheduleViewStatePersist());
 subscribeSidebarVisibility(() => scheduleViewStatePersist());
+// Rotation changes the fit (a quarter-turned page fits by its other dimension)
+// and is part of the reader's saved place. Persist it immediately rather than
+// on the debounce: it's a deliberate one-off click (unlike rapid zoom/scroll),
+// so it must survive even an instant reload.
+subscribeRotation(() => {
+  applyDocumentBounds();
+  flushViewState();
+});
 subscribePageInfo((info) => {
   if (info && info.doc_id === currentDocId) {
     lastKnownPage = info.current;

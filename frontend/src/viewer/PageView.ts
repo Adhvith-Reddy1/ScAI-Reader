@@ -32,6 +32,8 @@ import { getHighlightMode } from "../highlightMode.ts";
 import { getExplainMode } from "../explainMode.ts";
 import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
+import { getRotation, subscribeRotation } from "../rotation.ts";
+import { rotatedFootprint, screenRectToContent, screenPointToContent } from "./rotate.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import { dismissExplanationFor } from "./ExplanationTooltip.ts";
 import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
@@ -51,6 +53,9 @@ const MIN_DPI = 150;
 const MAX_DPI = 300;
 
 interface PageState {
+  /** Inner box holding the image + every overlay. It is what gets the CSS
+   * rotation transform; all overlays live here in unrotated content space. */
+  content: HTMLElement;
   geom: PageGeometry | null;
   text: PageText | null;
   annotationLayer: SVGSVGElement | null;
@@ -80,15 +85,22 @@ export function buildPageView(
   num.className = "page-number";
   num.textContent = `Page ${pageNumber} of ${meta.page_count}`;
 
+  // The content box holds the image + overlays and is what gets rotated; the
+  // outer wrap reserves the rotated footprint and carries the (unrotated) label.
+  const content = document.createElement("div");
+  content.className = "page-content";
+
   const img = document.createElement("img");
   img.className = "page";
   img.alt = `Page ${pageNumber}`;
   img.loading = "lazy";
 
+  content.appendChild(img);
   wrap.appendChild(num);
-  wrap.appendChild(img);
+  wrap.appendChild(content);
 
   const state: PageState = {
+    content,
     geom: null,
     text: null,
     annotationLayer: null,
@@ -105,8 +117,18 @@ export function buildPageView(
     const effectiveScale = getBaseScale() * getZoom();
     const widthPx = pageDim.width_pt * effectiveScale;
     const heightPx = pageDim.height_pt * effectiveScale;
-    wrap.style.width = `${widthPx}px`;
-    wrap.style.height = `${heightPx}px`;
+    const rot = getRotation();
+
+    // The content is always sized to the page's natural orientation; the outer
+    // wrap takes the rotated footprint so the scroll layout reserves the right
+    // space. The CSS transform then spins the content (image + overlays) about
+    // its center, which sits at the wrap's center.
+    const foot = rotatedFootprint(widthPx, heightPx, rot);
+    wrap.style.width = `${foot.width}px`;
+    wrap.style.height = `${foot.height}px`;
+    content.style.width = `${widthPx}px`;
+    content.style.height = `${heightPx}px`;
+    content.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
     img.style.width = `${widthPx}px`;
     img.style.height = `${heightPx}px`;
 
@@ -135,7 +157,7 @@ export function buildPageView(
     };
     state.geom = geom;
 
-    wrap
+    state.content
       .querySelectorAll(".live-selection-layer, .text-layer")
       .forEach((el) => el.remove());
     if (state.annotationLayer) {
@@ -150,9 +172,11 @@ export function buildPageView(
     const liveSelectionLayer = buildLiveSelectionLayer();
     liveSelectionLayer.setAttribute("width", String(widthCss));
     liveSelectionLayer.setAttribute("height", String(heightCss));
-    wrap.appendChild(liveSelectionLayer);
-    wrap.appendChild(buildTextLayer(text, geom));
-    registerLiveSelection(wrap, liveSelectionLayer);
+    state.content.appendChild(liveSelectionLayer);
+    state.content.appendChild(buildTextLayer(text, geom));
+    // Live-selection preview draws into the content box; register it there so
+    // its center-based rotation math uses the content's (centered) rect.
+    registerLiveSelection(state.content, liveSelectionLayer);
     void refreshAnnotations(meta, pageNumber, wrap, state);
     renderFigureLayer(wrap, state);
 
@@ -201,6 +225,11 @@ export function buildPageView(
   const unsubFind = subscribeFindQuery(() => {
     refreshFindMatches(pageNumber, wrap, state);
   });
+  // Rotation only changes the CSS transform + reserved footprint; the overlays
+  // are already built in content space and spin with it, so no relayout needed.
+  const unsubRotation = subscribeRotation(() => {
+    applyDisplay();
+  });
 
   return {
     element: wrap,
@@ -208,6 +237,7 @@ export function buildPageView(
       unsubZoom();
       unsubFit();
       unsubFind();
+      unsubRotation();
       unregisterPage(pageNumber);
     },
   };
@@ -215,10 +245,10 @@ export function buildPageView(
 
 function refreshFindMatches(
   pageNumber: number,
-  wrap: HTMLElement,
+  _wrap: HTMLElement,
   state: PageState,
 ): void {
-  const textLayer = wrap.querySelector<HTMLElement>(".text-layer");
+  const textLayer = state.content.querySelector<HTMLElement>(".text-layer");
   if (!textLayer) return;
   const hits = applyFindToTextLayer(textLayer, getFindQuery());
   state.findHits = hits;
@@ -285,11 +315,11 @@ async function refreshAnnotations(
     meta,
     state.text ? flattenPageText(state.text) : null,
   );
-  const textLayer = wrap.querySelector(".text-layer");
+  const textLayer = state.content.querySelector(".text-layer");
   if (textLayer) {
-    wrap.insertBefore(svg, textLayer);
+    state.content.insertBefore(svg, textLayer);
   } else {
-    wrap.appendChild(svg);
+    state.content.appendChild(svg);
   }
   state.annotationLayer = svg;
 }
@@ -332,11 +362,28 @@ async function maybeAutoSaveHighlight(
     return;
   }
 
-  const containerRect = wrap.getBoundingClientRect();
-  const viewportRects = clientRectsRelativeTo(
-    range.getClientRects(),
-    containerRect,
+  const rot = getRotation();
+  const clientRects = Array.from(range.getClientRects()).filter(
+    (r) => r.width > 0 && r.height > 0,
   );
+  let viewportRects: Rect[];
+  if (rot === 0) {
+    viewportRects = clientRectsRelativeTo(clientRects, wrap.getBoundingClientRect());
+  } else {
+    // The content box is rotated; its screen AABB is centered on the rotation
+    // center. Map each selection rect back into the content's unrotated space
+    // so the usual page-space transform (below) still applies.
+    const outer = state.content.getBoundingClientRect();
+    viewportRects = clientRects.map((r) =>
+      screenRectToContent(
+        r,
+        outer,
+        state.geom!.displayWidthPx,
+        state.geom!.displayHeightPx,
+        rot,
+      ),
+    );
+  }
   if (viewportRects.length === 0) return;
   const merged = mergeAdjacentLineRects(viewportRects);
   const pageRects: Rect[] = rectsToPageSpace(merged, state.geom);
@@ -383,18 +430,18 @@ async function maybeAutoSaveHighlight(
  * state.figures right now. Cheap and safe to call with an empty list — the
  * outlines simply disappear, which is itself useful signal ("detected 0
  * figures on this page"). */
-function renderFigureLayer(wrap: HTMLElement, state: PageState): void {
+function renderFigureLayer(_wrap: HTMLElement, state: PageState): void {
   if (state.figureLayer) {
     state.figureLayer.remove();
     state.figureLayer = null;
   }
   if (!state.geom) return;
   const svg = buildFigureLayer(state.figures, state.geom);
-  const textLayer = wrap.querySelector(".text-layer");
+  const textLayer = state.content.querySelector(".text-layer");
   if (textLayer) {
-    wrap.insertBefore(svg, textLayer);
+    state.content.insertBefore(svg, textLayer);
   } else {
-    wrap.appendChild(svg);
+    state.content.appendChild(svg);
   }
   state.figureLayer = svg;
 }
@@ -435,11 +482,20 @@ function figureAtClientPoint(
   clientY: number,
 ): PageFigure | null {
   if (!state.geom) return null;
-  const xInWrap = clientX - wrapRect.left;
-  const yInWrap = clientY - wrapRect.top;
+  // Map the cursor from screen space into the content's unrotated space so
+  // hit-testing works at any rotation (identity at 0°). The outer wrap rect is
+  // axis-aligned and centered on the rotation center.
+  const p = screenPointToContent(
+    clientX,
+    clientY,
+    wrapRect,
+    state.geom.displayWidthPx,
+    state.geom.displayHeightPx,
+    getRotation(),
+  );
   for (const fig of state.figures) {
     const v = pageBBoxToViewport(fig.bbox, state.geom);
-    if (xInWrap >= v.x0 && xInWrap <= v.x1 && yInWrap >= v.y0 && yInWrap <= v.y1) {
+    if (p.x >= v.x0 && p.x <= v.x1 && p.y >= v.y0 && p.y <= v.y1) {
       return fig;
     }
   }
@@ -470,14 +526,23 @@ function wireFigureInteractions(
     if (!fig || !state.geom) return;
 
     e.preventDefault();
-    const v = pageBBoxToViewport(fig.bbox, state.geom);
-    // Convert back to a viewport-anchored rect for card positioning.
-    const figRect = new DOMRect(
-      wrapRect.left + v.x0,
-      wrapRect.top + v.y0,
-      v.x1 - v.x0,
-      v.y1 - v.y0,
+    // Anchor the card to the figure's actual rendered outline, which already
+    // reflects the current rotation, rather than recomputing a screen rect.
+    const figEl = state.figureLayer?.querySelector<SVGGElement>(
+      `[data-figure-id="${CSS.escape(fig.figure_id)}"]`,
     );
+    let figRect: DOMRect;
+    if (figEl) {
+      figRect = figEl.getBoundingClientRect();
+    } else {
+      const v = pageBBoxToViewport(fig.bbox, state.geom);
+      figRect = new DOMRect(
+        wrapRect.left + v.x0,
+        wrapRect.top + v.y0,
+        v.x1 - v.x0,
+        v.y1 - v.y0,
+      );
+    }
     showFigureCard(meta.id, fig, figRect);
   });
 

@@ -16,6 +16,8 @@
 import type { DocumentMeta, PageDimension } from "../api.ts";
 import { getBaseScale, subscribeFit } from "../fit.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
+import { getRotation, subscribeRotation } from "../rotation.ts";
+import { rotatedFootprint } from "./rotate.ts";
 import { buildPageView, type PageViewHandle } from "./PageView.ts";
 
 interface Slot {
@@ -109,6 +111,7 @@ export function buildPageList(
   const handleResize = () => sizeAllPlaceholders(slots);
   const unsubFit = subscribeFit(handleResize);
   const unsubZoom = subscribeZoom(handleResize);
+  const unsubRotation = subscribeRotation(handleResize);
 
   const scrollToPage = (page: number) => {
     const slot = slots[page - 1];
@@ -123,6 +126,7 @@ export function buildPageList(
       visibilityObserver.disconnect();
       unsubFit();
       unsubZoom();
+      unsubRotation();
       for (const s of slots) {
         if (s.handle) s.handle.dispose();
       }
@@ -159,11 +163,15 @@ function createPlaceholder(
 
 function sizeAllPlaceholders(slots: Slot[]): void {
   const scale = getBaseScale() * getZoom();
+  const rot = getRotation();
   for (const s of slots) {
-    const w = s.dim.width_pt * scale;
-    const h = s.dim.height_pt * scale;
-    s.element.style.width = `${w}px`;
-    s.element.style.height = `${h}px`;
+    const foot = rotatedFootprint(
+      s.dim.width_pt * scale,
+      s.dim.height_pt * scale,
+      rot,
+    );
+    s.element.style.width = `${foot.width}px`;
+    s.element.style.height = `${foot.height}px`;
   }
 }
 
@@ -189,8 +197,13 @@ function demote(slot: Slot, meta: DocumentMeta, reobserve: Reobserve): void {
   slot.filled = false;
   const fresh = createPlaceholder(slot.dim, slot.index + 1, meta.page_count);
   const scale = getBaseScale() * getZoom();
-  fresh.style.width = `${slot.dim.width_pt * scale}px`;
-  fresh.style.height = `${slot.dim.height_pt * scale}px`;
+  const foot = rotatedFootprint(
+    slot.dim.width_pt * scale,
+    slot.dim.height_pt * scale,
+    getRotation(),
+  );
+  fresh.style.width = `${foot.width}px`;
+  fresh.style.height = `${foot.height}px`;
   const old = slot.element;
   old.replaceWith(fresh);
   slot.element = fresh;

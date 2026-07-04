@@ -50,6 +50,9 @@ export interface ViewState {
   lastPage: number;
   zoom: number;
   sidebarOpen: boolean;
+  /** View rotation in degrees clockwise (0/90/180/270). Optional for docs
+   * whose state was saved before rotation existed. */
+  rotation?: number;
 }
 
 const DB_NAME = "scai-reader";
