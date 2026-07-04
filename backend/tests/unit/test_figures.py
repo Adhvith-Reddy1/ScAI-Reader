@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from app.pdf.figures import (
     CAPTION_PATTERN,
+    _caption_ceiling,
+    _cluster_graphics,
+    _find_caption_runs,
     _is_figure_internal_text,
     _tighten_to_graphics,
     detect_figures,
@@ -73,6 +76,23 @@ def test_detects_extended_data_figure_with_distinct_label():
     assert len(figs) == 1
     assert figs[0].label == "Extended Data Figure 1"
     assert figs[0].figure_id == "p0_Extended_Data_Figure_1"
+
+
+def test_caption_pattern_rejects_sentence_continuation():
+    # A mid-sentence citation to a DIFFERENT, distant figure/table ("...as
+    # shown in Extended Data Table 1 shows scores...") continues with a
+    # lowercase verb, not a caption separator -- must not be mistaken for a
+    # real caption line just because it starts with the right keyword.
+    for s in [
+        "Table 1 shows scores for the wild-type sequence",
+        "Extended Data Table 1 shows scores for the wild-type sequence",
+        "Figure 2 illustrates the overall trend",
+    ]:
+        assert CAPTION_PATTERN.match(s) is None, s
+    # Real captions: a capitalized title or a separator right after the
+    # number must still match.
+    for s in ["Table 1: Results", "Figure 2 Illustrates the overall trend"]:
+        assert CAPTION_PATTERN.match(s), s
 
 
 def test_detects_simple_single_column_figure():
@@ -358,3 +378,142 @@ def test_rejects_degenerate_sliver_bbox():
 
     figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
     assert figs == []
+
+
+# --- graphics clustering (diagram-style figures) ----------------------------
+#
+# Real papers about LLM agents routinely use flowchart/architecture diagrams
+# instead of simple chart panels: many small boxes, arrows, and node labels
+# scattered at positions no single text-adjacency rule reliably classifies as
+# "body prose" vs. "part of the diagram". Clustering the page's own graphics
+# by spatial proximity sidesteps that entirely -- the diagram's own ink is,
+# by construction, contiguous.
+
+
+def test_cluster_graphics_bridges_panel_and_row_gaps():
+    # A 2x2 grid of "nodes" with a small horizontal gutter (10pt) and a
+    # larger vertical row gap (30pt) -- both comfortably inside tolerance --
+    # must end up as a single cluster spanning the whole grid.
+    graphics = (
+        BBox(0, 0, 40, 40),
+        BBox(50, 0, 90, 40),
+        BBox(0, 70, 40, 110),
+        BBox(50, 70, 90, 110),
+    )
+    clusters = _cluster_graphics(graphics)
+    assert clusters == [BBox(0, 0, 90, 110)]
+
+
+def test_cluster_graphics_keeps_far_apart_content_separate():
+    # One local cluster plus an unrelated mark far away (e.g. a page-corner
+    # logo, or a genuinely different figure) must not merge.
+    graphics = (
+        BBox(0, 0, 40, 40),
+        BBox(50, 0, 90, 40),
+        BBox(500, 500, 540, 540),
+    )
+    clusters = _cluster_graphics(graphics)
+    assert len(clusters) == 2
+    assert BBox(0, 0, 90, 40) in clusters
+    assert BBox(500, 500, 540, 540) in clusters
+
+
+def test_caption_ceiling_uses_nearest_x_overlapping_caption_above():
+    runs = (
+        _run("Figure 1: First", 40, 100, 290, 112),
+        _run("Figure 2: Second", 40, 200, 290, 212),
+    )
+    captions = _find_caption_runs(runs)
+    fig2 = next(r for r, l in captions if l == "Figure 2")
+    assert _caption_ceiling(fig2, captions) == 112.0
+
+    fig1 = next(r for r, l in captions if l == "Figure 1")
+    assert _caption_ceiling(fig1, captions) == 0.0
+
+
+def test_caption_ceiling_ignores_non_overlapping_caption():
+    # A caption in an unrelated part of the page (different x) must not
+    # fence this one's search, even though it sits "above" in y.
+    runs = (
+        _run("Table 9: Unrelated, far column", 400, 50, 560, 62),
+        _run("Figure 2: This one", 40, 200, 290, 212),
+    )
+    captions = _find_caption_runs(runs)
+    fig2 = next(r for r, l in captions if l == "Figure 2")
+    assert _caption_ceiling(fig2, captions) == 0.0
+
+
+def test_detects_full_diagram_with_embedded_mid_diagram_label():
+    # A flowchart-style figure: two rows of node boxes with a label sitting
+    # in the gap between them, in the left margin gutter -- it doesn't
+    # horizontally overlap either row's nodes at all, so it escapes BOTH of
+    # _is_figure_internal_text's exclusions ("beneath a graphic", "inside a
+    # small box") and the old whitespace-gap heuristic sees it as ordinary
+    # body text marking where the figure ends, recovering only the row
+    # below it. The cluster-based path isn't affected by it at all, since it
+    # never looks at text to find the figure's extent in the first place.
+    runs = (
+        _run("Body text well above the figure.", 40, 30, 290, 42),
+        _run("mid-diagram label", 0, 95, 50, 103),
+        _run("Figure 1: Full pipeline diagram", 40, 220, 290, 232),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (
+        BBox(60, 50, 150, 90),
+        BBox(160, 50, 250, 90),
+        BBox(60, 130, 150, 170),
+        BBox(160, 130, 250, 170),
+    )
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].bbox == BBox(60, 50, 250, 170)
+
+
+def test_stacked_diagrams_closer_than_row_gutter_still_separate():
+    # Two stacked mini-diagrams 40pt apart -- inside ROW_GUTTER_PT (50pt), so
+    # graphics-distance ALONE would merge them into one cluster. The caption
+    # in between is what actually keeps them apart: it's direct proof that
+    # whatever is below it belongs to a different, already-labelled figure.
+    runs = (
+        _run("Figure 1: First diagram", 40, 100, 290, 112),
+        _run("Figure 2: Second diagram", 40, 180, 290, 192),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (
+        BBox(60, 50, 150, 90),
+        BBox(160, 50, 250, 90),
+        BBox(60, 130, 150, 170),
+        BBox(160, 130, 250, 170),
+    )
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    labels = {f.label: f.bbox for f in figs}
+    assert labels == {
+        "Figure 1": BBox(60, 50, 250, 90),
+        "Figure 2": BBox(60, 130, 250, 170),
+    }
+
+
+def test_cluster_path_falls_back_to_text_gap_when_no_graphics_nearby():
+    # A caption with graphics present on the page, but none anywhere near
+    # it (e.g. a plain data table with no rule lines, elsewhere a chart
+    # exists) -- must still fall back to the whitespace-gap heuristic
+    # instead of silently detecting nothing.
+    runs = (
+        _run("Some body text on the page.", 40, 50, 290, 62),
+        _run("More body text below it.", 40, 70, 290, 82),
+        _run("Figure 1: Overall workflow", 40, 200, 290, 212),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    # Present on the page, but far away (e.g. a chart used by a different
+    # caption elsewhere) -- outside this caption's cluster window entirely.
+    graphics = (BBox(x0=400, y0=400, x1=450, y1=440),)
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].label == "Figure 1"
+    assert figs[0].bbox == BBox(x0=40, y0=82, x1=290, y1=200)
