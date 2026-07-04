@@ -372,6 +372,7 @@ export function streamFigureExplanation(
   page: number,
   label: string,
   callbacks: FigureExplainCallbacks,
+  bbox?: FigureBBox,
 ): () => void {
   const ctrl = new AbortController();
   void (async () => {
@@ -380,7 +381,7 @@ export function streamFigureExplanation(
       r = await fetch(`/documents/${docId}/figures/${figureId}/ai-explain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page, label }),
+        body: JSON.stringify({ page, label, bbox }),
         signal: ctrl.signal,
       });
     } catch (e) {

@@ -4,6 +4,7 @@
  * stream in.
  */
 
+import type { FigureBBox } from "./api.ts";
 import { streamFigureExplanation } from "./api.ts";
 import {
   getExplanation as getCachedExplanation,
@@ -77,6 +78,7 @@ export async function startFigureExplanation(
   figureId: string,
   page: number,
   label: string,
+  bbox?: FigureBBox,
 ): Promise<void> {
   const entry = ensureEntry(docId, figureId);
   if (entry.state.status === "loading" || entry.state.status === "ready") {
@@ -99,33 +101,40 @@ export async function startFigureExplanation(
 
   setState(entry, { status: "loading", content: "" });
 
-  entry.abort = streamFigureExplanation(docId, figureId, page, label, {
-    onDelta: (chunk) => {
-      if (entry.state.status === "loading") {
-        setState(entry, {
-          ...entry.state,
-          content: entry.state.content + chunk,
+  entry.abort = streamFigureExplanation(
+    docId,
+    figureId,
+    page,
+    label,
+    {
+      onDelta: (chunk) => {
+        if (entry.state.status === "loading") {
+          setState(entry, {
+            ...entry.state,
+            content: entry.state.content + chunk,
+          });
+        }
+      },
+      onDone: (full) => {
+        setState(entry, { status: "ready", content: full });
+        entry.abort = undefined;
+        void putExplanation({
+          docId,
+          annotationId: figureId,
+          kind: "explanation",
+          text: label,
+          content: full,
+          status: "complete",
+          updated_at: new Date().toISOString(),
+        }).catch(() => {
+          /* best-effort cache write */
         });
-      }
+      },
+      onError: (message, code) => {
+        setState(entry, { status: "error", error: message, code });
+        entry.abort = undefined;
+      },
     },
-    onDone: (full) => {
-      setState(entry, { status: "ready", content: full });
-      entry.abort = undefined;
-      void putExplanation({
-        docId,
-        annotationId: figureId,
-        kind: "explanation",
-        text: label,
-        content: full,
-        status: "complete",
-        updated_at: new Date().toISOString(),
-      }).catch(() => {
-        /* best-effort cache write */
-      });
-    },
-    onError: (message, code) => {
-      setState(entry, { status: "error", error: message, code });
-      entry.abort = undefined;
-    },
-  });
+    bbox,
+  );
 }

@@ -13,11 +13,13 @@ reuses the prompt/stream helpers below. The browser caches the result.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .. import ai, llm
@@ -123,9 +125,62 @@ def _region_to_dict(r: FigureRegion) -> dict:
     }
 
 
+class BBoxModel(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 class FigureExplainRequest(BaseModel):
     page: int = Field(ge=1)
     label: str = Field(min_length=1, max_length=64)
+    # Optional: the panel/figure's own bbox in page-space points (top-left
+    # origin), same convention as `_region_to_dict`. When present, the vision
+    # payload is cropped to it — see `crop_to_bbox` — so a click on one panel
+    # of a multi-panel figure explains that panel, not the whole grid.
+    bbox: BBoxModel | None = None
+
+
+# Padding around a requested bbox, in page-space points, so the crop keeps a
+# little surrounding context (axis labels, the panel's own letter tag) rather
+# than cutting exactly on the detected content edge.
+_CROP_PAD_PT = 20.0
+
+
+def crop_to_bbox(
+    page_png_bytes: bytes,
+    bbox: BBoxModel,
+    page_width_pt: float,
+    page_height_pt: float,
+    dpi: int,
+) -> bytes:
+    """Crop a rendered page image down to `bbox` (plus a small padding
+    margin), re-encoding in whatever format the page was rendered in.
+    Falls back to returning `page_png_bytes` unchanged if the bbox doesn't
+    resolve to a sane crop region (e.g. degenerate/out-of-range input) —
+    an unfocused-but-correct image beats a request failure."""
+    scale = dpi / 72.0
+    x0 = max(0.0, min(bbox.x0, bbox.x1) - _CROP_PAD_PT)
+    y0 = max(0.0, min(bbox.y0, bbox.y1) - _CROP_PAD_PT)
+    x1 = min(page_width_pt, max(bbox.x0, bbox.x1) + _CROP_PAD_PT)
+    y1 = min(page_height_pt, max(bbox.y0, bbox.y1) + _CROP_PAD_PT)
+    if x1 <= x0 or y1 <= y0:
+        return page_png_bytes
+
+    media_type = sniff_image_mime(page_png_bytes)
+    image = Image.open(io.BytesIO(page_png_bytes))
+    px0, py0 = int(x0 * scale), int(y0 * scale)
+    px1 = max(px0 + 1, min(image.width, round(x1 * scale)))
+    py1 = max(py0 + 1, min(image.height, round(y1 * scale)))
+    cropped = image.crop((px0, py0, px1, py1))
+
+    buf = io.BytesIO()
+    if media_type == "image/jpeg":
+        cropped.convert("RGB").save(buf, format="JPEG", quality=85, optimize=False)
+    else:
+        cropped.save(buf, format="PNG", optimize=False, compress_level=6)
+    return buf.getvalue()
 
 
 def _stream_figure(
@@ -134,6 +189,7 @@ def _stream_figure(
     page_png_bytes: bytes,
     label: str,
     page_number: int,
+    cropped: bool = False,
 ) -> AsyncIterator[tuple[str, str]]:
     page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
     # render_page's encoding is content-dependent (JPEG for pages with a
@@ -146,11 +202,21 @@ def _stream_figure(
         if page_text
         else ""
     )
+    if cropped:
+        image_note = (
+            "The attached image is cropped to just this figure/panel — no "
+            "need to locate it on the page."
+        )
+    else:
+        image_note = (
+            "The full page image is attached to disambiguate which figure I "
+            "mean."
+        )
     instruction = (
         context
-        + f"Focus on {label} (page {page_number}). The full page image is "
-        "attached to disambiguate which figure I mean. Explain it for a "
-        "reader who's mid-paragraph and wants to keep reading the paper."
+        + f"Focus on {label} (page {page_number}). {image_note} Explain it "
+        "for a reader who's mid-paragraph and wants to keep reading the "
+        "paper."
     )
     messages = [
         {
