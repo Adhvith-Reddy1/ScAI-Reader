@@ -235,3 +235,29 @@ def test_invalid_graphics_page_raises(backend_opener, simple_pdf):
     with backend_opener(simple_pdf) as b:
         with pytest.raises(PdfError):
             b.get_page_graphics(99)
+
+
+def test_graphics_excludes_page_wide_hairline_rules(backend_opener, tmp_path):
+    """A running-header divider or margin rule (a hairline spanning nearly
+    the whole page in one dimension) is page furniture, not figure content.
+    A consumer that clusters graphics by spatial proximity to find a
+    figure's extent (see app.pdf.figures) would otherwise bridge across it —
+    a full-width rule near the top of a two-column page "touches" both a
+    left column's marks and a right column's diagram, merging unrelated
+    content into one region."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    path = tmp_path / "hairline.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setLineWidth(0.5)
+    c.line(40, 700, 570, 700)  # full-width horizontal header rule
+    c.rect(100, 400, 80, 60, stroke=1, fill=0)  # a real, smaller figure element
+    c.showPage()
+    c.save()
+
+    with backend_opener(path) as b:
+        graphics = b.get_page_graphics(0)
+
+    assert not any(g.width > 400 and g.height < 2 for g in graphics)
+    assert any(90 <= g.x0 <= 110 and g.width > 50 for g in graphics)

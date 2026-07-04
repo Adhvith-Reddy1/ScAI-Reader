@@ -57,6 +57,18 @@ _GRAPHICS_TYPES = (
     pdfium.raw.FPDF_PAGEOBJ_SHADING,
 )
 
+# A page-furniture rule — a running-header divider, a margin rule — is a
+# hairline that spans most of the page in one dimension. It's never actual
+# figure content, but a figure-detection consumer that clusters graphics by
+# spatial proximity (see app.pdf.figures) would otherwise bridge on it: a
+# full-width rule near the top of the page "touches" both a left column's
+# body-text marks and a right column's diagram, merging them into one
+# nonsensical region. A real chart element that's merely thin in one
+# dimension (an axis line, a bar) doesn't also span nearly the whole page in
+# that same dimension, so this combination is a safe discriminator.
+_HAIRLINE_MAX_PT = 2.0
+_HAIRLINE_SPAN_FRACTION = 0.6
+
 
 class PdfiumBackend(PdfBackend):
     """PDF backend wrapping pypdfium2 (Apache 2.0, the PDFium engine).
@@ -199,6 +211,16 @@ class PdfiumBackend(PdfBackend):
                     top = max(0.0, min(top, page_height))
                     if right <= left or top <= bottom:
                         continue  # degenerate after clamping — fully off-page
+                    box_w = right - left
+                    box_h = top - bottom
+                    if (
+                        box_h <= _HAIRLINE_MAX_PT
+                        and box_w >= page_width * _HAIRLINE_SPAN_FRACTION
+                    ) or (
+                        box_w <= _HAIRLINE_MAX_PT
+                        and box_h >= page_height * _HAIRLINE_SPAN_FRACTION
+                    ):
+                        continue  # page furniture, not figure content
                     boxes.append(
                         BBox(
                             x0=float(left),
