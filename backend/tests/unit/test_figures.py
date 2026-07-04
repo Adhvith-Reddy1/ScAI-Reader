@@ -6,7 +6,12 @@ detector is pure-function over text runs + page dimensions.
 
 from __future__ import annotations
 
-from app.pdf.figures import CAPTION_PATTERN, _tighten_to_graphics, detect_figures
+from app.pdf.figures import (
+    CAPTION_PATTERN,
+    _is_figure_internal_text,
+    _tighten_to_graphics,
+    detect_figures,
+)
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
 
 PAGE_W = 612.0   # ~standard letter, page-space points
@@ -36,8 +41,38 @@ def test_caption_pattern_rejects_non_captions():
         "Section 2",
         "FIGURE",                         # no number
         "Figures and tables",
+        "Fig. 2), as discussed above",    # inline citation, not a caption
+        "Table 1] confirms this",         # inline citation, closing bracket
     ]:
         assert CAPTION_PATTERN.match(s) is None, s
+
+
+def test_caption_pattern_matches_extended_data_prefix():
+    # Nature-family journals number supplementary figures/tables separately
+    # from the main text ("Extended Data Fig. 1 |", "Extended Data Table 2").
+    for s in [
+        "Extended Data Fig. 1 | Some description.",
+        "Extended Data Figure 2",
+        "Extended Data Table 3 | Results.",
+        "extended data fig 4",
+    ]:
+        assert CAPTION_PATTERN.match(s), s
+
+
+def test_detects_extended_data_figure_with_distinct_label():
+    # Normalized label keeps the "Extended Data" prefix so it can't collide
+    # with a same-numbered main-text figure on the same page.
+    runs = (
+        _run("Body text well above.", 40, 50, 560, 62),
+        _run("Extended Data Fig. 1 | Supplementary analysis.", 40, 200, 400, 212),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 560, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+
+    figs = detect_figures(page, PAGE_W, PAGE_H)
+    assert len(figs) == 1
+    assert figs[0].label == "Extended Data Figure 1"
+    assert figs[0].figure_id == "p0_Extended_Data_Figure_1"
 
 
 def test_detects_simple_single_column_figure():
@@ -215,3 +250,111 @@ def test_tighten_to_graphics_helper_directly():
         bbox, (BBox(-10, 10, 40, 40), BBox(60, 60, 150, 200))
     )
     assert tightened == BBox(x0=-10, y0=10, x1=150, y1=100)
+
+
+# --- real-paper failure modes -------------------------------------------
+#
+# These reproduce structures found in actual academic PDFs (a Nature paper
+# and an NLP bias-analysis paper) where the pure text-gap heuristic silently
+# rejected real figures. Each test is a minimal repro of one such case.
+
+
+def test_is_figure_internal_text_helper_directly():
+    graphic = BBox(x0=60, y0=100, x1=200, y1=180)
+    # Sits just beneath the graphic, horizontally overlapping -> internal.
+    label = TextRun(text="(a) Panel", bbox=BBox(60, 190, 120, 198), font_size=8.0)
+    assert _is_figure_internal_text(label, (graphic,))
+    # Same vertical gap, but no horizontal overlap -> not internal.
+    beside = TextRun(text="(a) Panel", bbox=BBox(300, 190, 360, 198), font_size=8.0)
+    assert not _is_figure_internal_text(beside, (graphic,))
+    # Too far below to plausibly belong to the graphic -> not internal.
+    far_below = TextRun(text="Unrelated", bbox=BBox(60, 400, 120, 408), font_size=8.0)
+    assert not _is_figure_internal_text(far_below, (graphic,))
+
+
+def test_panel_label_does_not_block_gap_when_graphics_present():
+    # A multi-panel figure's own sub-label ("(a) ...") sits only 6pt above
+    # its caption -- comfortably under MIN_FIGURE_GAP_PT on its own. Without
+    # graphics-aware skipping this looks like "no real gap" and a real
+    # figure (the chart the label sits under) gets silently rejected. This
+    # is the exact shape found in a real paper's multi-panel bias-score
+    # figure, where each panel is tagged "(a) ..." / "(b) ..." right above
+    # the shared caption.
+    runs = (
+        _run("Body text well above the figure.", 40, 50, 290, 62),
+        _run("(a) Panel label", 60, 190, 120, 198),
+        _run("Figure 1: Two-panel comparison", 40, 204, 290, 216),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (BBox(x0=60, y0=100, x1=200, y1=180),)
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].label == "Figure 1"
+    assert figs[0].bbox == BBox(x0=60, y0=100, x1=200, y1=180)
+
+
+def test_another_captions_own_text_still_blocks_the_gap():
+    # Two stacked mini-figures, each with its own panel label sitting close
+    # beneath its own chart (same shape as the single-figure case above).
+    # The graphics-adjacency skip must not swallow FIGURE 1's real caption
+    # while scanning for figure 2's boundary just because that caption also
+    # sits close beneath figure 1's own chart -- otherwise figure 2's region
+    # reaches straight past figure 1's caption and swallows figure 1's chart
+    # too.
+    runs = (
+        _run("(a) Panel label", 60, 110, 120, 118),        # figure 1's label
+        _run("Figure 1: First figure", 40, 124, 290, 136),  # caption 1
+        _run("(a) Panel label", 60, 186, 120, 194),         # figure 2's label
+        _run("Figure 2: Second figure", 40, 200, 290, 212),  # caption 2
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (
+        BBox(x0=60, y0=70, x1=200, y1=100),    # figure 1's chart
+        BBox(x0=60, y0=146, x1=200, y1=176),   # figure 2's chart, stacked below
+    )
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    labels = {f.label: f.bbox for f in figs}
+    assert labels == {
+        "Figure 1": BBox(x0=60, y0=70, x1=200, y1=100),
+        "Figure 2": BBox(x0=60, y0=146, x1=200, y1=176),
+    }
+
+
+def test_text_beside_floated_figure_does_not_block_gap():
+    # Body text continues on one side of a wide "column" while a figure is
+    # floated on the other side with its own caption directly beneath it.
+    # The nearby body text sits at a similar y but a different x, and must
+    # not count as "the paragraph the figure interrupts" -- this is the
+    # shape of a real paper's small figure floated beside running text.
+    runs = (
+        _run("Continuing body text on the left side.", 40, 190, 200, 202),
+        _run("Figure 2: A floated figure", 350, 204, 560, 216),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 560, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (BBox(x0=350, y0=100, x1=560, y1=180),)
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].bbox.x0 == 350
+
+
+def test_rejects_degenerate_sliver_bbox():
+    # A caption whose only overlapping "graphic" is a hairline (e.g. a
+    # decorative rule caught by a mislabeled/split caption run) shouldn't
+    # produce a hairline "figure" -- a box a user could never usefully see
+    # or click.
+    runs = (
+        _run("Body text well above.", 40, 50, 290, 62),
+        _run("Figure 1: Something", 40, 200, 290, 212),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (BBox(x0=100, y0=150, x1=200, y1=151),)  # 1pt tall
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert figs == []

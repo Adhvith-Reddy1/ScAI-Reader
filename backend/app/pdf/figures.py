@@ -26,11 +26,16 @@ from .types import BBox, PageText, TextColumn, TextRun
 
 # Match the start of a caption line. Stops at the first non-prefix token so
 # regex doesn't tax the whole text — labels are always at the very start.
+# The optional "Extended Data" prefix covers Nature-family journals' separate
+# numbering for supplementary figures/tables (e.g. "Extended Data Fig. 1 |").
 CAPTION_PATTERN = re.compile(
     r"""^\s*
+    (?P<prefix>Extended\s+Data\s+)?   # Nature-style supplementary prefix
     (?P<kind>Figure|Fig\.?|Table)    # caption kind
     \s*
     (?P<num>\d+[A-Za-z]?)             # number, optional sub-letter (1, 2a)
+    (?!\s*[)\]\}])                    # not "...(see Fig. 2), ..." — an
+                                       # in-line citation, not a caption
     """,
     re.VERBOSE | re.IGNORECASE,
 )
@@ -40,6 +45,22 @@ CAPTION_PATTERN = re.compile(
 # spacing balloons. 18pt is a conservative threshold that handles most
 # layouts without merging adjacent prose paragraphs into the figure.
 MIN_FIGURE_GAP_PT = 18.0
+
+# How far below a graphics object's bottom edge a text run can sit and still
+# count as part of the figure itself — a panel tag ("(a)", "(b)"), axis
+# label, or legend entry — rather than the body prose that marks where the
+# figure actually ends. Real scientific figures routinely embed such text
+# well inside a typical paragraph-line gap, which would otherwise make
+# _figure_bbox_above_caption see a suspiciously small gap and reject a real
+# figure outright.
+FIGURE_LABEL_MAX_GAP_PT = 40.0
+
+# A real figure is never a hairline. Below this in either dimension, the
+# detected region is almost certainly a false positive — e.g. a caption-like
+# run that's actually a mid-sentence citation fragment or a caption split
+# across runs by a style change, landing the "gap" on unrelated nearby ink
+# instead of an actual figure.
+MIN_FIGURE_DIMENSION_PT = 20.0
 
 # Captions wider than ~70% of the page span across columns — treat them as
 # a wide figure rather than constrained to one column.
@@ -61,15 +82,16 @@ class FigureRegion:
     caption_bbox: BBox    # where the caption text actually sits
 
 
-def _normalize_label(kind: str, num: str) -> str:
+def _normalize_label(prefix: str | None, kind: str, num: str) -> str:
     kind = kind.rstrip(".")
-    if kind.lower() == "fig":
-        kind = "Figure"
-    elif kind.lower() == "figure":
+    if kind.lower() in ("fig", "figure"):
         kind = "Figure"
     elif kind.lower() == "table":
         kind = "Table"
-    return f"{kind} {num}"
+    label = f"{kind} {num}"
+    if prefix:
+        label = f"Extended Data {label}"
+    return label
 
 
 def _figure_id(page_index: int, label: str) -> str:
@@ -88,7 +110,7 @@ def _find_caption_runs(
         m = CAPTION_PATTERN.match(run.text)
         if not m:
             continue
-        label = _normalize_label(m.group("kind"), m.group("num"))
+        label = _normalize_label(m.group("prefix"), m.group("kind"), m.group("num"))
         out.append((run, label))
     return out
 
@@ -106,11 +128,31 @@ def _column_for_caption(
     return None
 
 
+def _is_figure_internal_text(run: TextRun, graphics: tuple[BBox, ...]) -> bool:
+    """True if `run` sits just beneath a graphic it horizontally overlaps —
+    plausibly a panel tag ("(a)", "(b)") or axis label that's part of the
+    figure's own drawn content, rather than body prose.
+
+    Real figures routinely embed such text well inside a typical
+    paragraph-line gap below their own artwork. Without this check, that
+    text is the closest thing above the caption, the measured gap comes out
+    well under MIN_FIGURE_GAP_PT, and a real figure gets silently rejected as
+    "not a figure".
+    """
+    for g in graphics:
+        if run.bbox.x1 <= g.x0 or run.bbox.x0 >= g.x1:
+            continue  # no horizontal overlap with this graphic
+        if g.y1 <= run.bbox.y0 <= g.y1 + FIGURE_LABEL_MAX_GAP_PT:
+            return True
+    return False
+
+
 def _figure_bbox_above_caption(
     caption: TextRun,
     column: TextColumn | None,
     page_width_pt: float,
     page_height_pt: float,
+    graphics: tuple[BBox, ...] = (),
 ) -> BBox | None:
     """Find the rectangular text-free region above the caption.
 
@@ -129,15 +171,29 @@ def _figure_bbox_above_caption(
         candidate_runs = ()
 
     caption_top = caption.bbox.y0
+    caption_x0, caption_x1 = caption.bbox.x0, caption.bbox.x1
 
     # Find the closest text bottom strictly above the caption.
     nearest_bottom_above = 0.0
     for r in candidate_runs:
         if r is caption:
             continue
-        if r.bbox.y1 <= caption_top:
-            if r.bbox.y1 > nearest_bottom_above:
-                nearest_bottom_above = r.bbox.y1
+        if r.bbox.y1 > caption_top:
+            continue
+        # Text beside a floated figure (common when body text wraps around
+        # an inset image) sits at a different x than the figure/caption and
+        # shouldn't count as "the paragraph the figure interrupts".
+        if r.bbox.x1 <= caption_x0 or r.bbox.x0 >= caption_x1:
+            continue
+        # A run that's itself another figure/table's caption is always a
+        # real content boundary, even though it too sits close beneath its
+        # own graphic — never let the graphics-adjacency heuristic swallow
+        # it (it would otherwise search straight past the previous figure
+        # entirely and merge both into one region).
+        if not CAPTION_PATTERN.match(r.text) and _is_figure_internal_text(r, graphics):
+            continue
+        if r.bbox.y1 > nearest_bottom_above:
+            nearest_bottom_above = r.bbox.y1
 
     gap = caption_top - nearest_bottom_above
     if gap < MIN_FIGURE_GAP_PT:
@@ -224,12 +280,14 @@ def detect_figures(
             caption_run, page_text.columns, page_width_pt
         )
         fbox = _figure_bbox_above_caption(
-            caption_run, column, page_width_pt, page_height_pt
+            caption_run, column, page_width_pt, page_height_pt, graphics
         )
         if fbox is None:
             continue
         if graphics:
             fbox = _tighten_to_graphics(fbox, graphics)
+        if fbox.width < MIN_FIGURE_DIMENSION_PT or fbox.height < MIN_FIGURE_DIMENSION_PT:
+            continue
         figures.append(
             FigureRegion(
                 figure_id=_figure_id(page_text.page_index, label),
