@@ -460,8 +460,7 @@ function render(annotationId: string): void {
       title.textContent = "AI isn't set up yet";
       body.textContent = "";
       const msg = document.createElement("span");
-      msg.textContent =
-        "Turn on AI explanations with a one-time Anthropic API key. ";
+      msg.textContent = "Turn on AI explanations with a one-time API key. ";
       const setup = document.createElement("button");
       setup.type = "button";
       setup.className = "explanation-setup-ai";

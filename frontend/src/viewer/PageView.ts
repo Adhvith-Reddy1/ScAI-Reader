@@ -28,6 +28,7 @@ import { getExplainMode } from "../explainMode.ts";
 import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
+import { buildFigureLayer } from "./FigureLayer.ts";
 import { dismissExplanationFor } from "./ExplanationTooltip.ts";
 import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
 import {
@@ -49,9 +50,11 @@ interface PageState {
   geom: PageGeometry | null;
   text: PageText | null;
   annotationLayer: SVGSVGElement | null;
+  figureLayer: SVGSVGElement | null;
   mouseupWired: boolean;
   figuresWired: boolean;
   figures: PageFigure[];
+  hoveredFigureId: string | null;
   currentDpi: number;
   findHits: HTMLElement[];
 }
@@ -85,9 +88,11 @@ export function buildPageView(
     geom: null,
     text: null,
     annotationLayer: null,
+    figureLayer: null,
     mouseupWired: false,
     figuresWired: false,
     figures: [],
+    hoveredFigureId: null,
     currentDpi: 0,
     findHits: [],
   };
@@ -133,6 +138,10 @@ export function buildPageView(
       state.annotationLayer.remove();
       state.annotationLayer = null;
     }
+    if (state.figureLayer) {
+      state.figureLayer.remove();
+      state.figureLayer = null;
+    }
 
     const liveSelectionLayer = buildLiveSelectionLayer();
     liveSelectionLayer.setAttribute("width", String(widthCss));
@@ -141,6 +150,7 @@ export function buildPageView(
     wrap.appendChild(buildTextLayer(text, geom));
     registerLiveSelection(wrap, liveSelectionLayer);
     void refreshAnnotations(meta, pageNumber, wrap, state);
+    renderFigureLayer(wrap, state);
 
     if (!state.mouseupWired) {
       wireHighlightOnSelection(meta, pageNumber, wrap, state);
@@ -148,9 +158,9 @@ export function buildPageView(
     }
 
     if (!state.figuresWired) {
-      wireFigureDoubleClick(meta, wrap, state);
+      wireFigureInteractions(meta, wrap, state);
       state.figuresWired = true;
-      void loadFigures(meta, pageNumber, state);
+      void loadFigures(meta, pageNumber, wrap, state);
     }
 
     // Re-apply the current find query against the freshly-built text layer.
@@ -352,9 +362,30 @@ async function maybeAutoSaveHighlight(
   }
 }
 
+/** (Re)draw the figure-detection outline layer from whatever is in
+ * state.figures right now. Cheap and safe to call with an empty list — the
+ * outlines simply disappear, which is itself useful signal ("detected 0
+ * figures on this page"). */
+function renderFigureLayer(wrap: HTMLElement, state: PageState): void {
+  if (state.figureLayer) {
+    state.figureLayer.remove();
+    state.figureLayer = null;
+  }
+  if (!state.geom) return;
+  const svg = buildFigureLayer(state.figures, state.geom);
+  const textLayer = wrap.querySelector(".text-layer");
+  if (textLayer) {
+    wrap.insertBefore(svg, textLayer);
+  } else {
+    wrap.appendChild(svg);
+  }
+  state.figureLayer = svg;
+}
+
 async function loadFigures(
   meta: DocumentMeta,
   pageNumber: number,
+  wrap: HTMLElement,
   state: PageState,
 ): Promise<void> {
   try {
@@ -367,51 +398,93 @@ async function loadFigures(
   } catch {
     state.figures = [];
   }
+  renderFigureLayer(wrap, state);
+}
+
+/** The detected figure (if any) whose display-space bbox contains the given
+ * client point. Shared by the dblclick handler and the hover highlight so
+ * both agree on exactly the same target. */
+function figureAtClientPoint(
+  state: PageState,
+  wrapRect: DOMRect,
+  clientX: number,
+  clientY: number,
+): PageFigure | null {
+  if (!state.geom) return null;
+  const xInWrap = clientX - wrapRect.left;
+  const yInWrap = clientY - wrapRect.top;
+  for (const fig of state.figures) {
+    const v = pageBBoxToViewport(fig.bbox, state.geom);
+    if (xInWrap >= v.x0 && xInWrap <= v.x1 && yInWrap >= v.y0 && yInWrap <= v.y1) {
+      return fig;
+    }
+  }
+  return null;
 }
 
 /**
- * Double-click handler at the page-wrap level. We hit-test the cursor
- * against the detected figure bboxes (in page-space, scaled to the
- * current display). Text double-click — i.e. when the event target is
- * a .text-run inside a column — is left alone for native word-select.
+ * Double-click-to-explain plus a hover affordance on detected figures, wired
+ * at the page-wrap level (the text-column layer above owns pointer events
+ * across its whole bounding box — including a figure's whitespace gap — so a
+ * plain CSS :hover on the outline itself would never fire).
+ *
+ * Text double-click — i.e. the event target is a .text-run inside a column —
+ * is left alone for native word-select.
  */
-function wireFigureDoubleClick(
+function wireFigureInteractions(
   meta: DocumentMeta,
   wrap: HTMLElement,
   state: PageState,
 ): void {
   wrap.addEventListener("dblclick", (e) => {
-    if (!state.geom) return;
     if (state.figures.length === 0) return;
-
-    // Skip if the double-click hit text — native word-select is more useful.
     const target = e.target as Element | null;
     if (target && target.closest(".text-run")) return;
 
     const wrapRect = wrap.getBoundingClientRect();
-    const xInWrap = e.clientX - wrapRect.left;
-    const yInWrap = e.clientY - wrapRect.top;
+    const fig = figureAtClientPoint(state, wrapRect, e.clientX, e.clientY);
+    if (!fig || !state.geom) return;
 
-    // Match against the (display-space) bbox of every figure on this page.
-    for (const fig of state.figures) {
-      const v = pageBBoxToViewport(fig.bbox, state.geom);
-      if (
-        xInWrap >= v.x0 &&
-        xInWrap <= v.x1 &&
-        yInWrap >= v.y0 &&
-        yInWrap <= v.y1
-      ) {
-        e.preventDefault();
-        // Convert back to a viewport-anchored rect for card positioning.
-        const figRect = new DOMRect(
-          wrapRect.left + v.x0,
-          wrapRect.top + v.y0,
-          v.x1 - v.x0,
-          v.y1 - v.y0,
-        );
-        showFigureCard(meta.id, fig, figRect);
-        return;
-      }
+    e.preventDefault();
+    const v = pageBBoxToViewport(fig.bbox, state.geom);
+    // Convert back to a viewport-anchored rect for card positioning.
+    const figRect = new DOMRect(
+      wrapRect.left + v.x0,
+      wrapRect.top + v.y0,
+      v.x1 - v.x0,
+      v.y1 - v.y0,
+    );
+    showFigureCard(meta.id, fig, figRect);
+  });
+
+  wrap.addEventListener("mousemove", (e) => {
+    if (state.figures.length === 0) return;
+    const wrapRect = wrap.getBoundingClientRect();
+    const fig = figureAtClientPoint(state, wrapRect, e.clientX, e.clientY);
+    const nextId = fig?.figure_id ?? null;
+    if (nextId === state.hoveredFigureId) return;
+
+    if (state.hoveredFigureId && state.figureLayer) {
+      state.figureLayer
+        .querySelector(`[data-figure-id="${state.hoveredFigureId}"]`)
+        ?.classList.remove("is-hover");
     }
+    if (nextId && state.figureLayer) {
+      state.figureLayer
+        .querySelector(`[data-figure-id="${nextId}"]`)
+        ?.classList.add("is-hover");
+    }
+    state.hoveredFigureId = nextId;
+    wrap.classList.toggle("is-over-figure", nextId != null);
+  });
+
+  wrap.addEventListener("mouseleave", () => {
+    if (state.hoveredFigureId && state.figureLayer) {
+      state.figureLayer
+        .querySelector(`[data-figure-id="${state.hoveredFigureId}"]`)
+        ?.classList.remove("is-hover");
+    }
+    state.hoveredFigureId = null;
+    wrap.classList.remove("is-over-figure");
   });
 }

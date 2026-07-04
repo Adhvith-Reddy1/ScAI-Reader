@@ -8,7 +8,8 @@
  * page when the user scrolls.
  */
 
-import type { PageFigure } from "../api.ts";
+import { AI_NOT_CONFIGURED_CODE, type PageFigure } from "../api.ts";
+import { openAiSetup } from "../AiSetup.ts";
 import {
   getFigureState,
   startFigureExplanation,
@@ -81,7 +82,23 @@ function render(): void {
     body.textContent = state.content;
   } else if (state.status === "error") {
     el.classList.add("is-error");
-    body.textContent = state.error;
+    if (state.code === AI_NOT_CONFIGURED_CODE) {
+      // Guide the reader to setup instead of leaving them at a dead end.
+      body.textContent = "";
+      const msg = document.createElement("span");
+      msg.textContent = "Turn on AI explanations with a one-time API key. ";
+      const setup = document.createElement("button");
+      setup.type = "button";
+      setup.className = "explanation-setup-ai";
+      setup.textContent = "Set up AI →";
+      setup.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAiSetup();
+      });
+      body.append(msg, setup);
+    } else {
+      body.textContent = state.error;
+    }
   } else {
     body.textContent = "Loading…";
   }

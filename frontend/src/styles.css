@@ -1393,3 +1393,52 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 
 /* Marker cursor over selectable text while in explain mode. */
 html[data-explain-active="true"] .text-column { cursor: cell; }
+
+/* --- Figure detection outlines -------------------------------------------
+   Thin, always-visible outline over every detected figure/table region, so
+   detection accuracy is visible at a glance instead of a silent dblclick
+   no-op. Purely decorative (pointer-events:none); the wrap-level dblclick
+   handler in PageView.ts does its own independent hit-test. */
+.figure-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.figure-region rect {
+  fill: rgba(79, 140, 255, 0.045);
+  stroke: rgba(79, 140, 255, 0.55);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  transition: fill 100ms ease, stroke 100ms ease, stroke-dasharray 100ms ease;
+}
+.figure-region.is-hover rect {
+  fill: rgba(79, 140, 255, 0.10);
+  stroke: rgba(79, 140, 255, 0.95);
+  stroke-dasharray: none;
+  stroke-width: 1.5;
+}
+.figure-region-chip {
+  opacity: 0.85;
+  transition: opacity 100ms ease;
+}
+.figure-region.is-hover .figure-region-chip {
+  opacity: 1;
+}
+.figure-region-chip rect {
+  fill: rgba(79, 140, 255, 0.9);
+  stroke: none;
+}
+.figure-region-chip text {
+  fill: #fff;
+  font-size: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-weight: 600;
+  dominant-baseline: alphabetic;
+}
+
+/* Reinforces clickability on hover — set from PageView.ts's figure hit-test
+   (mousemove), since the text-column layer above would otherwise own the
+   cursor for the whole column rectangle, including the figure's whitespace. */
+.page-wrap.is-over-figure {
+  cursor: pointer;
+}
