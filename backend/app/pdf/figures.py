@@ -55,6 +55,13 @@ MIN_FIGURE_GAP_PT = 18.0
 # figure outright.
 FIGURE_LABEL_MAX_GAP_PT = 40.0
 
+# A graphic bigger than this in either dimension is treated as a background
+# or decorative element (e.g. a full-bleed rule or fill) that most/all page
+# text will trivially fall "inside" of — not a discrete panel or label box a
+# run could sit inside as actual figure content. Comfortably bigger than a
+# realistic callout/legend/summary box, comfortably smaller than a page.
+MAX_INTERNAL_GRAPHIC_PT = 300.0
+
 # A real figure is never a hairline. Below this in either dimension, the
 # detected region is almost certainly a false positive — e.g. a caption-like
 # run that's actually a mid-sentence citation fragment or a caption split
@@ -129,21 +136,30 @@ def _column_for_caption(
 
 
 def _is_figure_internal_text(run: TextRun, graphics: tuple[BBox, ...]) -> bool:
-    """True if `run` sits just beneath a graphic it horizontally overlaps —
-    plausibly a panel tag ("(a)", "(b)") or axis label that's part of the
-    figure's own drawn content, rather than body prose.
+    """True if `run` is plausibly part of a figure's own drawn content —
+    a panel tag ("(a)", "(b)"), axis label, or text inside a labeled callout
+    box (e.g. a flowchart's "Summary: ..." box) — rather than body prose.
 
     Real figures routinely embed such text well inside a typical
-    paragraph-line gap below their own artwork. Without this check, that
-    text is the closest thing above the caption, the measured gap comes out
-    well under MIN_FIGURE_GAP_PT, and a real figure gets silently rejected as
-    "not a figure".
+    paragraph-line gap, or directly inside a small box that's part of the
+    figure (a diagram node, a legend). Without this check, that text is the
+    closest thing above the caption, the measured gap comes out well under
+    MIN_FIGURE_GAP_PT, and a real figure gets silently rejected as "not a
+    figure" (or, for a large diagram, only the portion below the deepest
+    embedded label survives).
     """
     for g in graphics:
         if run.bbox.x1 <= g.x0 or run.bbox.x0 >= g.x1:
             continue  # no horizontal overlap with this graphic
         if g.y1 <= run.bbox.y0 <= g.y1 + FIGURE_LABEL_MAX_GAP_PT:
-            return True
+            return True  # sits just beneath the graphic
+        if (
+            g.width <= MAX_INTERNAL_GRAPHIC_PT
+            and g.height <= MAX_INTERNAL_GRAPHIC_PT
+            and g.y0 <= run.bbox.y0
+            and run.bbox.y1 <= g.y1
+        ):
+            return True  # sits inside a small, discrete box
     return False
 
 
@@ -212,23 +228,35 @@ def _figure_bbox_above_caption(
     return BBox(x0=x0, y0=y0, x1=x1, y1=y1)
 
 
+# A multi-panel figure's outermost panel routinely sits just past the
+# enclosing column's edge (a few points, typically a small panel gutter) —
+# still clearly part of the figure. This tolerance bridges that gap. It's
+# deliberately small: a page's OTHER column of running text sits hundreds of
+# points away, so this can't accidentally pull in unrelated content there.
+PANEL_GUTTER_PT = 20.0
+
+
 def _tighten_to_graphics(bbox: BBox, graphics: tuple[BBox, ...]) -> BBox:
     """Replace a gap-derived bbox's extent with the union of the actual
-    image/vector objects that overlap it, so the box hugs the real figure
-    content instead of spanning the whole text column. `graphics` locates
-    *what's actually drawn*, which text-run positions alone can't — there's
-    no text inside a figure to bound it by.
+    image/vector objects that overlap it (or nearly do, horizontally — see
+    PANEL_GUTTER_PT), so the box hugs the real figure content instead of
+    spanning the whole text column. `graphics` locates *what's actually
+    drawn*, which text-run positions alone can't — there's no text inside a
+    figure to bound it by.
 
     Vertically, `bbox`'s extent (the whitespace gap above the caption) is the
     validated signal, so the union is clamped to it — a graphic that bleeds
     past the gap (e.g. a stray decorative rule near the caption) shouldn't
     pull the box into neighbouring text.
 
-    Horizontally there's no equivalent clamp: `bbox`'s x0/x1 is just the
-    enclosing column's width — a rough fallback, not a true bound. A real
-    figure routinely extends wider than its caption or the longest body line
-    (both of which the column bbox is derived from), so a real, overlapping
-    graphic is trusted over that fallback even when it's wider.
+    Horizontally there's no equivalent clamp on the union's final extent:
+    `bbox`'s x0/x1 is just the enclosing column's width — a rough fallback,
+    not a true bound. A real figure routinely extends wider than its caption
+    or the longest body line (both of which the column bbox is derived
+    from), so a real, overlapping graphic is trusted over that fallback even
+    when it's wider — this is also how a figure that spans the full page
+    width while its caption sits narrow in one column still gets captured,
+    as long as at least one graphic actually reaches into that column.
 
     Falls back to the original bbox untouched when nothing overlaps — e.g. a
     figure with no extractable vector/image content, or a backend that can't
@@ -236,7 +264,10 @@ def _tighten_to_graphics(bbox: BBox, graphics: tuple[BBox, ...]) -> BBox:
     overlapping = [
         g
         for g in graphics
-        if g.x0 < bbox.x1 and g.x1 > bbox.x0 and g.y0 < bbox.y1 and g.y1 > bbox.y0
+        if g.x0 - PANEL_GUTTER_PT < bbox.x1
+        and g.x1 + PANEL_GUTTER_PT > bbox.x0
+        and g.y0 < bbox.y1
+        and g.y1 > bbox.y0
     ]
     if not overlapping:
         return bbox
