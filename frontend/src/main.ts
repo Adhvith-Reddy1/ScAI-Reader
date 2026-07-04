@@ -34,6 +34,7 @@ import {
   initSidebar,
   isSidebarVisible,
   mountSidebarPanel,
+  setSidebarEnabled,
   setSidebarVisible,
   subscribeSidebarVisibility,
 } from "./sidebar.ts";
@@ -279,6 +280,8 @@ window.addEventListener("resize", pushViewportSize);
 async function renderDocument(meta: DocumentMeta): Promise<void> {
   currentDocId = meta.id;
   lastKnownPage = 1;
+  // A document is now open, so the outline sidebar is meaningful again.
+  setSidebarEnabled(true);
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
     meta.title ? ` — "${meta.title.trim()}"` : ""
   }`;
@@ -345,6 +348,10 @@ async function openDocument(item: LibraryItem): Promise<void> {
 }
 
 async function showLibrary(): Promise<void> {
+  // The landing/library view has no document, so the outline sidebar has
+  // nothing to show — keep it hidden here (and don't disturb the user's
+  // open/closed preference, which is restored when a document opens).
+  setSidebarEnabled(false);
   if (pageList) {
     pageList.dispose();
     pageList = null;

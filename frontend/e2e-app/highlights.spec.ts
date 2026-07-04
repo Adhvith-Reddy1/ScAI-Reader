@@ -59,6 +59,10 @@ test("a dragged highlight persists across reload; erasing it persists too", asyn
 
   await openPdf(page);
 
+  // With a document open, the outline sidebar is meaningful and should show
+  // (the inverse of the smoke test's landing-page assertion).
+  await expect(page.locator("#sidebar")).toBeVisible();
+
   // Activate the Highlight tool, then drag to create a highlight.
   await page.locator('button[aria-label="Highlight"]').click();
   await expect(page.locator("html")).toHaveAttribute(

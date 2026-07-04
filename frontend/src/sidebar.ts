@@ -17,6 +17,11 @@ let active: string | null = null;
 // User intent — independent of whether any panels are mounted. False means the
 // user explicitly closed it; we don't reopen on subsequent mounts.
 let userVisible = true;
+// Whether the app context allows the sidebar at all. The landing/library view
+// has no document, so nothing to outline — main.ts disables it there and
+// re-enables it once a document is open. Defaults on so the sidebar shell is
+// usable the moment a panel mounts.
+let enabled = true;
 const visibilitySubs = new Set<(v: boolean) => void>();
 
 interface PanelEntry {
@@ -62,7 +67,21 @@ export function setSidebarVisible(visible: boolean): void {
 }
 
 export function isSidebarVisible(): boolean {
-  return userVisible && panels.size > 0;
+  return userVisible && enabled && panels.size > 0;
+}
+
+/**
+ * Enable/disable the sidebar for the current app context. Disabling hides it
+ * (e.g. on the landing/library view, where there's no document to outline)
+ * without touching the user's open/closed preference, so it's restored when
+ * re-enabled. Notifies visibility subscribers with the effective state.
+ */
+export function setSidebarEnabled(value: boolean): void {
+  if (enabled === value) return;
+  enabled = value;
+  applyVisibility();
+  const visible = isSidebarVisible();
+  for (const cb of visibilitySubs) cb(visible);
 }
 
 export function toggleSidebar(): void {
@@ -78,7 +97,7 @@ export function subscribeSidebarVisibility(cb: (visible: boolean) => void): () =
 
 function applyVisibility(): void {
   if (!sidebarEl) return;
-  sidebarEl.hidden = !(userVisible && panels.size > 0);
+  sidebarEl.hidden = !(userVisible && enabled && panels.size > 0);
 }
 
 export function mountSidebarPanel(
@@ -147,5 +166,6 @@ export function _resetForTest(): void {
   tabsEl = null;
   panelsEl = null;
   userVisible = true;
+  enabled = true;
   visibilitySubs.clear();
 }
