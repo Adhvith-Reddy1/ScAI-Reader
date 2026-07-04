@@ -142,6 +142,29 @@ def test_text_runs_have_valid_bboxes(backend_opener, simple_pdf):
 
 
 # ---------------------------------------------------------------------------
+# Page graphics (non-text objects — figures/tables use this to find their
+# actual extent; see app/pdf/figures.py::_tighten_to_graphics)
+# ---------------------------------------------------------------------------
+
+def test_graphics_empty_for_text_only_page(backend_opener, simple_pdf):
+    with backend_opener(simple_pdf) as b:
+        graphics = b.get_page_graphics(0)
+    assert graphics == ()
+
+
+def test_graphics_found_on_page_with_drawn_content(backend_opener, figure_pdf):
+    with backend_opener(figure_pdf) as b:
+        dims = b.page_dimensions(0)
+        graphics = b.get_page_graphics(0)
+    assert len(graphics) > 0
+    for g in graphics:
+        assert g.x0 < g.x1
+        assert g.y0 < g.y1
+        assert g.x0 >= -1 and g.x1 <= dims.width_pt + 1
+        assert g.y0 >= -1 and g.y1 <= dims.height_pt + 1
+
+
+# ---------------------------------------------------------------------------
 # Outline
 # ---------------------------------------------------------------------------
 

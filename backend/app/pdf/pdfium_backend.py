@@ -126,6 +126,37 @@ class PdfiumBackend(PdfBackend):
             finally:
                 page.close()
 
+    # Non-text page-object types: image, vector path, and shading. Excludes
+    # TEXT (already covered by get_page_text) and FORM (a container XObject,
+    # not itself visible ink — get_objects() already recurses into it).
+    _GRAPHICS_TYPES = (
+        pdfium.raw.FPDF_PAGEOBJ_IMAGE,
+        pdfium.raw.FPDF_PAGEOBJ_PATH,
+        pdfium.raw.FPDF_PAGEOBJ_SHADING,
+    )
+
+    def get_page_graphics(self, page_index: int) -> tuple[BBox, ...]:
+        with _PDFIUM_LOCK:
+            page = self._get_page(page_index)
+            try:
+                _, page_height = page.get_size()
+                boxes: list[BBox] = []
+                for obj in page.get_objects(filter=list(self._GRAPHICS_TYPES)):
+                    left, bottom, right, top = obj.get_bounds()
+                    if right <= left or top <= bottom:
+                        continue  # degenerate (e.g. a zero-area clip artifact)
+                    boxes.append(
+                        BBox(
+                            x0=float(left),
+                            y0=float(page_height - top),
+                            x1=float(right),
+                            y1=float(page_height - bottom),
+                        )
+                    )
+                return tuple(boxes)
+            finally:
+                page.close()
+
     def get_outline(self) -> tuple[OutlineNode, ...]:
         with _PDFIUM_LOCK:
             flat: list[tuple[int, str, int | None]] = []
