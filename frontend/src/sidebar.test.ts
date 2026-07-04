@@ -4,6 +4,7 @@ import {
   initSidebar,
   isSidebarVisible,
   mountSidebarPanel,
+  setSidebarEnabled,
   setSidebarVisible,
   subscribeSidebarVisibility,
   toggleSidebar,
@@ -125,6 +126,35 @@ describe("sidebar shell", () => {
     expect(el.hidden).toBe(true);
     setSidebarVisible(true);
     expect(el.hidden).toBe(false);
+  });
+
+  it("stays hidden while disabled, even with a panel mounted and user-visible", () => {
+    const el = makeSidebarEl();
+    initSidebar(el);
+    mountSidebarPanel("outline", "Outline", document.createElement("div"));
+    expect(el.hidden).toBe(false);
+
+    // Landing/library view: no document, so the sidebar is disabled.
+    setSidebarEnabled(false);
+    expect(el.hidden).toBe(true);
+    expect(isSidebarVisible()).toBe(false);
+
+    // A document opens → re-enabled, and the user's (default open) preference
+    // is honored again without them having to toggle anything.
+    setSidebarEnabled(true);
+    expect(el.hidden).toBe(false);
+    expect(isSidebarVisible()).toBe(true);
+  });
+
+  it("disabling notifies visibility subscribers with the effective state", () => {
+    initSidebar(makeSidebarEl());
+    mountSidebarPanel("outline", "Outline", document.createElement("div"));
+    const seen: boolean[] = [];
+    subscribeSidebarVisibility((v) => seen.push(v));
+    setSidebarEnabled(false);
+    setSidebarEnabled(false); // no-op
+    setSidebarEnabled(true);
+    expect(seen).toEqual([false, true]);
   });
 
   it("subscribeSidebarVisibility fires on state change only", () => {

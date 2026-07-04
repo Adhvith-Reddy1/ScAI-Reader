@@ -14,6 +14,10 @@ test("app loads and renders the reader shell", async ({ page }) => {
   // should settle into the empty-library state rather than hang.
   await expect(page.locator("#viewer")).toBeVisible();
   await expect(page.locator(".library-empty")).toContainText("No documents yet");
+
+  // The outline sidebar must NOT appear on the landing page — there's no
+  // document to outline yet.
+  await expect(page.locator("#sidebar")).toBeHidden();
 });
 
 test("backend health endpoint is reachable", async ({ request }) => {
