@@ -11,6 +11,23 @@ export async function uploadDocument(file: File): Promise<DocumentMeta> {
 }
 
 /**
+ * Cheap existence check for a document the client already knows the id
+ * (SHA-256) of — e.g. re-opening something from the Library. Lets the caller
+ * skip re-POSTing the full PDF bytes (potentially tens of MB) when the
+ * (stateless, ephemeral) server already has it fully indexed from earlier in
+ * its lifetime. Returns null on 404 so the caller can fall back to a full
+ * upload (e.g. after the server's disk was reset).
+ */
+export async function fetchDocumentIfKnown(
+  docId: string,
+): Promise<DocumentMeta | null> {
+  const r = await fetch(`/documents/${docId}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`document lookup failed (${r.status})`);
+  return r.json() as Promise<DocumentMeta>;
+}
+
+/**
  * Upload raw PDF bytes for (re-)rendering. The browser is the source of truth
  * for the library, so each PDF's bytes live in IndexedDB; on open we re-send
  * them here so a stateless / cold-started server can render the pages. Upload
