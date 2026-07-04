@@ -72,6 +72,25 @@ body {
 }
 .upload span:hover { filter: brightness(1.1); }
 
+/* "Save with notes" — download the PDF with annotations embedded. Secondary
+   styling (outlined) so it reads as an action on the open doc, not a primary. */
+.export-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.export-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.export-button:disabled { opacity: 0.4; cursor: default; }
+.export-button-glyph { font-size: 15px; line-height: 1; }
+
 /* Document title: takes the slack in the middle, truncates instead of
    wrapping the whole bar to a second row. Full text shown on hover. */
 .info {

@@ -21,6 +21,8 @@ import {
 } from "./fit.ts";
 import { buildAiSetupButton, maybeShowAiNudge } from "./AiSetup.ts";
 import { buildEraseButton } from "./EraseButton.ts";
+import { buildExportButton } from "./ExportButton.ts";
+import { buildAnnotatedPdf, importEmbeddedBundle } from "./share.ts";
 import { subscribeEraseMode } from "./eraseMode.ts";
 import { buildExplainButton } from "./ExplainButton.ts";
 import { subscribeExplainMode } from "./explainMode.ts";
@@ -89,6 +91,9 @@ eraseSlot.appendChild(buildEraseButton());
 zoomSlot.appendChild(buildZoomControls());
 const rotateSlot = document.getElementById("rotate-controls-slot");
 rotateSlot?.appendChild(buildRotateControls());
+const exportButton = buildExportButton(() => exportAnnotatedPdf());
+const exportSlot = document.getElementById("export-button-slot");
+exportSlot?.appendChild(exportButton.element);
 pageIndicatorSlot.appendChild(buildPageIndicator());
 
 const aiSetupSlot = document.getElementById("ai-setup-slot") as HTMLElement;
@@ -250,14 +255,48 @@ fileInput.addEventListener("change", async () => {
   if (!file) return;
   docInfo.textContent = "Uploading…";
   try {
+    // Read the bytes up front so we can check for an embedded annotation
+    // bundle (a PDF shared from ScAI) before rendering.
+    const bytes = new Uint8Array(await file.arrayBuffer());
     const meta = await uploadDocument(file);
     await persistUpload(file, meta);
+    // Restore any shared highlights/explanations BEFORE rendering so they show
+    // on first paint. Keyed to `meta.id` (the id of the file we opened).
+    await restoreEmbeddedAnnotations(bytes, meta.id);
     setRotation(0); // a freshly opened PDF starts upright
     await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
   }
+  // Allow re-opening the same file (change doesn't fire otherwise).
+  fileInput.value = "";
 });
+
+/**
+ * If the opened PDF carries an embedded annotation bundle, import it so the
+ * reader sees the shared highlights + cached explanations with no LLM calls.
+ * Best-effort: a broken/absent bundle just means a normal (un-annotated) open.
+ */
+async function restoreEmbeddedAnnotations(
+  bytes: Uint8Array,
+  docId: string,
+): Promise<void> {
+  let outcome;
+  try {
+    outcome = await importEmbeddedBundle(bytes, docId);
+  } catch {
+    toast("This PDF has annotations but they couldn't be read.");
+    return;
+  }
+  if (!outcome) return;
+  const h = outcome.annotations;
+  const e = outcome.explanations;
+  toast(
+    `Restored ${h} highlight${h === 1 ? "" : "s"} and ${e} explanation${
+      e === 1 ? "" : "s"
+    } from this PDF.`,
+  );
+}
 
 /**
  * Save an uploaded PDF (bytes + metadata) to the browser-local library, so it
@@ -285,6 +324,51 @@ async function persistUpload(file: File, meta: DocumentMeta): Promise<void> {
   }
 }
 
+/**
+ * Download the open document as a PDF with its highlights + AI explanations
+ * embedded, so the reader can share one file that carries its annotations. The
+ * receiver's app restores them (see `importEmbeddedBundle`) with no LLM calls.
+ */
+async function exportAnnotatedPdf(): Promise<void> {
+  if (!currentDocId) return;
+  const doc = await getDocument(currentDocId);
+  if (!doc) {
+    toast("This document isn't stored locally, so it can't be exported.");
+    return;
+  }
+  try {
+    const out = await buildAnnotatedPdf(
+      currentDocId,
+      doc.blob,
+      doc.filename,
+      new Date().toISOString(),
+    );
+    downloadBytes(out.bytes, out.filename);
+    const h = out.annotations;
+    const e = out.explanations;
+    toast(
+      `Saved “${out.filename}” with ${h} highlight${h === 1 ? "" : "s"}` +
+        ` and ${e} explanation${e === 1 ? "" : "s"} embedded.`,
+    );
+  } catch {
+    toast("Couldn't build the annotated PDF.");
+  }
+}
+
+/** Trigger a browser download of raw bytes under `filename`. */
+function downloadBytes(bytes: Uint8Array, filename: string): void {
+  const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke on the next tick so the download has a chance to start.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 let pageList: PageListHandle | null = null;
 
 function pushViewportSize(): void {
@@ -308,6 +392,7 @@ function applyDocumentBounds(): void {
 async function renderDocument(meta: DocumentMeta): Promise<void> {
   currentDocId = meta.id;
   lastKnownPage = 1;
+  exportButton.setEnabled(true); // a document is open — export is meaningful
   // A document is now open, so the outline sidebar is meaningful again.
   setSidebarEnabled(true);
   docInfo.textContent = `${meta.filename} — ${meta.page_count} pages${
@@ -399,6 +484,7 @@ async function showLibrary(): Promise<void> {
   setActivePageList(null);
   clearDocument();
   currentDocId = null;
+  exportButton.setEnabled(false); // no open document to export
   viewer.innerHTML = "";
   const library = await buildLibrary(
     (item) => void openDocument(item),
