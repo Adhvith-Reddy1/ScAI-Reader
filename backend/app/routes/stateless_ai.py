@@ -185,12 +185,21 @@ async def ai_explain_figure(
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="document not found")
 
+    render_dpi = 150
     try:
         with PdfiumBackend.open(pdf_path) as backend:
-            page_png = backend.render_page(body.page - 1, dpi=150)
+            page_png = backend.render_page(body.page - 1, dpi=render_dpi)
             page = backend.get_page_text(body.page - 1)
+            dims = backend.page_dimensions(body.page - 1)
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    cropped = False
+    if body.bbox is not None:
+        page_png = fig.crop_to_bbox(
+            page_png, body.bbox, dims.width_pt, dims.height_pt, render_dpi
+        )
+        cropped = True
 
     page_text = " ".join(
         run.text.strip()
@@ -203,7 +212,7 @@ async def ai_explain_figure(
     async def event_stream() -> AsyncIterator[bytes]:
         yield fig._sse_event({"type": "meta", "cached": False})
         async for event_type, payload in fig._stream_figure(
-            config, page_text, page_png, body.label, body.page
+            config, page_text, page_png, body.label, body.page, cropped=cropped
         ):
             if event_type == "delta":
                 yield fig._sse_event({"type": "delta", "text": payload})

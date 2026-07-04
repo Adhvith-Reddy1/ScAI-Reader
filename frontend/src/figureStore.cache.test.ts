@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { FigureExplainCallbacks } from "./api.ts";
+import type { FigureBBox, FigureExplainCallbacks } from "./api.ts";
 import type { LocalExplanation } from "./storage/localStore.ts";
 
 const streamFigureMock = vi.fn(
@@ -9,6 +9,7 @@ const streamFigureMock = vi.fn(
     _p: number,
     _l: string,
     _cb: FigureExplainCallbacks,
+    _bbox?: FigureBBox,
   ) => () => {},
 );
 
@@ -19,7 +20,8 @@ vi.mock("./api.ts", () => ({
     p: number,
     l: string,
     cb: FigureExplainCallbacks,
-  ) => streamFigureMock(d, f, p, l, cb) ?? (() => {}),
+    bbox?: FigureBBox,
+  ) => streamFigureMock(d, f, p, l, cb, bbox) ?? (() => {}),
 }));
 
 const getExplanationMock = vi.fn();
@@ -91,5 +93,14 @@ describe("figureStore cache-first / write-through", () => {
       content: "A scatter plot.",
       status: "complete",
     });
+  });
+
+  it("forwards the panel's bbox to the stream call so the AI-explain vision payload can be cropped to it", async () => {
+    const bbox: FigureBBox = { x0: 10, y0: 20, x1: 100, y1: 120 };
+
+    await startFigureExplanation("doc", "fig-3", 1, "Figure 3a", bbox);
+
+    expect(streamFigureMock).toHaveBeenCalledTimes(1);
+    expect(streamFigureMock.mock.calls[0][5]).toEqual(bbox);
   });
 });

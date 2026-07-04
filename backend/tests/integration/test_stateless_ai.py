@@ -152,6 +152,64 @@ def test_figure_ai_explain_streams_and_writes_nothing(
 
 
 @pytest.mark.integration
+def test_figure_ai_explain_with_bbox_sends_a_cropped_image(
+    app_client, simple_pdf, monkeypatch
+):
+    """A double-click on one panel sends that panel's bbox; the vision
+    payload should shrink to just that region, not the whole page — the
+    entire point of sub-panel detection (see app.pdf.figures)."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    full_page = app_client.get(f"/documents/{doc_id}/pages/1.png?dpi=150")
+    full_page_bytes = len(full_page.content)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-explain",
+        json={
+            "page": 1,
+            "label": "Figure 1",
+            "bbox": {"x0": 50, "y0": 50, "x1": 150, "y1": 100},
+        },
+    )
+    assert r.status_code == 200
+
+    import base64
+
+    image_part = captured["messages"][0]["content"][0]
+    cropped_bytes = base64.standard_b64decode(image_part["data"])
+    assert len(cropped_bytes) < full_page_bytes
+    assert "cropped to just this figure/panel" in captured["messages"][0]["content"][1]["text"]
+
+
+@pytest.mark.integration
+def test_figure_ai_explain_without_bbox_mentions_full_page(
+    app_client, simple_pdf, monkeypatch
+):
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-explain",
+        json={"page": 1, "label": "Figure 1"},
+    )
+    assert r.status_code == 200
+    assert "disambiguate" in captured["messages"][0]["content"][1]["text"]
+
+
+@pytest.mark.integration
 def test_figure_ai_explain_declares_the_real_image_media_type(
     app_client, page_with_image_pdf, monkeypatch
 ):

@@ -10,9 +10,14 @@ from app.pdf.figures import (
     CAPTION_PATTERN,
     _caption_ceiling,
     _cluster_graphics,
+    _detect_sub_panels,
     _find_caption_runs,
+    _find_panel_labels,
+    _group_labels_into_rows,
     _is_figure_internal_text,
+    _PANEL_LABEL_PATTERN,
     _tighten_to_graphics,
+    _valley,
     detect_figures,
 )
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
@@ -517,3 +522,169 @@ def test_cluster_path_falls_back_to_text_gap_when_no_graphics_nearby():
     assert len(figs) == 1
     assert figs[0].label == "Figure 1"
     assert figs[0].bbox == BBox(x0=40, y0=82, x1=290, y1=200)
+
+
+# --- sub-panel detection -----------------------------------------------
+
+
+def test_panel_label_pattern():
+    for s in ["a", "(a)", "a.", "b", "z"]:
+        assert _PANEL_LABEL_PATTERN.match(s), s
+    for s in ["ab", "A", "1", "figure", "", "(a", "a)"]:
+        assert _PANEL_LABEL_PATTERN.match(s) is None, s
+
+
+def test_find_panel_labels_dedupes_and_respects_region():
+    runs = (
+        _run("a", 10, 10, 15, 18),
+        _run("b", 10, 100, 15, 108),
+        _run("a", 10, 200, 15, 208),  # a second "a" -- first occurrence wins
+        _run("c", 500, 10, 505, 18),  # outside the region
+    )
+    region = BBox(0, 0, 100, 150)
+    found = _find_panel_labels(runs, region)
+    assert set(found) == {"a", "b"}
+    assert found["a"].bbox.y0 == 10  # first occurrence, not the second "a"
+
+
+def test_group_labels_into_rows_by_y_proximity():
+    labels = {
+        "a": _run("a", 10, 10, 15, 18).__class__(
+            text="a", bbox=BBox(10, 10, 15, 18), font_size=10.0
+        ),
+        "b": _run("b", 120, 12, 125, 20),
+        "c": _run("c", 10, 200, 15, 208),
+    }
+    rows = _group_labels_into_rows(labels)
+    assert [[k for k, _ in row] for row in rows] == [["a", "b"], ["c"]]
+
+
+def test_valley_finds_sparsest_point():
+    boxes = (BBox(0, 0, 10, 10), BBox(0, 20, 10, 30))
+    v = _valley(0, 20, lambda y: sum(1 for b in boxes if b.y0 < y < b.y1))
+    assert 10 <= v <= 20  # somewhere in the real gap between the two boxes
+
+
+def test_valley_returns_lo_when_range_is_empty():
+    assert _valley(5, 5, lambda v: 0) == 5
+    assert _valley(10, 5, lambda v: 0) == 10
+
+
+def test_detect_sub_panels_splits_two_by_two_grid():
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 220, 50, 225, 58),
+        _run("c", 60, 200, 65, 208),
+        _run("d", 220, 200, 225, 208),
+    )
+    graphics = (
+        BBox(60, 65, 150, 150),
+        BBox(220, 65, 310, 150),
+        BBox(60, 215, 150, 290),
+        BBox(220, 215, 310, 290),
+    )
+    figure_bbox = BBox(60, 65, 310, 290)
+    panels = _detect_sub_panels(figure_bbox, graphics, runs)
+    assert panels == {
+        "a": BBox(60, 65, 150, 150),
+        "b": BBox(220, 65, 310, 150),
+        "c": BBox(60, 215, 150, 290),
+        "d": BBox(220, 215, 310, 290),
+    }
+
+
+def test_detect_sub_panels_finds_labels_just_outside_tight_bbox():
+    # A label sits at its panel's corner, slightly outside the parent
+    # figure's OWN bbox when that bbox is tightened to just its graphics
+    # (the label isn't graphics, so it doesn't contribute to that union).
+    runs = (
+        _run("a", 55, 50, 60, 58),  # 15pt above the tightened figure_bbox.y0
+        _run("b", 220, 50, 225, 58),
+    )
+    graphics = (
+        BBox(60, 65, 150, 150),
+        BBox(220, 65, 310, 150),
+    )
+    figure_bbox = BBox(60, 65, 310, 150)  # tight to graphics only
+    panels = _detect_sub_panels(figure_bbox, graphics, runs)
+    assert set(panels) == {"a", "b"}
+
+
+def test_detect_sub_panels_requires_panel_a():
+    # "b", "c" without "a" is more likely a couple of unrelated single
+    # letters (axis ticks, equation variables) than a real panel grid --
+    # real papers always start lettering at "a".
+    runs = (
+        _run("b", 60, 50, 65, 58),
+        _run("c", 220, 50, 225, 58),
+    )
+    graphics = (BBox(60, 65, 150, 150), BBox(220, 65, 310, 150))
+    figure_bbox = BBox(60, 65, 310, 150)
+    assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
+
+
+def test_detect_sub_panels_requires_at_least_two_labels():
+    runs = (_run("a", 60, 50, 65, 58),)
+    graphics = (BBox(60, 65, 150, 150),)
+    figure_bbox = BBox(60, 65, 150, 150)
+    assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
+
+
+def test_detect_sub_panels_rejects_degenerate_size_disparity():
+    # A real, clean gap between "a" and "b" -- but "a" ends up with a tiny
+    # sliver of content next to "b"'s much larger content. This pattern is
+    # a strong signal of a bad split (e.g. a spurious valley found inside
+    # one panel's own content), so the whole split is rejected rather than
+    # shipping a confidently-wrong panel box.
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 60, 200, 65, 208),
+    )
+    graphics = (
+        BBox(60, 65, 65, 70),  # panel a: a 5x5 sliver
+        BBox(60, 215, 200, 290),  # panel b: much larger
+    )
+    figure_bbox = BBox(60, 65, 200, 290)
+    assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
+
+
+def test_detect_figures_splits_labeled_grid_into_separate_regions():
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 220, 50, 225, 58),
+        _run("c", 60, 200, 65, 208),
+        _run("d", 220, 200, 225, 208),
+        _run("Figure 1: Four panels", 40, 310, 290, 322),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 400, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (
+        BBox(60, 65, 150, 150),
+        BBox(220, 65, 310, 150),
+        BBox(60, 215, 150, 290),
+        BBox(220, 215, 310, 290),
+    )
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    result = {f.label: (f.figure_id, f.bbox, f.caption_bbox) for f in figs}
+    assert set(result) == {"Figure 1a", "Figure 1b", "Figure 1c", "Figure 1d"}
+    fid, bbox, caption_bbox = result["Figure 1a"]
+    assert fid == "p0_Figure_1a"
+    assert bbox == BBox(60, 65, 150, 150)
+    # All panels share the figure's one real caption.
+    assert caption_bbox == BBox(40, 310, 290, 322)
+    assert result["Figure 1c"][1] == BBox(60, 215, 150, 290)
+
+
+def test_detect_figures_without_panel_labels_stays_a_single_region():
+    runs = (
+        _run("Body text well above.", 40, 50, 290, 62),
+        _run("Figure 1: A single chart", 40, 200, 290, 212),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (BBox(60, 100, 200, 180),)
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].label == "Figure 1"

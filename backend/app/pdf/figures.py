@@ -13,6 +13,13 @@ only that some whitespace sits there. When available, `graphics` (the page's
 real image/vector-object bounding boxes, from `PdfBackend.get_page_graphics`)
 tightens the box to what's actually drawn instead of the whole column width.
 
+A multi-panel figure ("Figure 3a-g") is further split into one region per
+sub-panel when its panels carry corner letter labels — see
+`_detect_sub_panels`. Each panel becomes its own `FigureRegion` (label
+"Figure 3a", "Figure 3b", ...) so the reader can click one panel instead of
+the whole grid; figures without isolated letter markers are unaffected and
+stay a single region.
+
 This module is the only thing in the backend that takes a page-rendering
 "Figure" position — everything downstream addresses it by `figure_id`.
 """
@@ -426,6 +433,223 @@ def _tighten_to_graphics(bbox: BBox, graphics: tuple[BBox, ...]) -> BBox:
     return BBox(x0=x0, y0=y0, x1=x1, y1=y1)
 
 
+# --- sub-panel detection -----------------------------------------------
+#
+# Many figures — especially multi-panel results grids and the flowchart
+# diagrams common in agent papers — are drawn as a set of independently
+# meaningful sub-figures ("a", "b", "c"...) under one caption. Detecting
+# each panel individually is what makes double-click-to-explain answer the
+# panel the reader is actually looking at, instead of summarizing the whole
+# grid. Only bare letter markers ("a", "(a)") are recognized for now, not a
+# letter embedded in a longer sub-caption run ("(a) BERT-base gender.") —
+# that needs a different extraction (pulling the marker out of a sentence)
+# and is a follow-up, not a blocker: figures without isolated markers simply
+# don't split, falling back to the existing single-box behavior.
+
+_PANEL_LABEL_PATTERN = re.compile(r"^(?:\(([a-z])\)|([a-z])\.?)$")
+
+# Panel labels within this many points of each other vertically belong to
+# the same visual row (e.g. "b", "c", "d" side by side).
+PANEL_ROW_TOLERANCE_PT = 30.0
+
+# A label marks its panel's top-left corner, not the panel's full extent.
+# The gap-search for a row/column boundary must start this far past the
+# label's own edge — right at the edge, graphics-coverage always dips
+# because the label itself is text, not graphics, which would otherwise
+# make the search lock onto that spurious dip instead of the real gap
+# further out where the panel's content actually ends.
+PANEL_LABEL_SKIP_PT = 25.0
+
+# A label can sit just outside the parent figure's tightened bbox (which
+# wraps only graphics, not the label text itself) -- pad the search region
+# by this much so labels aren't missed purely due to where the tightened
+# box happened to land.
+PANEL_LABEL_SEARCH_PAD_PT = 20.0
+
+# Real panels in one figure vary in size, but not wildly -- a panel whose
+# area is a tiny sliver of the largest one is a strong signal that a
+# row/column boundary landed on a spurious internal gap (e.g. the small
+# space between two paragraphs stacked inside ONE tall panel) rather than a
+# real seam between two panels. Rejecting the whole split and falling back
+# to the single parent box is safer than shipping a panel box that's
+# confidently wrong.
+MIN_PANEL_AREA_RATIO = 0.05
+
+
+def _find_panel_labels(
+    runs: tuple[TextRun, ...], region: BBox
+) -> dict[str, TextRun]:
+    """Bare single-letter markers ("a", "(a)") within `region` — the corner
+    tag papers draw on each sub-panel. At most one run per letter (first
+    occurrence): a genuine panel grid never repeats a letter."""
+    found: dict[str, TextRun] = {}
+    for r in runs:
+        m = _PANEL_LABEL_PATTERN.match(r.text.strip())
+        if not m:
+            continue
+        if not (
+            region.x0 <= r.bbox.x0 <= region.x1
+            and region.y0 <= r.bbox.y0 <= region.y1
+        ):
+            continue
+        letter = m.group(1) or m.group(2)
+        if letter not in found:
+            found[letter] = r
+    return found
+
+
+def _group_labels_into_rows(
+    labels: dict[str, TextRun],
+) -> list[list[tuple[str, TextRun]]]:
+    """Panel labels grouped into visual rows by y-proximity, each row
+    sorted left-to-right."""
+    items = sorted(labels.items(), key=lambda kv: kv[1].bbox.y0)
+    rows: list[list[tuple[str, TextRun]]] = [[items[0]]]
+    for k, run in items[1:]:
+        if run.bbox.y0 - rows[-1][-1][1].bbox.y0 < PANEL_ROW_TOLERANCE_PT:
+            rows[-1].append((k, run))
+        else:
+            rows.append([(k, run)])
+    for row in rows:
+        row.sort(key=lambda kv: kv[1].bbox.x0)
+    return rows
+
+
+def _valley(lo: float, hi: float, count_at, step: float = 2.0) -> float:
+    """The point in [lo, hi] with the fewest graphics crossing it — the
+    real gap between two panels/rows, found by scanning rather than
+    guessed from label positions (panel sizes vary too much for a fixed
+    formula, e.g. a midpoint between labels, to land reliably in the gap).
+
+    Returns the midpoint of the WIDEST contiguous run of minimal-count
+    points, not just the first one found: a single isolated sample can dip
+    to the same low count right at `lo` (an edge artifact) while the real,
+    wide gap sits further along the range — the midpoint of the widest run
+    is far more likely to be the true gap than an edge sample that happens
+    to tie it."""
+    if hi <= lo:
+        return lo
+    samples: list[tuple[float, int]] = []
+    v = lo
+    while v <= hi:
+        samples.append((v, count_at(v)))
+        v += step
+    best_count = min(c for _, c in samples)
+
+    best_run: tuple[int, int] | None = None
+    run_start: int | None = None
+    for i, (_, c) in enumerate(samples):
+        if c == best_count:
+            if run_start is None:
+                run_start = i
+        elif run_start is not None:
+            if best_run is None or (i - 1 - run_start) > (best_run[1] - best_run[0]):
+                best_run = (run_start, i - 1)
+            run_start = None
+    if run_start is not None:
+        last = len(samples) - 1
+        if best_run is None or (last - run_start) > (best_run[1] - best_run[0]):
+            best_run = (run_start, last)
+
+    assert best_run is not None
+    mid = (best_run[0] + best_run[1]) // 2
+    return samples[mid][0]
+
+
+def _detect_sub_panels(
+    figure_bbox: BBox,
+    graphics: tuple[BBox, ...],
+    runs: tuple[TextRun, ...],
+) -> dict[str, BBox]:
+    """Partition a figure's region into per-panel boxes using its panel
+    labels as anchors. Returns {} if the figure doesn't have at least two
+    labels including "a" (a real multi-panel grid always starts there;
+    requiring it guards against a couple of unrelated single letters --
+    stray axis ticks, variable names in an equation -- being mistaken for
+    panel markers) or if fewer than two panels end up with any graphics.
+    """
+    # figure_bbox is tightened to the union of its own graphics (see
+    # _tighten_to_graphics / _figure_bbox_from_clusters) -- a label sitting
+    # at a panel's top-left corner routinely falls just outside that tight
+    # box (the label is text, not graphics, so it doesn't contribute to the
+    # union it's found relative to). Search a padded region so labels aren't
+    # missed purely because of where the box-fitting happened to land.
+    search_region = BBox(
+        x0=figure_bbox.x0 - PANEL_LABEL_SEARCH_PAD_PT,
+        y0=figure_bbox.y0 - PANEL_LABEL_SEARCH_PAD_PT,
+        x1=figure_bbox.x1 + PANEL_LABEL_SEARCH_PAD_PT,
+        y1=figure_bbox.y1 + PANEL_LABEL_SEARCH_PAD_PT,
+    )
+    labels = _find_panel_labels(runs, search_region)
+    if "a" not in labels or len(labels) < 2:
+        return {}
+
+    relevant = tuple(
+        g
+        for g in graphics
+        if g.x0 < figure_bbox.x1
+        and g.x1 > figure_bbox.x0
+        and g.y0 < figure_bbox.y1
+        and g.y1 > figure_bbox.y0
+    )
+    if not relevant:
+        return {}
+
+    rows = _group_labels_into_rows(labels)
+    row_label_y1 = [max(run.bbox.y1 for _, run in row) for row in rows]
+    row_bounds = [figure_bbox.y0]
+    for i in range(len(rows) - 1):
+        lo = row_label_y1[i] + PANEL_LABEL_SKIP_PT
+        hi = rows[i + 1][0][1].bbox.y0
+        row_bounds.append(
+            _valley(lo, hi, lambda y: sum(1 for g in relevant if g.y0 < y < g.y1))
+        )
+    row_bounds.append(figure_bbox.y1)
+
+    panels: dict[str, BBox] = {}
+    for ri, row in enumerate(rows):
+        y0, y1 = row_bounds[ri], row_bounds[ri + 1]
+        col_bounds = [figure_bbox.x0]
+        for i in range(len(row) - 1):
+            lo = row[i][1].bbox.x1 + PANEL_LABEL_SKIP_PT
+            hi = row[i + 1][1].bbox.x0
+            col_bounds.append(
+                _valley(
+                    lo,
+                    hi,
+                    lambda x: sum(
+                        1
+                        for g in relevant
+                        if g.x0 < x < g.x1 and g.y1 > y0 and g.y0 < y1
+                    ),
+                )
+            )
+        col_bounds.append(figure_bbox.x1)
+
+        for ci, (letter, _) in enumerate(row):
+            cx0, cx1 = col_bounds[ci], col_bounds[ci + 1]
+            members = [
+                g
+                for g in relevant
+                if cx0 <= (g.x0 + g.x1) / 2 < cx1 and y0 <= (g.y0 + g.y1) / 2 < y1
+            ]
+            if not members:
+                continue
+            panels[letter] = BBox(
+                x0=min(m.x0 for m in members),
+                y0=min(m.y0 for m in members),
+                x1=max(m.x1 for m in members),
+                y1=max(m.y1 for m in members),
+            )
+
+    if len(panels) < 2:
+        return {}
+    areas = [b.width * b.height for b in panels.values()]
+    if min(areas) < MIN_PANEL_AREA_RATIO * max(areas):
+        return {}
+    return panels
+
+
 def detect_figures(
     page_text: PageText,
     page_width_pt: float,
@@ -478,6 +702,28 @@ def detect_figures(
 
         if fbox.width < MIN_FIGURE_DIMENSION_PT or fbox.height < MIN_FIGURE_DIMENSION_PT:
             continue
+
+        panels = _detect_sub_panels(fbox, graphics, page_text.runs) if graphics else {}
+        if panels:
+            for letter in sorted(panels):
+                panel_bbox = panels[letter]
+                if (
+                    panel_bbox.width < MIN_FIGURE_DIMENSION_PT
+                    or panel_bbox.height < MIN_FIGURE_DIMENSION_PT
+                ):
+                    continue
+                panel_label = f"{label}{letter}"
+                figures.append(
+                    FigureRegion(
+                        figure_id=_figure_id(page_text.page_index, panel_label),
+                        label=panel_label,
+                        page_index=page_text.page_index,
+                        bbox=panel_bbox,
+                        caption_bbox=caption_run.bbox,
+                    )
+                )
+            continue
+
         figures.append(
             FigureRegion(
                 figure_id=_figure_id(page_text.page_index, label),
