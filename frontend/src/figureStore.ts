@@ -14,7 +14,7 @@ export type FigureState =
   | { status: "idle" }
   | { status: "loading"; content: string }
   | { status: "ready"; content: string }
-  | { status: "error"; error: string };
+  | { status: "error"; error: string; code?: string };
 
 type Subscriber = (state: FigureState) => void;
 
@@ -123,8 +123,8 @@ export async function startFigureExplanation(
         /* best-effort cache write */
       });
     },
-    onError: (message) => {
-      setState(entry, { status: "error", error: message });
+    onError: (message, code) => {
+      setState(entry, { status: "error", error: message, code });
       entry.abort = undefined;
     },
   });

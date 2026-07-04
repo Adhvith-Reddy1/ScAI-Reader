@@ -88,10 +88,11 @@ def list_page_figures(
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
             dims = backend.page_dimensions(page_number - 1)
             page = backend.get_page_text(page_number - 1)
+            graphics = backend.get_page_graphics(page_number - 1)
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    regions = detect_figures(page, dims.width_pt, dims.height_pt)
+    regions = detect_figures(page, dims.width_pt, dims.height_pt, graphics)
 
     return {
         "doc_id": doc_id,
