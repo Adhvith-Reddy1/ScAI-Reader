@@ -27,6 +27,24 @@ async function reopenFromLibrary(page: Page): Promise<void> {
   await page.locator(".text-run").first().waitFor({ state: "attached" });
 }
 
+test("clicking the brand returns to the library from an open document", async ({
+  page,
+}) => {
+  await openPdf(page);
+  // In a document: pages rendered, sidebar available.
+  await expect(page.locator(".page-wrap").first()).toBeVisible();
+  await expect(page.locator("#sidebar")).toBeVisible();
+
+  // Click the brand wordmark → back to the library landing view.
+  await page.locator(".brand").click();
+
+  // The just-opened doc shows as a library tile; the outline sidebar is hidden
+  // again (nothing to outline on the landing page).
+  await expect(page.locator(".library-tile").first()).toBeVisible();
+  await expect(page.locator(".text-run")).toHaveCount(0);
+  await expect(page.locator("#sidebar")).toBeHidden();
+});
+
 /** Drag-select across a usefully-wide text run to create a highlight. */
 async function dragSelectFirstWideRun(page: Page): Promise<void> {
   const runs = page.locator(".text-run");
