@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 
 from ..config import Settings
 from ..pdf.backend import PdfError
@@ -30,6 +30,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("")
 async def upload_document(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
 ) -> dict:
     data = await file.read()
@@ -40,18 +41,54 @@ async def upload_document(
 
     doc_id = files.save_pdf(settings, data)
 
+    # The browser re-uploads a document's bytes on every open (Spec 02 — the
+    # server is stateless/ephemeral), so this handler runs far more often for
+    # *known* documents than for genuinely new ones. Content is immutable for
+    # a given SHA-256 id, so if we already fully indexed it (a documents row
+    # plus every page's dimensions), redoing the PDFium walk — dims, per-page
+    # text extraction, column clustering, and an FTS rebuild — for every
+    # single reopen is pure waste, and dominates load time on large/image-
+    # heavy papers. Skip straight to the cached metadata in that case.
+    with db.connect(settings.db_path) as conn:
+        existing = conn.execute(
+            "SELECT filename, page_count, title, author FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        dim_count = (
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM page_dimensions WHERE doc_id = ?",
+                (doc_id,),
+            ).fetchone()["n"]
+            if existing is not None
+            else 0
+        )
+
+    if existing is not None and dim_count == existing["page_count"]:
+        if file.filename and file.filename != existing["filename"]:
+            with db.connect(settings.db_path) as conn:
+                conn.execute(
+                    "UPDATE documents SET filename = ? WHERE id = ?",
+                    (file.filename, doc_id),
+                )
+        return {
+            "id": doc_id,
+            "filename": file.filename or existing["filename"],
+            "page_count": existing["page_count"],
+            "title": existing["title"],
+            "author": existing["author"],
+        }
+
     try:
-        with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
-            meta = backend.metadata()
-            dims = [backend.page_dimensions(i) for i in range(meta.page_count)]
-            # Concatenated per-page text for the FTS index. Done inside the
-            # PDFium context so we open the document once. Slow on large docs;
-            # that's accepted — the search wouldn't work otherwise.
-            page_texts = [
-                _flatten_page_text(backend.get_page_text(i))
-                for i in range(meta.page_count)
-            ]
+        backend = PdfiumBackend.open(files.pdf_path(settings, doc_id))
     except PdfError as e:
+        files.pdf_path(settings, doc_id).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"invalid PDF: {e}") from e
+
+    try:
+        meta = backend.metadata()
+        dims = [backend.page_dimensions(i) for i in range(meta.page_count)]
+    except PdfError as e:
+        backend.close()
         files.pdf_path(settings, doc_id).unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"invalid PDF: {e}") from e
 
@@ -89,14 +126,14 @@ async def upload_document(
             "(doc_id, page_index, width_pt, height_pt) VALUES (?, ?, ?, ?)",
             [(doc_id, i, d.width_pt, d.height_pt) for i, d in enumerate(dims)],
         )
-        # FTS5 doesn't support ON CONFLICT; doc_id is SHA-keyed so content is
-        # identical on re-upload. Delete-then-insert keeps the index in sync
-        # without growing duplicate rows.
-        conn.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
-        conn.executemany(
-            "INSERT INTO pages_fts (doc_id, page_index, text) VALUES (?, ?, ?)",
-            [(doc_id, i + 1, text) for i, text in enumerate(page_texts)],
-        )
+
+    # Per-page text extraction + column clustering (needed only for the FTS
+    # index) is the expensive part of opening a large/image-heavy paper, and
+    # the reader doesn't need search until they hit Cmd-F. Run it after the
+    # response goes out instead of making the client wait on it before it can
+    # start rendering pages. Reuses the already-open backend (closed inside
+    # the task) rather than re-parsing the file a second time.
+    background_tasks.add_task(_index_search_text, settings, doc_id, backend, meta.page_count)
 
     return {
         "id": doc_id,
@@ -104,6 +141,53 @@ async def upload_document(
         "page_count": meta.page_count,
         "title": meta.title,
         "author": meta.author,
+    }
+
+
+def _index_search_text(
+    settings: Settings, doc_id: str, backend: PdfiumBackend, page_count: int
+) -> None:
+    try:
+        page_texts = [
+            _flatten_page_text(backend.get_page_text(i)) for i in range(page_count)
+        ]
+    finally:
+        backend.close()
+    # FTS5 doesn't support ON CONFLICT; doc_id is SHA-keyed so content is
+    # identical on re-upload. Delete-then-insert keeps the index in sync
+    # without growing duplicate rows.
+    with db.connect(settings.db_path) as conn:
+        conn.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
+        conn.executemany(
+            "INSERT INTO pages_fts (doc_id, page_index, text) VALUES (?, ?, ?)",
+            [(doc_id, i + 1, text) for i, text in enumerate(page_texts)],
+        )
+
+
+@router.get("/{doc_id}")
+def get_document(doc_id: str, settings: Settings = Depends(get_settings)) -> dict:
+    """Cheap existence + metadata check, keyed by the SHA-256 the client
+    already has (it's the id it stored the PDF under locally). Lets the
+    client skip re-POSTing potentially tens of MB of PDF bytes — and the
+    server skip re-running PDFium extraction — on a reopen the (stateless,
+    ephemeral) server already has fully indexed from earlier in its
+    lifetime. 404 means the client must fall back to a full upload, e.g.
+    after the server's disk was reset."""
+    if not files.pdf_path(settings, doc_id).exists():
+        raise HTTPException(status_code=404, detail="document not found")
+    with db.connect(settings.db_path) as conn:
+        doc = conn.execute(
+            "SELECT filename, page_count, title, author FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return {
+        "id": doc_id,
+        "filename": doc["filename"],
+        "page_count": doc["page_count"],
+        "title": doc["title"],
+        "author": doc["author"],
     }
 
 

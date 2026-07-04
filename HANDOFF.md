@@ -6,6 +6,84 @@ When starting fresh: read this, skim the plan, then check `TaskList`.
 
 ---
 
+## Doc-open latency: skip redundant re-upload/re-extraction — 2026-07-04
+
+### Why
+
+Reported: opening a document in the reader took ~30s, should be ≤5s.
+Diagnosed against a real 22-page/17.3MB image-heavy paper (`Virtual_Lab.pdf`).
+
+Root cause is architectural, not a slow algorithm: per Spec 02, the browser
+is the source of truth and **re-uploads the full PDF bytes to the server on
+every open**, including reopening a document already viewed earlier in the
+same session — the stateless server has no way to know it already has this
+exact content. `POST /documents` then unconditionally re-ran the full
+PDFium walk (per-page dimensions, per-page text extraction + column
+clustering, FTS rebuild) even when the SHA-256-keyed doc was already fully
+indexed. Locally this cost ~2s of compute plus the full byte transfer; on a
+slower CPU (a real deploy target, e.g. Fly's shared-cpu-1x) or a slow
+upload link, tens of MB re-sent on every open plausibly accounts for the
+30s.
+
+### Fix (backend + frontend, `backend/app/routes/documents.py`,
+`frontend/src/api.ts`, `frontend/src/main.ts`)
+
+1. **Skip the re-upload entirely when the server already knows the doc.**
+   New `GET /documents/{doc_id}` — cheap existence + metadata check keyed by
+   the SHA-256 id the client already has (it's the id the doc is stored
+   under in IndexedDB). `openDocument` in `main.ts` tries this first and
+   only falls back to the full multipart `uploadDocumentBlob` on a 404 (the
+   server's ephemeral disk was reset since the last open).
+2. **Defense in depth if bytes do arrive for a known doc.** `upload_document`
+   now checks `documents` + `page_dimensions` row counts before touching
+   PDFium; if the doc is already fully indexed it returns cached metadata
+   immediately instead of re-parsing and re-clustering every page. Content
+   is immutable for a given SHA-256 id, so this is always safe.
+3. **Defer FTS indexing off the critical path for genuinely new uploads.**
+   Per-page text extraction + column clustering (needed only to build the
+   search index) ran synchronously inside `POST /documents` even though the
+   reader doesn't touch search until Cmd-F. Moved to a `BackgroundTasks` job
+   that reuses the already-open `PdfiumBackend` (closed inside the task)
+   instead of blocking the response.
+
+### Measured (Playwright driving the real single-server app against
+`Virtual_Lab.pdf`, local container — absolute numbers won't match a slower
+deploy target, but the relative wins hold)
+
+| Path | Before | After |
+|---|---|---|
+| First-ever upload (wall time to first rendered page) | ~1.9–2.0s | ~0.9s |
+| Reopen (already indexed this server lifetime) | ~1.9s + full PDF re-upload | ~0.1s, **zero** `POST /documents` |
+
+Confirmed search (`GET /documents/{id}/search`) still returns correct hits
+against the real paper once the deferred index finishes, and the existing
+"PDF cache evicted" e2e regression (`explain-context.spec.ts`) still passes
+— the 404-fallback path is exercised there.
+
+### Tests
+
+Backend: 142 (+3 — `test_reupload_of_known_doc_skips_pdfium_extraction`
+monkeypatches `PdfiumBackend.open` to fail the test if a known re-upload
+ever touches it; `test_get_document_returns_metadata_for_known_doc`;
+`test_get_document_404_for_unknown_doc`). Frontend: 203 (unchanged — no new
+unit-testable surface; `fetchDocumentIfKnown` follows the existing untested
+thin-wrapper convention in `api.ts`). All three e2e suites
+(`playwright.config.ts`, `playwright.app.config.ts`,
+`playwright.storage.config.ts`) green, including the reopen flow in
+`e2e/library.spec.ts` which now exercises the new short-circuit.
+
+### Notes / follow-ups
+
+- The reopen shortcut only helps within one server lifetime — Fly hosting
+  has no volume (see `docs/DEPLOY.md`), so a restart still forces a full
+  re-upload + re-extraction on the next open. That's now roughly 2x faster
+  too (FTS deferral), but still bound by real upload bandwidth for large
+  files — not something the app layer can fix.
+- Didn't touch the per-page render/text/figures fetch chain in
+  `PageView.ts` (image load → then text fetch, serially) — a further,
+  smaller win, but out of scope for this pass since the dominant cost was
+  the upload/extraction path.
+
 ## Browser-storage migration + Fly hosting — 2026-06-30
 
 **Architecture changed: the browser is now the source of truth for personal

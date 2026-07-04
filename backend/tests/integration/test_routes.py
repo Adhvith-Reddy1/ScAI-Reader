@@ -185,3 +185,54 @@ def test_duplicate_upload_is_idempotent(app_client, simple_pdf):
     with simple_pdf.open("rb") as f:
         b = app_client.post("/documents", files={"file": ("b.pdf", f, "application/pdf")})
     assert a.json()["id"] == b.json()["id"]
+
+
+@pytest.mark.integration
+def test_reupload_of_known_doc_skips_pdfium_extraction(app_client, simple_pdf, monkeypatch):
+    """Re-uploading a document the server already fully indexed must not touch
+    PDFium again — that's the point of the short-circuit that makes reopening
+    a large/image-heavy paper fast. Monkeypatch PdfiumBackend.open to blow up
+    so any re-invocation fails the test."""
+    with simple_pdf.open("rb") as f:
+        first = app_client.post(
+            "/documents", files={"file": ("simple.pdf", f, "application/pdf")}
+        )
+    assert first.status_code == 200
+
+    from app.routes import documents as documents_module
+
+    def _boom(cls, path):
+        raise AssertionError("PdfiumBackend.open should not run on a known re-upload")
+
+    monkeypatch.setattr(documents_module.PdfiumBackend, "open", classmethod(_boom))
+
+    with simple_pdf.open("rb") as f:
+        second = app_client.post(
+            "/documents", files={"file": ("renamed.pdf", f, "application/pdf")}
+        )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["id"] == first.json()["id"]
+    assert body["page_count"] == first.json()["page_count"]
+    assert body["filename"] == "renamed.pdf"
+
+
+@pytest.mark.integration
+def test_get_document_returns_metadata_for_known_doc(app_client, simple_pdf):
+    with simple_pdf.open("rb") as f:
+        upload = app_client.post(
+            "/documents", files={"file": ("simple.pdf", f, "application/pdf")}
+        ).json()
+
+    r = app_client.get(f"/documents/{upload['id']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == upload["id"]
+    assert body["page_count"] == upload["page_count"]
+    assert body["title"] == upload["title"]
+
+
+@pytest.mark.integration
+def test_get_document_404_for_unknown_doc(app_client):
+    r = app_client.get("/documents/deadbeef")
+    assert r.status_code == 404

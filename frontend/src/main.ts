@@ -1,5 +1,6 @@
 import {
   fetchDocumentDimensions,
+  fetchDocumentIfKnown,
   uploadDocument,
   uploadDocumentBlob,
   type DocumentDimensions,
@@ -337,7 +338,11 @@ async function openDocument(item: LibraryItem): Promise<void> {
 
   let meta: DocumentMeta;
   try {
-    meta = await uploadDocumentBlob(doc.blob, doc.filename);
+    // The server already indexed this doc if it survived from an earlier
+    // open in the same server lifetime — skip re-sending the full PDF bytes
+    // (can be tens of MB) and go straight to rendering. Falls back to a full
+    // upload on a cache miss (e.g. the server's disk was reset).
+    meta = (await fetchDocumentIfKnown(item.id)) ?? (await uploadDocumentBlob(doc.blob, doc.filename));
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
     return;
