@@ -181,12 +181,24 @@ class PdfiumBackend(PdfBackend):
         with _PDFIUM_LOCK:
             page = self._get_page(page_index)
             try:
-                _, page_height = page.get_size()
+                page_width, page_height = page.get_size()
                 boxes: list[BBox] = []
                 for obj in page.get_objects(filter=list(_GRAPHICS_TYPES)):
                     left, bottom, right, top = obj.get_bounds()
                     if right <= left or top <= bottom:
                         continue  # degenerate (e.g. a zero-area clip artifact)
+                    # PDFium can report an object's pre-clip bounds even when
+                    # a clip path (or print bleed) hides most of it off-page
+                    # — seen as a hairline rule whose reported box ran to
+                    # ~2x the page width. Clamp to page bounds so downstream
+                    # bbox math never has to reason about content "outside"
+                    # the page it's rendering into.
+                    left = max(0.0, min(left, page_width))
+                    right = max(0.0, min(right, page_width))
+                    bottom = max(0.0, min(bottom, page_height))
+                    top = max(0.0, min(top, page_height))
+                    if right <= left or top <= bottom:
+                        continue  # degenerate after clamping — fully off-page
                     boxes.append(
                         BBox(
                             x0=float(left),
