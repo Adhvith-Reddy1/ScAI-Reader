@@ -71,6 +71,11 @@ const sidebarToggleSlot = document.getElementById(
   "sidebar-toggle-slot",
 ) as HTMLElement;
 sidebarToggleSlot.appendChild(buildSidebarToggle());
+
+// The brand wordmark doubles as a "home" button: click it to return to the
+// document library from anywhere.
+const brandHome = document.getElementById("brand-home");
+brandHome?.addEventListener("click", () => void showLibrary());
 buttonSlot.appendChild(buildHighlightButton());
 explainSlot.appendChild(buildExplainButton());
 eraseSlot.appendChild(buildEraseButton());
@@ -353,6 +358,9 @@ async function openDocument(item: LibraryItem): Promise<void> {
 }
 
 async function showLibrary(): Promise<void> {
+  // Persist the leaving document's position now (the periodic write is
+  // debounced and might not have fired), so reopening lands where it left off.
+  flushViewState();
   // The landing/library view has no document, so the outline sidebar has
   // nothing to show — keep it hidden here (and don't disturb the user's
   // open/closed preference, which is restored when a document opens).
@@ -394,6 +402,22 @@ function scheduleViewStatePersist(): void {
       sidebarOpen: isSidebarVisible(),
     });
   }, 400);
+}
+
+/** Write the current document's view state immediately (cancels any pending
+ * debounced write). Called when navigating away so nothing is lost. */
+function flushViewState(): void {
+  if (viewStateTimer != null) {
+    clearTimeout(viewStateTimer);
+    viewStateTimer = null;
+  }
+  if (!currentDocId) return;
+  void putViewState({
+    docId: currentDocId,
+    lastPage: lastKnownPage,
+    zoom: getZoom(),
+    sidebarOpen: isSidebarVisible(),
+  });
 }
 
 subscribeZoom(() => scheduleViewStatePersist());

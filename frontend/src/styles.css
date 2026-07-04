@@ -43,7 +43,21 @@ body {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.brand { font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
+.brand {
+  /* Reset the <button> chrome so the wordmark still reads as plain text. */
+  appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.brand:hover { text-decoration: underline; }
 
 .upload span {
   display: inline-block;
