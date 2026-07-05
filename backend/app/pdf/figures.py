@@ -348,6 +348,32 @@ def _caption_ceiling(
     return ceiling
 
 
+def _other_caption_in_window(
+    caption: TextRun, all_captions: list[tuple[TextRun, str]], ceiling: float
+) -> bool:
+    """Whether some OTHER caption's own line physically sits between
+    `ceiling` and this caption's top, regardless of column.
+
+    A caption's own detected run only reflects one LINE of it — routinely
+    just the "Fig. N |" opener, which for a figure whose caption paragraph
+    wraps across both columns below a full-width figure is only as wide as
+    the left column. Sub-panel search widens to the full page width in that
+    case (see `detect_figures`), which is only safe when nothing else is
+    sharing that vertical band — this is what tells the two apart from a
+    page that genuinely has a second, differently-labelled figure/table
+    beside this one (a real caption run sitting inside the band is
+    unambiguous proof of that; the panel-label letters extracted from a
+    figure's own diagrams are not similarly reliable early enough to use
+    here)."""
+    caption_top = caption.bbox.y0
+    for other_run, _ in all_captions:
+        if other_run is caption:
+            continue
+        if ceiling <= other_run.bbox.y0 <= caption_top:
+            return True
+    return False
+
+
 def _figure_bbox_from_clusters(
     caption: TextRun, graphics: tuple[BBox, ...], ceiling: float
 ) -> BBox | None:
@@ -521,12 +547,16 @@ def _valley(lo: float, hi: float, count_at, step: float = 2.0) -> float:
     guessed from label positions (panel sizes vary too much for a fixed
     formula, e.g. a midpoint between labels, to land reliably in the gap).
 
-    Returns the midpoint of the WIDEST contiguous run of minimal-count
-    points, not just the first one found: a single isolated sample can dip
-    to the same low count right at `lo` (an edge artifact) while the real,
-    wide gap sits further along the range — the midpoint of the widest run
-    is far more likely to be the true gap than an edge sample that happens
-    to tie it."""
+    Among points tied for the minimum count, returns the one CLOSEST TO
+    `hi`, not the widest run of them: the space just before `hi` (the next
+    row/column's own label) is sparse by definition — that panel's content
+    hasn't started yet — while the space just after `lo` (past the
+    previous label) is not similarly guaranteed, since a panel with several
+    stacked sub-elements (e.g. a column of repeated small icons) has its
+    OWN internal gaps in between them, which can be as wide as or wider
+    than the true seam and would otherwise win a widest-run comparison,
+    landing the boundary inside that panel's own content instead of past
+    the end of it."""
     if hi <= lo:
         return lo
     samples: list[tuple[float, int]] = []
@@ -535,25 +565,28 @@ def _valley(lo: float, hi: float, count_at, step: float = 2.0) -> float:
         samples.append((v, count_at(v)))
         v += step
     best_count = min(c for _, c in samples)
-
-    best_run: tuple[int, int] | None = None
-    run_start: int | None = None
-    for i, (_, c) in enumerate(samples):
+    for v, c in reversed(samples):
         if c == best_count:
-            if run_start is None:
-                run_start = i
-        elif run_start is not None:
-            if best_run is None or (i - 1 - run_start) > (best_run[1] - best_run[0]):
-                best_run = (run_start, i - 1)
-            run_start = None
-    if run_start is not None:
-        last = len(samples) - 1
-        if best_run is None or (last - run_start) > (best_run[1] - best_run[0]):
-            best_run = (run_start, last)
+            return v
+    raise AssertionError("unreachable: best_count is the min of samples' counts")
 
-    assert best_run is not None
-    mid = (best_run[0] + best_run[1]) // 2
-    return samples[mid][0]
+
+def _contiguous_from_a(labels: dict[str, TextRun]) -> dict[str, TextRun]:
+    """Keep only the unbroken run of letters starting at "a" -- real panel
+    decks are always labelled a, b, c, ... with no skipped letter. A denser
+    page (a pathway diagram's node names, a chromosome-arm locus like "1q", a
+    stray statistical variable like "p" or "r" sitting near the figure) can
+    produce OTHER isolated single-letter runs that individually look just
+    like a panel marker; without this, they get treated as panels far out
+    in the alphabet ("Figure 4p", "Figure 4q") that no real figure has.
+    Requiring the run to be unbroken from "a" is what actually distinguishes
+    a genuine grid from that noise, more than matching "a" alone does."""
+    kept: dict[str, TextRun] = {}
+    letter = "a"
+    while letter in labels:
+        kept[letter] = labels[letter]
+        letter = chr(ord(letter) + 1)
+    return kept
 
 
 def _detect_sub_panels(
@@ -563,10 +596,8 @@ def _detect_sub_panels(
 ) -> dict[str, BBox]:
     """Partition a figure's region into per-panel boxes using its panel
     labels as anchors. Returns {} if the figure doesn't have at least two
-    labels including "a" (a real multi-panel grid always starts there;
-    requiring it guards against a couple of unrelated single letters --
-    stray axis ticks, variable names in an equation -- being mistaken for
-    panel markers) or if fewer than two panels end up with any graphics.
+    labels in an unbroken run starting at "a" (see `_contiguous_from_a`) or
+    if fewer than two panels end up with any graphics.
     """
     # figure_bbox is tightened to the union of its own graphics (see
     # _tighten_to_graphics / _figure_bbox_from_clusters) -- a label sitting
@@ -580,8 +611,8 @@ def _detect_sub_panels(
         x1=figure_bbox.x1 + PANEL_LABEL_SEARCH_PAD_PT,
         y1=figure_bbox.y1 + PANEL_LABEL_SEARCH_PAD_PT,
     )
-    labels = _find_panel_labels(runs, search_region)
-    if "a" not in labels or len(labels) < 2:
+    labels = _contiguous_from_a(_find_panel_labels(runs, search_region))
+    if len(labels) < 2:
         return {}
 
     relevant = tuple(
@@ -647,7 +678,37 @@ def _detect_sub_panels(
     areas = [b.width * b.height for b in panels.values()]
     if min(areas) < MIN_PANEL_AREA_RATIO * max(areas):
         return {}
+    if _any_panels_overlap_too_much(list(panels.values())):
+        return {}
     return panels
+
+
+# A correct partition tiles the figure — sibling panels shouldn't cover each
+# other. A dense, many-row figure (a results table with a thumbnail + text
+# per row, labelled deep into the alphabet) can pack rows close enough that
+# valley-finding can't cleanly separate them, producing panels that mostly
+# overlap instead of tiling — confidently wrong in a way the area-ratio
+# guard alone doesn't catch (a bad split like this can still have
+# similarly-sized panels). Some overlap is normal even in a good split (a
+# label sitting just outside the tightened box, content that legitimately
+# brushes a neighbour) so the bar is "mostly covers a sibling", not "touches
+# one at all".
+MAX_PANEL_OVERLAP_FRACTION = 0.4
+
+
+def _any_panels_overlap_too_much(boxes: list[BBox]) -> bool:
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            a, b = boxes[i], boxes[j]
+            ix0, iy0 = max(a.x0, b.x0), max(a.y0, b.y0)
+            ix1, iy1 = min(a.x1, b.x1), min(a.y1, b.y1)
+            if ix1 <= ix0 or iy1 <= iy0:
+                continue
+            overlap = (ix1 - ix0) * (iy1 - iy0)
+            smaller = min(a.width * a.height, b.width * b.height)
+            if smaller > 0 and overlap / smaller > MAX_PANEL_OVERLAP_FRACTION:
+                return True
+    return False
 
 
 def detect_figures(
@@ -684,6 +745,7 @@ def detect_figures(
         seen_labels.add(label)
 
         fbox = None
+        ceiling = 0.0
         if graphics:
             ceiling = _caption_ceiling(caption_run, captions)
             fbox = _figure_bbox_from_clusters(caption_run, graphics, ceiling)
@@ -704,6 +766,28 @@ def detect_figures(
             continue
 
         panels = _detect_sub_panels(fbox, graphics, page_text.runs) if graphics else {}
+        if graphics and not _other_caption_in_window(caption_run, captions, ceiling):
+            # The caption's OWN detected run reflects only its first line
+            # (typically "Fig. N |"), which for a figure whose caption
+            # paragraph wraps across both columns beneath a full-width
+            # figure is column-narrow even though the figure itself spans
+            # the page -- `fbox` above inherits that narrowness, so some of
+            # a real multi-panel grid's outer panels can fall outside the
+            # label/graphics search entirely (an incomplete but non-empty
+            # split from the narrow box would otherwise stop us here before
+            # we ever look wider). Always also try the full page width,
+            # guarded by the check above so it can't merge in a genuinely
+            # different figure/table sharing the same vertical band, and
+            # keep whichever attempt actually found more panels.
+            wide_bbox = BBox(
+                x0=0.0,
+                y0=ceiling,
+                x1=page_width_pt,
+                y1=caption_run.bbox.y0,
+            )
+            wide_panels = _detect_sub_panels(wide_bbox, graphics, page_text.runs)
+            if len(wide_panels) > len(panels):
+                panels = wide_panels
         if panels:
             for letter in sorted(panels):
                 panel_bbox = panels[letter]
