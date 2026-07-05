@@ -654,6 +654,31 @@ def test_detect_sub_panels_rejects_degenerate_size_disparity():
     assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
 
 
+def test_detect_sub_panels_accepts_one_legitimately_large_outlier_panel():
+    # A real figure with many panels routinely mixes panel types of very
+    # different visual weight (e.g. one big heatmap next to several small
+    # summary charts). Comparing only against the single largest panel
+    # would reject this correct split just because of that one outlier;
+    # comparing against the median (see MIN_PANEL_AREA_RATIO) does not.
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 60, 160, 65, 168),
+        _run("c", 60, 260, 65, 268),
+        _run("d", 60, 360, 65, 368),
+        _run("e", 60, 460, 65, 468),
+    )
+    graphics = (
+        BBox(60, 70, 860, 170),  # a: big outlier, 800x100 = 80,000
+        BBox(60, 175, 110, 225),  # b-e: 50x50 = 2,500 each -- 3.1% of "a"
+        BBox(60, 275, 110, 325),  # (would fail a min/max-of-largest check)
+        BBox(60, 375, 110, 425),
+        BBox(60, 475, 110, 525),
+    )
+    figure_bbox = BBox(60, 65, 860, 530)
+    panels = _detect_sub_panels(figure_bbox, graphics, runs)
+    assert set(panels) == {"a", "b", "c", "d", "e"}
+
+
 def test_detect_figures_splits_labeled_grid_into_separate_regions():
     runs = (
         _run("a", 60, 50, 65, 58),

@@ -27,6 +27,7 @@ This module is the only thing in the backend that takes a page-rendering
 from __future__ import annotations
 
 import re
+import statistics
 from dataclasses import dataclass
 
 from .types import BBox, PageText, TextColumn, TextRun
@@ -502,13 +503,18 @@ PANEL_LABEL_SKIP_PT = 25.0
 # box happened to land.
 PANEL_LABEL_SEARCH_PAD_PT = 20.0
 
-# Real panels in one figure vary in size, but not wildly -- a panel whose
-# area is a tiny sliver of the largest one is a strong signal that a
-# row/column boundary landed on a spurious internal gap (e.g. the small
-# space between two paragraphs stacked inside ONE tall panel) rather than a
-# real seam between two panels. Rejecting the whole split and falling back
-# to the single parent box is safer than shipping a panel box that's
-# confidently wrong.
+# A panel whose area is a tiny sliver of the TYPICAL panel in the same
+# figure is a strong signal that a row/column boundary landed on a spurious
+# internal gap (e.g. the small space between two paragraphs stacked inside
+# ONE tall panel) rather than a real seam between two panels. Measured
+# against the MEDIAN panel area, not the largest one: a real figure with
+# many panels routinely mixes panel types of legitimately different visual
+# weight (a big heatmap spanning many genes next to a small two-bar summary
+# chart), and comparing only against the single largest panel would let one
+# such outlier reject an otherwise-correct split. The median is far less
+# sensitive to one or two panels being unusually big or small. Rejecting
+# the whole split and falling back to the single parent box is safer than
+# shipping a panel box that's confidently wrong.
 MIN_PANEL_AREA_RATIO = 0.05
 
 
@@ -686,7 +692,7 @@ def _detect_sub_panels(
     if len(panels) < 2:
         return {}
     areas = [b.width * b.height for b in panels.values()]
-    if min(areas) < MIN_PANEL_AREA_RATIO * max(areas):
+    if min(areas) < MIN_PANEL_AREA_RATIO * statistics.median(areas):
         return {}
     if _any_panels_overlap_too_much(list(panels.values())):
         return {}
