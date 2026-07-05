@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from app.pdf.figures import (
     CAPTION_PATTERN,
+    _any_panels_overlap_too_much,
     _caption_ceiling,
     _cluster_graphics,
+    _contiguous_from_a,
     _detect_sub_panels,
     _find_caption_runs,
     _find_panel_labels,
     _group_labels_into_rows,
     _is_figure_internal_text,
+    _other_caption_in_window,
     _PANEL_LABEL_PATTERN,
     _tighten_to_graphics,
     _valley,
@@ -688,3 +691,110 @@ def test_detect_figures_without_panel_labels_stays_a_single_region():
     figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
     assert len(figs) == 1
     assert figs[0].label == "Figure 1"
+
+
+# --- letter-contiguity, wide-search retry, and overlap guards -------------
+
+
+def test_contiguous_from_a_keeps_only_the_unbroken_run():
+    # A dense diagram (chemistry/genetics variable names, chromosome-arm
+    # loci) can produce OTHER isolated single-letter runs far into the
+    # alphabet that individually look just like a panel marker; only an
+    # unbroken run starting at "a" is trustworthy.
+    labels = {
+        "a": _run("a", 0, 0, 5, 8),
+        "b": _run("b", 10, 0, 15, 8),
+        "c": _run("c", 20, 0, 25, 8),
+        "p": _run("p", 100, 0, 105, 8),
+        "q": _run("q", 110, 0, 115, 8),
+    }
+    assert set(_contiguous_from_a(labels)) == {"a", "b", "c"}
+
+
+def test_contiguous_from_a_returns_empty_without_a():
+    labels = {"b": _run("b", 0, 0, 5, 8), "c": _run("c", 10, 0, 15, 8)}
+    assert _contiguous_from_a(labels) == {}
+
+
+def test_other_caption_in_window_detects_a_shared_caption():
+    this_caption = _run("Figure 1", 40, 300, 100, 310)
+    other_caption = _run("Table 1", 300, 150, 360, 160)
+    all_captions = [(this_caption, "Figure 1"), (other_caption, "Table 1")]
+    assert _other_caption_in_window(this_caption, all_captions, 0.0) is True
+
+
+def test_other_caption_in_window_false_when_nothing_shares_the_band():
+    this_caption = _run("Figure 1", 40, 300, 100, 310)
+    all_captions = [(this_caption, "Figure 1")]
+    assert _other_caption_in_window(this_caption, all_captions, 0.0) is False
+
+
+def test_any_panels_overlap_too_much_true_for_heavy_overlap():
+    boxes = [BBox(0, 0, 100, 100), BBox(30, 30, 130, 130)]  # 49% of the smaller
+    assert _any_panels_overlap_too_much(boxes) is True
+
+
+def test_any_panels_overlap_too_much_false_for_tiled_boxes():
+    boxes = [BBox(0, 0, 100, 100), BBox(100, 0, 200, 100)]  # share an edge only
+    assert _any_panels_overlap_too_much(boxes) is False
+
+
+def test_valley_prefers_the_gap_closest_to_hi_over_a_wider_internal_gap():
+    # A panel with several stacked sub-elements (e.g. repeated icons) has
+    # its own small internal gaps -- those must not win over the real seam
+    # right before the next panel/row starts, even when the internal gap
+    # happens to be part of a tie for the minimum crossing-count.
+    boxes = (
+        BBox(0, 0, 10, 20),  # first sub-element
+        BBox(0, 25, 10, 45),  # second sub-element (internal gap: 20-25)
+        BBox(0, 90, 10, 100),  # next panel's content starts here
+    )
+    v = _valley(20.0, 90.0, lambda y: sum(1 for b in boxes if b.y0 < y < b.y1))
+    assert v > 45.0  # past the internal gap, not inside it
+
+
+def test_detect_sub_panels_rejects_heavily_overlapping_split():
+    # "a"'s assigned content spans well into "b"'s territory -- a correct
+    # partition tiles the figure, so heavy overlap between siblings is a
+    # strong signal the row/column boundaries landed wrong, even though
+    # each panel individually has plenty of content (area-ratio guard alone
+    # wouldn't catch this).
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 220, 50, 225, 58),
+    )
+    graphics = (
+        BBox(60, 65, 260, 150),  # assigned to "a" but bleeds into "b"'s area
+        BBox(220, 65, 310, 150),
+    )
+    figure_bbox = BBox(60, 65, 310, 150)
+    assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
+
+
+def test_detect_figures_widens_search_when_caption_line_is_narrower_than_figure():
+    # A caption's own detected run is only its first line ("Fig. N |"),
+    # which for a figure whose caption paragraph wraps across both columns
+    # below a full-width figure is column-narrow even though the figure
+    # itself spans the page. The narrow column here only reaches label "a"
+    # and "c"; "b" and "d" sit far to the right, well outside it.
+    runs = (
+        _run("a", 60, 50, 65, 58),
+        _run("b", 460, 50, 465, 58),
+        _run("c", 60, 200, 65, 208),
+        _run("d", 460, 200, 465, 208),
+        _run("Figure 1: Four panels", 40, 310, 140, 322),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 300, PAGE_H), runs=(runs[-1],))
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (
+        BBox(60, 65, 150, 150),
+        BBox(460, 65, 550, 150),
+        BBox(60, 215, 150, 290),
+        BBox(460, 215, 550, 290),
+    )
+
+    figs = detect_figures(page, 600.0, PAGE_H, graphics)
+    result = {f.label: f.bbox for f in figs}
+    assert set(result) == {"Figure 1a", "Figure 1b", "Figure 1c", "Figure 1d"}
+    assert result["Figure 1b"] == BBox(460, 65, 550, 150)
+    assert result["Figure 1d"] == BBox(460, 215, 550, 290)
