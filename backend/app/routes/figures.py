@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from .. import ai, llm
 from ..config import Settings
 from ..pdf.backend import PdfError
-from ..pdf.figures import FigureRegion, detect_figures
+from ..pdf.figures import AdjacentPage, FigureRegion, detect_figures
 from ..pdf.pdfium_backend import PdfiumBackend, sniff_image_mime
 from ..storage import files
 from .deps import get_settings
@@ -91,10 +91,24 @@ def list_page_figures(
             dims = backend.page_dimensions(page_number - 1)
             page = backend.get_page_text(page_number - 1)
             graphics = backend.get_page_graphics(page_number - 1)
+
+            prev_page = None
+            if page_number - 2 >= 0:
+                prev_index = page_number - 2
+                prev_page = AdjacentPage(
+                    text=backend.get_page_text(prev_index),
+                    graphics=backend.get_page_graphics(prev_index),
+                )
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    regions = detect_figures(page, dims.width_pt, dims.height_pt, graphics)
+    # The previous page lets a figure whose caption and image were placed
+    # on different pages resolve correctly -- a layout Nature-family
+    # journals use for full-page data figures (see
+    # app.pdf.figures.AdjacentPage).
+    regions = detect_figures(
+        page, dims.width_pt, dims.height_pt, graphics, prev_page=prev_page
+    )
 
     return {
         "doc_id": doc_id,

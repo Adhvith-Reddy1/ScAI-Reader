@@ -59,6 +59,16 @@ CAPTION_PATTERN = re.compile(
 # layouts without merging adjacent prose paragraphs into the figure.
 MIN_FIGURE_GAP_PT = 18.0
 
+# A Figure/Extended Data Figure caption with zero graphics anywhere on its
+# page has nothing to confirm the gap-derived box with — an ordinary single
+# blank line before ANY bold heading clears MIN_FIGURE_GAP_PT, caption or
+# not. A genuine borderless figure has real substantive content above it
+# (comfortably taller than one line); requiring that height is what tells
+# it apart from the common false positive: a caption whose own image lives
+# elsewhere (a mid-sentence match with no image at all, or a real caption
+# whose image is on another page — see `_orphan_caption`).
+MIN_UNCONFIRMED_FIGURE_GAP_PT = 60.0
+
 # How far below a graphics object's bottom edge a text run can sit and still
 # count as part of the figure itself — a panel tag ("(a)", "(b)"), axis
 # label, or legend entry — rather than the body prose that marks where the
@@ -711,11 +721,167 @@ def _any_panels_overlap_too_much(boxes: list[BBox]) -> bool:
     return False
 
 
+def _is_visual_label(label: str) -> bool:
+    """Whether `label` denotes something that must have actual drawn
+    content (an image/chart/diagram) — as opposed to a Table, which can be
+    pure text with zero graphics on the page (a borderless table)."""
+    return label.startswith("Figure") or label.startswith("Extended Data Figure")
+
+
+# --- figures whose caption and image sit on different pages ---------------
+#
+# Nature-family journals routinely give a data-dense figure its own
+# dedicated page: the running text discusses it and the full caption is
+# printed right there, but the actual image is pushed onto a separate page
+# (often the very next one) purely for layout/space reasons. Detected
+# per-page, this defeats both halves of the normal pipeline: the caption's
+# own page has no graphics to cluster or tighten to (so the whitespace-gap
+# fallback would otherwise treat a plain paragraph-to-heading gap as if it
+# were the figure -- see `_is_visual_label`'s use below), and the image's
+# own page has no caption to anchor detection off of at all.
+
+
+@dataclass(frozen=True)
+class AdjacentPage:
+    """Just enough of a neighbouring page for cross-page continuation."""
+
+    text: PageText
+    graphics: tuple[BBox, ...]
+
+
+# A caption run that's genuinely the start of a caption (not a mid-sentence
+# reference like "...shown in Fig. 1m)...", which the caption regex itself
+# doesn't fully exclude -- see the module's caption-detection limitations)
+# is, in this journal family, always followed by a "| Title" -- a citation
+# fragment never is. Scoped narrowly to disambiguating cross-page
+# continuation, not the main caption regex, since not every paper's caption
+# style uses this delimiter (many use ":" or none at all).
+_CAPTION_TITLE_SEP_PATTERN = re.compile(r"^[^|]{0,40}\|")
+
+# How close to the very top of a page a figure's own graphics must start to
+# plausibly be a continuation image -- just past the running header/DOI
+# line, with nothing (no paragraph, no other caption) ahead of it.
+CROSS_PAGE_IMAGE_TOP_MAX_PT = 100.0
+
+# A genuine orphaned caption interrupts real running prose. Some journals
+# (Nature's main-text style, distinct from the caption-then-image layout
+# this module otherwise targets) instead give a long Extended Data caption
+# its OWN dedicated page, printed after an image that already appeared --
+# and satisfied its own detection -- on the page before. That continuation
+# page reproduces the same "Fig. N | Title" caption text, on a page with
+# zero graphics, but as literally the FIRST thing on it -- nothing precedes
+# it, not even a header. Requiring real content above rules that out
+# without needing to look two pages back.
+MIN_RUNS_ABOVE_ORPHAN_CAPTION = 5
+
+
+def _orphan_caption(
+    page_text: PageText, graphics: tuple[BBox, ...]
+) -> tuple[TextRun, str] | None:
+    """This page's trailing visual caption if it can't possibly have its
+    image on this page (the whole page has zero drawable content), or None.
+
+    Restricted to captions with a "| Title" separator (see
+    `_CAPTION_TITLE_SEP_PATTERN`): a zero-graphics page can also produce
+    caption-regex matches on mid-sentence citation fragments ("Fig. 1m)."),
+    and those must never be mistaken for a genuine dangling caption. Also
+    restricted to captions with real content above them -- see
+    `MIN_RUNS_ABOVE_ORPHAN_CAPTION`."""
+    if graphics:
+        return None
+    candidates = [
+        (r, l)
+        for r, l in _find_caption_runs(page_text.runs)
+        if _is_visual_label(l)
+        and _CAPTION_TITLE_SEP_PATTERN.match(r.text)
+        and sum(1 for run in page_text.runs if run.bbox.y1 < r.bbox.y0)
+        >= MIN_RUNS_ABOVE_ORPHAN_CAPTION
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda cl: cl[0].bbox.y0)
+
+
+def _leading_graphics_bbox(
+    page_text: PageText, graphics: tuple[BBox, ...], page_height_pt: float
+) -> BBox | None:
+    """The union of this page's graphics, if they start right at the top
+    with nothing (no caption, no paragraph) ahead of them -- the visual
+    signature of a page that IS a continuation image rather than a normal
+    figure+caption page. None otherwise (including: this page has its own
+    caption before the graphics start, which makes it a normal page, not a
+    bare continuation target)."""
+    if not graphics:
+        return None
+    top_y0 = min(g.y0 for g in graphics)
+    if top_y0 > CROSS_PAGE_IMAGE_TOP_MAX_PT:
+        return None
+    captions = _find_caption_runs(page_text.runs)
+    if any(r.bbox.y0 < top_y0 for r, _ in captions):
+        return None
+    cutoff = min((r.bbox.y0 for r, _ in captions), default=page_height_pt)
+    leading = tuple(g for g in graphics if g.y0 < cutoff)
+    if not leading:
+        return None
+    return BBox(
+        x0=min(g.x0 for g in leading),
+        y0=min(g.y0 for g in leading),
+        x1=max(g.x1 for g in leading),
+        y1=max(g.y1 for g in leading),
+    )
+
+
+def _emit_regions(
+    figures: list[FigureRegion],
+    page_index: int,
+    label: str,
+    fbox: BBox,
+    caption_bbox: BBox,
+    graphics: tuple[BBox, ...],
+    runs: tuple[TextRun, ...],
+    panels: dict[str, BBox] | None = None,
+) -> None:
+    """Append either one FigureRegion for `fbox`, or one per sub-panel if
+    `panels` is given (or discoverable directly from `fbox`)."""
+    if panels is None:
+        panels = _detect_sub_panels(fbox, graphics, runs) if graphics else {}
+    if panels:
+        for letter in sorted(panels):
+            panel_bbox = panels[letter]
+            if (
+                panel_bbox.width < MIN_FIGURE_DIMENSION_PT
+                or panel_bbox.height < MIN_FIGURE_DIMENSION_PT
+            ):
+                continue
+            panel_label = f"{label}{letter}"
+            figures.append(
+                FigureRegion(
+                    figure_id=_figure_id(page_index, panel_label),
+                    label=panel_label,
+                    page_index=page_index,
+                    bbox=panel_bbox,
+                    caption_bbox=caption_bbox,
+                )
+            )
+        return
+
+    figures.append(
+        FigureRegion(
+            figure_id=_figure_id(page_index, label),
+            label=label,
+            page_index=page_index,
+            bbox=fbox,
+            caption_bbox=caption_bbox,
+        )
+    )
+
+
 def detect_figures(
     page_text: PageText,
     page_width_pt: float,
     page_height_pt: float,
     graphics: tuple[BBox, ...] = (),
+    prev_page: AdjacentPage | None = None,
 ) -> list[FigureRegion]:
     """Detect figure regions on a page from caption signals.
 
@@ -725,17 +891,55 @@ def detect_figures(
     to the cluster(s) immediately above it, bounded by the nearest other
     caption — this handles rich diagram-style figures (flowcharts, agent
     pipelines) whose embedded labels defeat a purely text-based heuristic.
-    When no cluster is usable (e.g. a table with no rule lines, or no
-    graphics at all), this falls back to the whitespace-gap heuristic
-    (`_figure_bbox_above_caption` + `_tighten_to_graphics`), which infers the
-    figure's extent from the absence of body text above the caption instead.
+    When no cluster is usable (e.g. a table with no rule lines), this falls
+    back to the whitespace-gap heuristic (`_figure_bbox_above_caption` +
+    `_tighten_to_graphics`), which infers the figure's extent from the
+    absence of body text above the caption instead. That fallback is
+    skipped for a Figure-kind caption on a page with literally zero
+    drawable content anywhere, since a Figure is never pure text — see
+    `_orphan_caption`.
 
-    Returns an empty list when there are no captions (most pages) — cost is
-    one regex scan over the page's text runs.
+    `prev_page` (optional) lets a figure whose caption and image were
+    placed on different pages resolve correctly: if `prev_page` ends in
+    exactly such a stranded caption (see `_orphan_caption`) and THIS page
+    opens with bare graphics before any content of its own (see
+    `_leading_graphics_bbox`), this page's leading graphics become that
+    caption's figure — a layout Nature-family journals use for full-page
+    data figures (see `AdjacentPage`). There's no symmetric `next_page`
+    parameter: the other half of the pair resolves itself when *that*
+    page is detected, by looking at what came before it, exactly the same
+    way. Callers that omit `prev_page` simply don't get that cross-page
+    resolution: figures fully contained on one page are unaffected either
+    way.
+
+    Returns an empty list when there are no captions and no continuation
+    image (most pages) — cost is one regex scan over the page's text runs.
     """
     captions = _find_caption_runs(page_text.runs)
     figures: list[FigureRegion] = []
     seen_labels: set[str] = set()
+
+    if prev_page is not None:
+        orphan = _orphan_caption(prev_page.text, prev_page.graphics)
+        if orphan is not None:
+            orphan_caption_run, orphan_label = orphan
+            bare = _leading_graphics_bbox(page_text, graphics, page_height_pt)
+            if (
+                bare is not None
+                and bare.width >= MIN_FIGURE_DIMENSION_PT
+                and bare.height >= MIN_FIGURE_DIMENSION_PT
+            ):
+                seen_labels.add(orphan_label)
+                _emit_regions(
+                    figures,
+                    page_text.page_index,
+                    orphan_label,
+                    bare,
+                    orphan_caption_run.bbox,
+                    graphics,
+                    page_text.runs,
+                )
+
     for caption_run, label in captions:
         # Dedup: a caption sometimes spans two text runs ("Figure 2" + ":
         # Description") and we'd double-detect. Take the first occurrence
@@ -757,11 +961,27 @@ def detect_figures(
             fbox = _figure_bbox_above_caption(
                 caption_run, column, page_width_pt, page_height_pt, graphics
             )
-            if fbox is None:
-                continue
-            if graphics:
+            if fbox is not None and graphics:
                 fbox = _tighten_to_graphics(fbox, graphics)
+            if (
+                fbox is not None
+                and not graphics
+                and _is_visual_label(label)
+                and fbox.height < MIN_UNCONFIRMED_FIGURE_GAP_PT
+            ):
+                # A Figure caption on a page with zero drawable content
+                # anywhere can't be confirmed by graphics at all, so a THIN
+                # gap (the ordinary single blank line before any bold
+                # heading, not a real content region) isn't good enough
+                # evidence -- it's either a mid-sentence false match or a
+                # real caption whose image is on the following page
+                # (resolved by that page's own `detect_figures` call, via
+                # its `prev_page`). A genuine borderless figure/table with
+                # real substance above it clears this easily.
+                fbox = None
 
+        if fbox is None:
+            continue
         if fbox.width < MIN_FIGURE_DIMENSION_PT or fbox.height < MIN_FIGURE_DIMENSION_PT:
             continue
 
@@ -788,33 +1008,15 @@ def detect_figures(
             wide_panels = _detect_sub_panels(wide_bbox, graphics, page_text.runs)
             if len(wide_panels) > len(panels):
                 panels = wide_panels
-        if panels:
-            for letter in sorted(panels):
-                panel_bbox = panels[letter]
-                if (
-                    panel_bbox.width < MIN_FIGURE_DIMENSION_PT
-                    or panel_bbox.height < MIN_FIGURE_DIMENSION_PT
-                ):
-                    continue
-                panel_label = f"{label}{letter}"
-                figures.append(
-                    FigureRegion(
-                        figure_id=_figure_id(page_text.page_index, panel_label),
-                        label=panel_label,
-                        page_index=page_text.page_index,
-                        bbox=panel_bbox,
-                        caption_bbox=caption_run.bbox,
-                    )
-                )
-            continue
 
-        figures.append(
-            FigureRegion(
-                figure_id=_figure_id(page_text.page_index, label),
-                label=label,
-                page_index=page_text.page_index,
-                bbox=fbox,
-                caption_bbox=caption_run.bbox,
-            )
+        _emit_regions(
+            figures,
+            page_text.page_index,
+            label,
+            fbox,
+            caption_run.bbox,
+            graphics,
+            page_text.runs,
+            panels=panels,
         )
     return figures

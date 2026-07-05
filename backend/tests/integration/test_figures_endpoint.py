@@ -86,3 +86,48 @@ def test_400_for_invalid_page_number(app_client, figure_pdf):
 
     r = app_client.get(f"/documents/{doc_id}/pages/0/figures")
     assert r.status_code == 400
+
+
+@pytest.mark.integration
+def test_figure_resolves_across_a_page_break(app_client, tmp_path):
+    """Some journals (Nature-family) give a data-dense figure its own
+    dedicated page: the caption is printed in the running text, but the
+    actual image is pushed onto a separate page. Page 1 here is all body
+    text ending in a caption with no drawn content at all; page 2 opens
+    directly with a drawn rectangle and no caption of its own -- the figure
+    endpoint for page 2 must resolve the label from page 1's caption."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    path = tmp_path / "cross_page.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+
+    # Page 1: body prose (enough runs to look like real discussion, not a
+    # caption with nothing above it) running right up to the caption line
+    # with ordinary single-line spacing -- no blank gap for the whitespace
+    # heuristic to mistake for a (nonexistent) figure on this page.
+    c.setFont("Helvetica", 10)
+    y = 700
+    for i in range(15):
+        c.drawString(40, y, f"This is body sentence number {i} discussing the result.")
+        y -= 14
+    c.drawString(40, y - 14, "Fig. 1 | A figure whose image is on the next page.")
+    c.showPage()
+
+    # Page 2: a drawn rectangle right at the top, no caption of its own.
+    c.rect(100, 650, 300, 92, stroke=1, fill=0)
+    c.showPage()
+    c.save()
+
+    doc_id = _upload(app_client, path)
+
+    r1 = app_client.get(f"/documents/{doc_id}/pages/1/figures")
+    assert r1.status_code == 200
+    assert r1.json()["figures"] == []  # nothing drawn on the caption's own page
+
+    r2 = app_client.get(f"/documents/{doc_id}/pages/2/figures")
+    assert r2.status_code == 200
+    figures = r2.json()["figures"]
+    assert len(figures) == 1
+    assert figures[0]["label"] == "Figure 1"
+    assert figures[0]["page"] == 2

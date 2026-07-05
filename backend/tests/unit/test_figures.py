@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.pdf.figures import (
     CAPTION_PATTERN,
+    AdjacentPage,
     _any_panels_overlap_too_much,
     _caption_ceiling,
     _cluster_graphics,
@@ -17,6 +18,8 @@ from app.pdf.figures import (
     _find_panel_labels,
     _group_labels_into_rows,
     _is_figure_internal_text,
+    _leading_graphics_bbox,
+    _orphan_caption,
     _other_caption_in_window,
     _PANEL_LABEL_PATTERN,
     _tighten_to_graphics,
@@ -798,3 +801,150 @@ def test_detect_figures_widens_search_when_caption_line_is_narrower_than_figure(
     assert set(result) == {"Figure 1a", "Figure 1b", "Figure 1c", "Figure 1d"}
     assert result["Figure 1b"] == BBox(460, 65, 550, 150)
     assert result["Figure 1d"] == BBox(460, 215, 550, 290)
+
+
+# --- caption and image on different pages ---------------------------------
+#
+# Nature-family journals routinely give a data-dense figure its own
+# dedicated page: the caption is printed in the running text, but the
+# actual image is pushed onto a separate page (often the very next one).
+
+
+def _body_runs(n: int, y_start: float = 50) -> tuple:
+    """`n` short body-text runs, standing in for real running prose above a
+    caption -- enough of them is what tells a genuine dangling caption apart
+    from a caption that's simply the first thing on its own page (see
+    `_orphan_caption`)."""
+    return tuple(
+        _run(f"Body sentence {i}.", 40, y_start + i * 12, 290, y_start + i * 12 + 10)
+        for i in range(n)
+    )
+
+
+def test_orphan_caption_finds_a_genuine_dangling_caption():
+    runs = _body_runs(10) + (
+        _run("Fig. 1 | A wide figure discussed above.", 40, 700, 300, 712),
+    )
+    page = PageText(page_index=0, runs=runs, columns=())
+    result = _orphan_caption(page, graphics=())
+    assert result is not None
+    _, label = result
+    assert label == "Figure 1"
+
+
+def test_orphan_caption_ignores_mid_sentence_citation():
+    # No "| Title" separator -- this is what a mid-sentence reference like
+    # "...shown in Fig. 1m)..." looks like once split into its own run.
+    runs = _body_runs(10) + (
+        _run("Fig. 1m). The density of a marker.", 40, 700, 300, 712),
+    )
+    page = PageText(page_index=0, runs=runs, columns=())
+    assert _orphan_caption(page, graphics=()) is None
+
+
+def test_orphan_caption_ignores_a_caption_with_nothing_above_it():
+    # A caption that's the FIRST thing on its page is a dedicated
+    # caption-only continuation page (the image already appeared, and was
+    # already detected, on an EARLIER page) -- not a caption waiting for an
+    # image on the next one.
+    runs = (_run("Fig. 1 | Continued caption text.", 40, 50, 300, 62),)
+    page = PageText(page_index=0, runs=runs, columns=())
+    assert _orphan_caption(page, graphics=()) is None
+
+
+def test_orphan_caption_ignores_tables():
+    # A borderless table can legitimately have zero graphics -- only a
+    # Figure/Extended Data Figure caption is treated as dangling.
+    runs = _body_runs(10) + (
+        _run("Table 1 | Summary statistics.", 40, 700, 300, 712),
+    )
+    page = PageText(page_index=0, runs=runs, columns=())
+    assert _orphan_caption(page, graphics=()) is None
+
+
+def test_orphan_caption_none_when_page_has_graphics():
+    runs = _body_runs(10) + (
+        _run("Fig. 1 | A wide figure discussed above.", 40, 700, 300, 712),
+    )
+    page = PageText(page_index=0, runs=runs, columns=())
+    graphics = (BBox(60, 100, 200, 180),)
+    assert _orphan_caption(page, graphics) is None
+
+
+def test_leading_graphics_bbox_returns_the_union_when_nothing_precedes_it():
+    runs = ()
+    page = PageText(page_index=1, runs=runs, columns=())
+    graphics = (BBox(50, 60, 200, 150), BBox(250, 60, 400, 150))
+    bbox = _leading_graphics_bbox(page, graphics, PAGE_H)
+    assert bbox == BBox(50, 60, 400, 150)
+
+
+def test_leading_graphics_bbox_none_when_graphics_start_too_low():
+    runs = ()
+    page = PageText(page_index=1, runs=runs, columns=())
+    graphics = (BBox(50, 300, 200, 400),)  # starts well past the header zone
+    assert _leading_graphics_bbox(page, graphics, PAGE_H) is None
+
+
+def test_leading_graphics_bbox_none_when_page_has_its_own_earlier_caption():
+    runs = (_run("Fig. 2 | Its own figure.", 40, 40, 300, 52),)
+    page = PageText(page_index=1, runs=runs, columns=())
+    graphics = (BBox(50, 60, 200, 150),)  # starts after the page's own caption
+    assert _leading_graphics_bbox(page, graphics, PAGE_H) is None
+
+
+def test_detect_figures_resolves_caption_and_image_on_different_pages():
+    caption_page_runs = _body_runs(10) + (
+        _run("Fig. 1 | A wide figure discussed above.", 40, 700, 300, 712),
+    )
+    caption_page = PageText(page_index=0, runs=caption_page_runs, columns=())
+    prev_page = AdjacentPage(text=caption_page, graphics=())
+
+    image_page_runs = ()
+    image_page = PageText(page_index=1, runs=image_page_runs, columns=())
+    graphics = (BBox(50, 60, 200, 150), BBox(250, 60, 400, 150))
+
+    figs = detect_figures(image_page, PAGE_W, PAGE_H, graphics, prev_page=prev_page)
+    assert len(figs) == 1
+    fig = figs[0]
+    assert fig.label == "Figure 1"
+    assert fig.page_index == 1  # lives on the image page, not the caption page
+    assert fig.bbox == BBox(50, 60, 400, 150)
+
+
+def test_detect_figures_does_not_duplicate_a_caption_only_continuation_page():
+    # The caption-only page (nothing precedes its caption) must not be
+    # mistaken for a dangling caption -- its image already lives on an
+    # EARLIER page and was already detected there.
+    caption_only_runs = (
+        _run("Extended Data Fig. 1 | Continued caption text.", 40, 50, 300, 62),
+    )
+    caption_only_page = PageText(page_index=0, runs=caption_only_runs, columns=())
+    prev_page = AdjacentPage(text=caption_only_page, graphics=())
+
+    next_page_runs = (
+        _run("Extended Data Fig. 2 | A different figure entirely.", 40, 40, 300, 52),
+    )
+    next_page = PageText(page_index=1, runs=next_page_runs, columns=())
+    graphics = (BBox(50, 60, 200, 150),)  # belongs to Extended Data Figure 2
+
+    figs = detect_figures(next_page, PAGE_W, PAGE_H, graphics, prev_page=prev_page)
+    assert len(figs) == 1
+    # The leading graphics belong to Figure 2's own caption on THIS page,
+    # not the unrelated continuation caption from the page before.
+    assert figs[0].label == "Extended Data Figure 2"
+
+
+def test_unconfirmed_figure_caption_with_thin_gap_is_rejected():
+    # Zero graphics anywhere + a THIN gap (one ordinary blank line before a
+    # bold heading) isn't enough evidence for a Figure caption -- contrast
+    # with test_detects_simple_single_column_figure's much larger gap,
+    # which must still work with zero graphics (a genuinely borderless
+    # figure/table).
+    runs = (
+        _run("Body text ends right here.", 40, 50, 290, 62),
+        _run("Fig. 1 | Thin gap caption.", 40, 80, 290, 92),  # 18pt gap only
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    assert detect_figures(page, PAGE_W, PAGE_H) == []
