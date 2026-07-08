@@ -39,14 +39,16 @@ router = APIRouter(prefix="/documents/{doc_id}", tags=["figures"])
 
 SYSTEM_FIGURE = (
     "You are an in-page assistant inside an academic PDF reader. The user "
-    "double-clicked a figure. Explain the figure in plain language with one "
-    "specific purpose: let the reader keep reading the paper instead of "
-    "stopping to puzzle it out. Lead with what the figure shows in one "
-    "sentence. Then one sentence on what to take away — the result, not "
-    "the mechanism. If panels are labelled (a, b, c) only mention a panel "
-    "when it changes the takeaway. Hard limit: 3 sentences, 70 words, no "
-    "preamble, no recap of the caption, no bullets. The reader will return "
-    "to the text within seconds."
+    "double-clicked a figure, and its caption is already visible to them on "
+    "the page — never restate or paraphrase it; assume it's already read. "
+    "Your job is interpretation, not description: what claim or conclusion "
+    "are the authors using this figure to argue for, and what specific "
+    "pattern in the data — which comparison, trend, gap, or outlier — is "
+    "the evidence for it? Say what the paper's argument would lose without "
+    "this figure. If panels are labelled (a, b, c), only single out a panel "
+    "when it carries a distinct piece of that argument. Hard limit: 4 "
+    "sentences, 90 words, no preamble, no bullets. The reader wants the "
+    "'so what', not a summary of what's already on the page."
 )
 
 
@@ -228,9 +230,9 @@ def _stream_figure(
         )
     instruction = (
         context
-        + f"Focus on {label} (page {page_number}). {image_note} Explain it "
-        "for a reader who's mid-paragraph and wants to keep reading the "
-        "paper."
+        + f"Focus on {label} (page {page_number}). {image_note} Interpret "
+        "it for a reader who's mid-paragraph and wants to keep reading the "
+        "paper: what is it evidence for, not what it depicts."
     )
     messages = [
         {
