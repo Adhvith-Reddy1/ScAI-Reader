@@ -1,8 +1,13 @@
 # Fly.io config for ScAI-Reader.
 #
-# Single stateless machine, no volume: the browser holds all personal data, and
-# the server re-renders each session. `fly launch` will fill in / confirm `app`
-# and `primary_region` for your account — adjust the placeholders below.
+# Single machine, single volume: the browser still holds all personal data
+# (highlights, notes), but the PDF/render/text cache under PDF_READER_DATA_DIR
+# now lives on a persistent volume so it survives restarts and deploys instead
+# of being rebuilt from scratch every time. `fly launch` will fill in / confirm
+# `app` and `primary_region` for your account — adjust the placeholders below.
+#
+# One-time setup after `fly launch --no-deploy` (see docs/DEPLOY.md):
+#   fly volumes create scai_reader_data --region iad --size 1
 
 app = "scai-reader"
 primary_region = "iad"
@@ -13,6 +18,13 @@ primary_region = "iad"
   # Non-secret config. Free OpenRouter router model; the API key is a secret
   # set with: fly secrets set OPENROUTER_API_KEY=sk-or-...
   OPENROUTER_MODEL = "openrouter/free"
+  # Points the app's content cache (PDFs, renders, reader.db) at the mounted
+  # volume below instead of the container's ephemeral filesystem.
+  PDF_READER_DATA_DIR = "/data"
+
+[[mounts]]
+  source = "scai_reader_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080
@@ -23,8 +35,8 @@ primary_region = "iad"
   auto_start_machines = true
   min_machines_running = 0
 
-  # The ephemeral PDF/render cache is per-machine, so a reader's requests must
-  # land on one machine. Keep a SINGLE machine: `fly scale count 1`.
+  # The volume mounts to one machine, so a reader's requests must land on it.
+  # Keep a SINGLE machine: `fly scale count 1`.
   [http_service.concurrency]
     type = "requests"
     soft_limit = 25

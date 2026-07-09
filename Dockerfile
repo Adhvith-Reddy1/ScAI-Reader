@@ -1,7 +1,9 @@
-# Single-image build for ScAI-Reader. One stateless container serves both the
-# API and the built SPA on $PORT (default 8080). Personal data lives in the
-# user's browser (see docs/specs/README.md), so the container keeps no durable
-# state and needs no volume.
+# Single-image build for ScAI-Reader. One container serves both the API and
+# the built SPA on $PORT (default 8080). Personal data (highlights, notes)
+# lives in the user's browser (see docs/specs/README.md); the container's own
+# PDF/render/text cache is written under PDF_READER_DATA_DIR, which in
+# production points at a mounted Fly volume (see fly.toml) so it survives
+# restarts instead of being rebuilt from scratch every time.
 
 # --- Stage 1: build the frontend (Vite) -> frontend/dist --------------------
 FROM node:22-slim AS frontend
@@ -30,7 +32,8 @@ RUN pip install -e /app/backend
 # Built SPA where app.main mounts it: <repo>/frontend/dist.
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
 
-# Run from the backend dir so the (ephemeral) data dir is /app/backend/data.
+# Run from the backend dir so the default data dir is /app/backend/data
+# (overridden by PDF_READER_DATA_DIR=/data in production, see fly.toml).
 WORKDIR /app/backend
 EXPOSE 8080
 
