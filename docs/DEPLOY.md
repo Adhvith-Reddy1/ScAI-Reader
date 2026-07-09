@@ -8,10 +8,15 @@ a single command.
 ## What you're deploying
 
 One small cloud machine running the whole app (it serves both the reader and
-the API). **It keeps no personal data** — each user's PDFs, highlights, and AI
-answers live in their own browser. That's why there's **no disk/volume** to
-manage and **no database to back up**. The trade-off we accepted: the server
-re-renders a PDF each session (a little slower, much simpler).
+the API). **It keeps no personal data** — each user's highlights and notes
+live only in their own browser; there's no login and no per-user database.
+
+The server does keep a small **content cache** (the uploaded PDF bytes,
+rendered page images, and extracted text/search index), keyed by the file's
+SHA-256 hash. That cache lives on a persistent Fly volume, so re-opening the
+same PDF — even after a deploy or restart — skips re-parsing it from scratch.
+Nothing in that cache is user-specific: two people uploading the same PDF
+share the same cached copy.
 
 AI explanations come from **your** OpenRouter key, using free models, shared by
 everyone who visits (no per-user limit for now).
@@ -39,19 +44,25 @@ From the repo root:
 
 ```bash
 # 1. Create the app on Fly WITHOUT deploying yet. When asked, say NO to
-#    Postgres/Redis/any database — we don't use one. Accept the existing
-#    Dockerfile and fly.toml when prompted.
+#    Postgres/Redis — we don't use one. Accept the existing Dockerfile and
+#    fly.toml when prompted. If it asks about the volume already declared in
+#    fly.toml, accept it (or create it manually in step 2).
 fly launch --no-deploy
 
 #    `fly launch` may rewrite the `app` name and `primary_region` in fly.toml
 #    to match your account/region — that's expected.
 
-# 2. Give the server your OpenRouter key (stored encrypted, never in git).
+# 2. Create the persistent volume for the PDF/render/text cache (skip if
+#    fly launch already created one for you — check with `fly volumes list`).
+#    Match the region you picked above.
+fly volumes create scai_reader_data --region iad --size 1
+
+# 3. Give the server your OpenRouter key (stored encrypted, never in git).
 fly secrets set OPENROUTER_API_KEY=sk-or-your-key-here
 #    OPENROUTER_MODEL is already set to openrouter/free in fly.toml; override
 #    here only if you want a specific model.
 
-# 3. Keep it to a single machine (the in-session render cache is per-machine).
+# 4. Keep it to a single machine (the volume attaches to one machine).
 fly deploy
 fly scale count 1
 ```
@@ -82,18 +93,18 @@ fly deploy        # build + ship; zero-downtime rolling deploy
   (the default here) it **scales to zero when idle**, so you mostly pay only
   while it's in use — typically a few dollars a month for light traffic. The
   first request after idle cold-starts the machine (a few seconds).
-- **No volume = no storage bill.**
+- The 1 GB volume adds a small storage bill (well under $1/month at that
+  size); use `fly volumes extend` if the cache fills up.
 - AI is billed to your OpenRouter account; free models cost $0 within the
   daily/minute caps.
 
 ## Notes & gotchas
 
-- **Single machine only.** Don't `fly scale count` above 1: the ephemeral
-  per-session PDF/render cache lives on the machine, so a user's requests need
-  to stay on one. (There's no shared data to lose — this is purely about
-  in-session rendering.)
-- **No database, no volume** by design. If `fly launch` offers to add Postgres
-  or a volume, decline.
+- **Single machine only.** Don't `fly scale count` above 1: the volume
+  attaches to one machine, so a user's requests need to stay on it.
+- **No per-user database** by design — highlights/notes never leave the
+  browser. If `fly launch` offers to add Postgres, decline; the volume it may
+  also offer is the one already declared in `fly.toml` (step 2 above).
 - **Large PDFs:** uploads up to 200 MB are allowed by the app; Fly's defaults
   handle this fine.
 - Health checks hit `GET /healthz`; if a deploy looks unhealthy, `fly logs`
