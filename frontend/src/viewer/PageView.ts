@@ -83,6 +83,7 @@ export function buildPageView(
   meta: DocumentMeta,
   pageNumber: number,
   pageDim: PageDimension,
+  priority: RequestPriority = "auto",
 ): PageViewHandle {
   const wrap = document.createElement("div");
   wrap.className = "page-wrap";
@@ -99,7 +100,13 @@ export function buildPageView(
   const img = document.createElement("img");
   img.className = "page";
   img.alt = `Page ${pageNumber}`;
-  img.loading = "lazy";
+  // The page(s) nearest whatever's currently on screen load eager + high
+  // priority so they win the network race against the rest of a long
+  // document's pages, which may already be queued up from earlier scrolling
+  // (see PageList's upgrade()). Everything else stays lazy/auto — no need to
+  // fight for bandwidth once it's already off screen.
+  img.loading = priority === "high" ? "eager" : "lazy";
+  img.fetchPriority = priority;
 
   content.appendChild(img);
   wrap.appendChild(num);
@@ -208,7 +215,7 @@ export function buildPageView(
   const init = async (): Promise<void> => {
     if (!state.text) {
       try {
-        state.text = await fetchPageText(meta.id, pageNumber);
+        state.text = await fetchPageText(meta.id, pageNumber, priority);
       } catch {
         return;
       }

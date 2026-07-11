@@ -95,8 +95,11 @@ export interface PageText {
 export async function fetchPageText(
   docId: string,
   pageNumber: number,
+  priority?: RequestPriority,
 ): Promise<PageText> {
-  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/text`);
+  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/text`, {
+    priority,
+  });
   if (!r.ok) {
     throw new Error(`text fetch failed (${r.status})`);
   }

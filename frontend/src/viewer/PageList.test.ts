@@ -137,6 +137,38 @@ describe("buildPageList upgrade/demote on intersection", () => {
     handle.dispose();
   });
 
+  it("gives the current page and its neighbor high fetch priority, others low", async () => {
+    setDocumentBounds(600, 800);
+    setViewport(1200, 900);
+    const scroll = document.createElement("div");
+    document.body.appendChild(scroll);
+    const handle = buildPageList(meta, dims, scroll);
+    scroll.appendChild(handle.element);
+
+    // currentPage defaults to 1 until the visibility observer says otherwise.
+    const upgradeObserver = observers[0];
+    const placeholders = Array.from(handle.element.children) as HTMLElement[];
+    // Page 1 (index 0) and page 2 (index 1) are within currentPage's ±1
+    // window; page 5 (index 4) is far from it.
+    upgradeObserver.emit([
+      { target: placeholders[0], isIntersecting: true, intersectionRatio: 1 },
+      { target: placeholders[1], isIntersecting: true, intersectionRatio: 1 },
+      { target: placeholders[4], isIntersecting: true, intersectionRatio: 1 },
+    ]);
+
+    const img = (el: HTMLElement) => el.querySelector("img.page") as HTMLImageElement;
+    expect(img(handle.element.children[0] as HTMLElement).fetchPriority).toBe(
+      "high",
+    );
+    expect(img(handle.element.children[1] as HTMLElement).fetchPriority).toBe(
+      "high",
+    );
+    expect(img(handle.element.children[4] as HTMLElement).fetchPriority).toBe(
+      "low",
+    );
+    handle.dispose();
+  });
+
   it("notifies current-page subscribers when visibility ratio changes", async () => {
     
     setDocumentBounds(600, 800);

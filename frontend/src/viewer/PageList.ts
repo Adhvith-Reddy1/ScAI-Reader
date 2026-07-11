@@ -65,7 +65,7 @@ export function buildPageList(
         const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
         const slot = slots[idx];
         if (!slot) continue;
-        if (entry.isIntersecting) upgrade(slot, meta, reobserve);
+        if (entry.isIntersecting) upgrade(slot, meta, reobserve, currentPage);
         else demote(slot, meta, reobserve);
       }
     },
@@ -177,9 +177,26 @@ function sizeAllPlaceholders(slots: Slot[]): void {
 
 type Reobserve = (oldEl: HTMLElement, newEl: HTMLElement) => void;
 
-function upgrade(slot: Slot, meta: DocumentMeta, reobserve: Reobserve): void {
+/** The page actually on screen (or about to be) always wins the network
+ * race; everything else backs off so a long document's worth of queued
+ * requests can't starve out the page the reader is looking at right now. */
+function priorityFor(pageNumber: number, currentPage: number): RequestPriority {
+  return Math.abs(pageNumber - currentPage) <= 1 ? "high" : "low";
+}
+
+function upgrade(
+  slot: Slot,
+  meta: DocumentMeta,
+  reobserve: Reobserve,
+  currentPage: number,
+): void {
   if (slot.filled) return;
-  const handle = buildPageView(meta, slot.index + 1, slot.dim);
+  const handle = buildPageView(
+    meta,
+    slot.index + 1,
+    slot.dim,
+    priorityFor(slot.index + 1, currentPage),
+  );
   handle.element.dataset.pageIndex = String(slot.index);
   handle.element.dataset.pageNumber = String(slot.index + 1);
   const old = slot.element;
