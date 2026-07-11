@@ -267,3 +267,62 @@ async def ai_explain_figure(
                 yield fig._error_sse(payload)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/figures/{figure_id}/ai-chat")
+async def ai_chat_figure(
+    doc_id: str,
+    figure_id: str,
+    body: fig.FigureChatRequest,
+    settings: Settings = Depends(get_settings),
+    gate: AiGate = Depends(_ai_gate),
+) -> StreamingResponse:
+    """Stream a reply to a follow-up question about a figure the reader
+    already saw an interpretation of. Mirrors `ai_explain_figure`'s image
+    render/crop so the model still has the figure in view."""
+    pdf_path = files.pdf_path(settings, doc_id)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="document not found")
+
+    render_dpi = 150
+    try:
+        with PdfiumBackend.open(pdf_path) as backend:
+            page_png = backend.render_page(body.page - 1, dpi=render_dpi)
+            page = backend.get_page_text(body.page - 1)
+            dims = backend.page_dimensions(body.page - 1)
+    except PdfError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if body.bbox is not None:
+        page_png = fig.crop_to_bbox(
+            page_png, body.bbox, dims.width_pt, dims.height_pt, render_dpi
+        )
+
+    page_text = " ".join(
+        run.text.strip()
+        for col in page.columns
+        for run in col.runs
+        if run.text.strip()
+    )
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        async for event_type, payload in _gated_stream(
+            gate,
+            fig._stream_figure_chat(
+                gate.config,
+                page_text,
+                page_png,
+                body.label,
+                body.page,
+                body.content,
+                body.messages,
+            ),
+        ):
+            if event_type == "delta":
+                yield fig._sse_event({"type": "delta", "text": payload})
+            elif event_type == "done":
+                yield fig._sse_event({"type": "done", "text": payload})
+            elif event_type == "error":
+                yield fig._error_sse(payload)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -453,6 +453,33 @@ export function streamFigureExplanation(
   return () => ctrl.abort();
 }
 
+export interface FigureChatRequestBody {
+  page: number;
+  label: string;
+  bbox?: FigureBBox;
+  /** The interpretation the reader was first shown, for context. */
+  content: string;
+  messages: ChatTurn[];
+}
+
+/**
+ * Streams an assistant reply to a follow-up question about a figure the
+ * reader already saw an interpretation of. Same SSE wire format and
+ * streamChatLike plumbing as the highlight follow-up chat (streamChat).
+ */
+export function streamFigureChat(
+  docId: string,
+  figureId: string,
+  body: FigureChatRequestBody,
+  callbacks: ChatStreamCallbacks,
+): () => void {
+  return streamChatLike(
+    `/documents/${docId}/figures/${figureId}/ai-chat`,
+    body,
+    callbacks,
+  );
+}
+
 /**
  * Streams an explanation from the stateless backend via Server-Sent Events
  * (Spec 03 `/ai/explain`). The request carries the highlighted `text` and the
