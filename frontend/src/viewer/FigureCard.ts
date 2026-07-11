@@ -1,8 +1,14 @@
 /**
  * Singleton pinned card showing the AI explanation for a figure.
  *
- * Unlike the hover tooltip on blue highlights, this stays open until the
- * user dismisses it (close button, Escape, or opening a different figure).
+ * Like the definition/explanation tooltip once it's pinned open, this
+ * dismisses when the reader clicks outside it, presses Escape, or clicks
+ * its own close button — and supports a follow-up chat thread for when the
+ * first interpretation wasn't enough. Unlike the highlight tooltip it isn't
+ * hover-driven: it opens directly on double-click and stays open (no
+ * separate "pinned" state to toggle), so the chat is available as soon as
+ * an interpretation is ready.
+ *
  * It anchors to the right margin of the figure if there's room, otherwise
  * just below the figure. Positioning is page-anchored so it follows the
  * page when the user scrolls.
@@ -16,8 +22,10 @@ import {
 import { openAiSetup } from "../AiSetup.ts";
 import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
+  getFigureChat,
   getFigureState,
   retryFigureExplanation,
+  sendFigureChatMessage,
   startFigureExplanation,
   subscribeFigure,
 } from "../figureStore.ts";
@@ -28,10 +36,16 @@ const MARGIN_PX = 12;
 let cardEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
 let bodyEl: HTMLDivElement | null = null;
+let chatEl: HTMLDivElement | null = null;
+let threadEl: HTMLDivElement | null = null;
+let chatErrorEl: HTMLDivElement | null = null;
+let inputEl: HTMLInputElement | null = null;
+let sendEl: HTMLButtonElement | null = null;
 let unsubscribe: (() => void) | null = null;
 let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
 let activeFigure: PageFigure | null = null;
+let activeRectViewport: DOMRect | null = null;
 
 function ensureCard(): HTMLDivElement {
   if (cardEl) return cardEl;
@@ -60,10 +74,47 @@ function ensureCard(): HTMLDivElement {
   body.className = "figure-card-body";
   el.appendChild(body);
 
+  // Follow-up chat — same structure/classes as the highlight tooltip's
+  // pinned chat, so it picks up the same styling for free.
+  const chat = document.createElement("div");
+  chat.className = "explanation-chat";
+
+  const thread = document.createElement("div");
+  thread.className = "explanation-chat-thread";
+  chat.appendChild(thread);
+
+  const chatError = document.createElement("div");
+  chatError.className = "explanation-chat-error";
+  chat.appendChild(chatError);
+
+  const form = document.createElement("form");
+  form.className = "explanation-chat-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "explanation-chat-input";
+  input.placeholder = "Ask a follow-up…";
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.className = "explanation-chat-send";
+  send.textContent = "Send";
+  form.appendChild(input);
+  form.appendChild(send);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitChat();
+  });
+  chat.appendChild(form);
+  el.appendChild(chat);
+
   document.body.appendChild(el);
   cardEl = el;
   titleEl = title;
   bodyEl = body;
+  chatEl = chat;
+  threadEl = thread;
+  chatErrorEl = chatError;
+  inputEl = input;
+  sendEl = send;
 
   // Esc dismisses.
   document.addEventListener("keydown", (e) => {
@@ -71,7 +122,62 @@ function ensureCard(): HTMLDivElement {
       hideFigureCard();
     }
   });
+
+  // Clicking anywhere outside the card closes it — same rule as the
+  // pinned highlight-explanation panel.
+  document.addEventListener("pointerdown", (e) => {
+    if (el.style.display === "none") return;
+    if (!el.contains(e.target as Node)) {
+      hideFigureCard();
+    }
+  });
+
   return el;
+}
+
+function submitChat(): void {
+  if (!activeDocId || !activeFigureId || !activeFigure) return;
+  if (!inputEl) return;
+  const value = inputEl.value;
+  if (!value.trim()) return;
+  sendFigureChatMessage(
+    activeDocId,
+    activeFigureId,
+    activeFigure.page,
+    activeFigure.label,
+    value,
+    activeFigure.bbox,
+  );
+  inputEl.value = "";
+}
+
+function renderChat(): void {
+  if (!activeDocId || !activeFigureId) return;
+  const state = getFigureState(activeDocId, activeFigureId);
+  const chatAvailable = state.status === "ready";
+  if (chatEl) chatEl.style.display = chatAvailable ? "flex" : "none";
+  if (!chatAvailable) return;
+
+  const chat = getFigureChat(activeDocId, activeFigureId);
+
+  const thread = threadEl!;
+  thread.replaceChildren();
+  for (const msg of chat.messages) {
+    const row = document.createElement("div");
+    row.className = `explanation-chat-msg is-${msg.role}`;
+    row.textContent = msg.content;
+    thread.appendChild(row);
+  }
+  thread.classList.toggle("is-streaming", chat.streaming);
+  thread.scrollTop = thread.scrollHeight;
+
+  if (chatErrorEl) {
+    chatErrorEl.textContent = chat.error ?? "";
+    chatErrorEl.style.display = chat.error ? "block" : "none";
+  }
+
+  if (inputEl) inputEl.disabled = chat.streaming;
+  if (sendEl) sendEl.disabled = chat.streaming;
 }
 
 function render(): void {
@@ -134,6 +240,8 @@ function render(): void {
   } else {
     body.textContent = "Loading…";
   }
+
+  renderChat();
 }
 
 function positionCard(figureRectViewport: DOMRect): void {
@@ -186,6 +294,7 @@ export function showFigureCard(
   activeDocId = docId;
   activeFigureId = figure.figure_id;
   activeFigure = figure;
+  activeRectViewport = figureRectViewport;
   if (titleEl) titleEl.textContent = figure.label;
 
   unsubscribe = subscribeFigure(docId, figure.figure_id, () => {
@@ -194,6 +303,9 @@ export function showFigureCard(
       activeFigureId === figure.figure_id
     ) {
       render();
+      // Content (or the chat thread) can change the card's height —
+      // re-clamp to the viewport so it never drifts off-screen.
+      if (activeRectViewport) positionCard(activeRectViewport);
     }
   });
 
@@ -221,5 +333,25 @@ export function hideFigureCard(): void {
   activeDocId = null;
   activeFigureId = null;
   activeFigure = null;
+  activeRectViewport = null;
   if (cardEl) cardEl.style.display = "none";
+}
+
+/** Test-only: tear down the singleton card and reset module state. */
+export function _resetForTest(): void {
+  if (unsubscribe) unsubscribe();
+  unsubscribe = null;
+  activeDocId = null;
+  activeFigureId = null;
+  activeFigure = null;
+  activeRectViewport = null;
+  cardEl?.remove();
+  cardEl = null;
+  titleEl = null;
+  bodyEl = null;
+  chatEl = null;
+  threadEl = null;
+  chatErrorEl = null;
+  inputEl = null;
+  sendEl = null;
 }

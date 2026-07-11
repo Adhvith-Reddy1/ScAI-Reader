@@ -29,6 +29,7 @@ from ..pdf.figures import AdjacentPage, FigureRegion, detect_figures
 from ..pdf.pdfium_backend import PdfiumBackend, sniff_image_mime
 from ..storage import files
 from .deps import get_settings
+from .explanations import ChatMessage
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,20 @@ SYSTEM_FIGURE = (
     "when it carries a distinct piece of that argument. Hard limit: 4 "
     "sentences, 90 words, no preamble, no bullets. The reader wants the "
     "'so what', not a summary of what's already on the page."
+)
+
+# When the short interpretation wasn't enough, the reader opens a follow-up
+# thread. This assistant answers conversationally, with the figure still
+# attached so it can point at specific panels/axes/data points.
+SYSTEM_FIGURE_CHAT = (
+    "You are answering a follow-up question about a figure in an academic "
+    "paper, inside a PDF reader. The reader already saw a short "
+    "interpretation of the figure but it didn't fully resolve their "
+    "question, so they're asking more. The figure image is attached — refer "
+    "to specific panels, axes, or data points when it helps answer. Answer "
+    "directly and concretely, grounded in what's actually shown. Be "
+    "concise — at most 3 sentences per reply — and address exactly what "
+    "they asked. No preamble."
 )
 
 
@@ -245,4 +260,85 @@ def _stream_figure(
     ]
     return llm.stream_completion(
         config, system=SYSTEM_FIGURE, messages=messages, max_tokens=260
+    )
+
+
+class FigureChatRequest(BaseModel):
+    """A follow-up chat turn on a figure. `messages` is the full thread the
+    reader has had so far, ending with their newest question; `content` is
+    the interpretation they were first shown, for context."""
+
+    page: int = Field(ge=1)
+    label: str = Field(min_length=1, max_length=64)
+    bbox: BBoxModel | None = None
+    content: str = Field(default="", max_length=8000)
+    messages: list[ChatMessage] = Field(min_length=1)
+
+
+def _build_figure_chat_messages(
+    page_text: str,
+    label: str,
+    page_number: int,
+    content: str,
+    image_part_value: dict,
+    messages: list[ChatMessage],
+) -> list[dict]:
+    """Turn the reader's follow-up thread into provider-neutral messages.
+    The figure image and page/interpretation context ride along on the
+    first user turn, mirroring `explanations._build_chat_messages` — later
+    turns don't need the image re-attached since it's already in context."""
+    context_text = (
+        (
+            f"For context, here is the text of page {page_number}:\n\n"
+            f"<page>\n{page_text}\n</page>\n\n"
+            if page_text
+            else ""
+        )
+        + f"The reader double-clicked {label}. They were shown this "
+        f"interpretation:\n\n{content}\n\n"
+        "They have follow-up questions below."
+    )
+    out: list[dict] = []
+    for i, m in enumerate(messages):
+        if i == 0 and m.role == "user":
+            out.append(
+                {
+                    "role": "user",
+                    "content": [
+                        image_part_value,
+                        llm.text_part(f"{context_text}\n\n{m.content}"),
+                    ],
+                }
+            )
+        else:
+            out.append({"role": m.role, "content": m.content})
+    # Conversations must open on a user turn.
+    if not out or out[0]["role"] != "user":
+        out.insert(
+            0,
+            {
+                "role": "user",
+                "content": [image_part_value, llm.text_part(context_text)],
+            },
+        )
+    return out
+
+
+def _stream_figure_chat(
+    config,
+    page_text: str,
+    page_png_bytes: bytes,
+    label: str,
+    page_number: int,
+    content: str,
+    messages: list[ChatMessage],
+) -> AsyncIterator[tuple[str, str]]:
+    page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
+    media_type = sniff_image_mime(page_png_bytes)
+    img_part = llm.image_part(media_type, page_b64)
+    built = _build_figure_chat_messages(
+        page_text, label, page_number, content, img_part, messages
+    )
+    return llm.stream_completion(
+        config, system=SYSTEM_FIGURE_CHAT, messages=built, max_tokens=400
     )

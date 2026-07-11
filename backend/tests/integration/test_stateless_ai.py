@@ -238,6 +238,125 @@ def test_figure_ai_explain_declares_the_real_image_media_type(
 
 
 # ---------------------------------------------------------------------------
+# Figure follow-up chat
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_figure_ai_chat_streams_and_writes_nothing(
+    app_client, simple_pdf, monkeypatch
+):
+    monkeypatch.setattr(
+        llm,
+        "stream_completion",
+        _fake_stream(("delta", "Because "), ("done", "Because of the trend.")),
+    )
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-chat",
+        json={
+            "page": 1,
+            "label": "Figure 1",
+            "content": "The figure shows a trend.",
+            "messages": [{"role": "user", "content": "Why does that matter?"}],
+        },
+    )
+    assert r.status_code == 200
+    assert '"type": "done"' in r.text
+
+
+@pytest.mark.integration
+def test_figure_ai_chat_attaches_the_image_on_the_first_turn(
+    app_client, simple_pdf, monkeypatch
+):
+    """The follow-up still needs the figure in view — the image rides on
+    the first user turn, same as the initial explain call."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-chat",
+        json={
+            "page": 1,
+            "label": "Figure 1",
+            "content": "The figure shows a trend.",
+            "messages": [{"role": "user", "content": "Which panel shows that?"}],
+        },
+    )
+    assert r.status_code == 200
+    first_turn = captured["messages"][0]
+    assert first_turn["role"] == "user"
+    image_part = first_turn["content"][0]
+    assert image_part["kind"] == "image"
+    assert image_part["data"]
+    text_part = first_turn["content"][1]
+    assert "Which panel shows that?" in text_part["text"]
+    assert "The figure shows a trend." in text_part["text"]
+
+
+@pytest.mark.integration
+def test_figure_ai_chat_only_attaches_the_image_once(
+    app_client, simple_pdf, monkeypatch
+):
+    """A multi-turn thread shouldn't resend the (large) image on every
+    turn — only the first user turn carries it."""
+    captured: dict = {}
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured["messages"] = messages
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-chat",
+        json={
+            "page": 1,
+            "label": "Figure 1",
+            "content": "The figure shows a trend.",
+            "messages": [
+                {"role": "user", "content": "Which panel shows that?"},
+                {"role": "assistant", "content": "Panel b."},
+                {"role": "user", "content": "Why panel b specifically?"},
+            ],
+        },
+    )
+    assert r.status_code == 200
+    assert len(captured["messages"]) == 3
+    assert captured["messages"][1] == {"role": "assistant", "content": "Panel b."}
+    assert captured["messages"][2] == {
+        "role": "user",
+        "content": "Why panel b specifically?",
+    }
+    # Only the first turn's content is a list (image + text); later turns are
+    # plain strings.
+    assert isinstance(captured["messages"][0]["content"], list)
+    assert isinstance(captured["messages"][2]["content"], str)
+
+
+@pytest.mark.integration
+def test_figure_ai_chat_404_for_unknown_document(app_client):
+    r = app_client.post(
+        "/documents/does-not-exist/figures/p1_Figure_1/ai-chat",
+        json={
+            "page": 1,
+            "label": "Figure 1",
+            "content": "x",
+            "messages": [{"role": "user", "content": "why?"}],
+        },
+    )
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # kind defaults via classify
 # ---------------------------------------------------------------------------
 
