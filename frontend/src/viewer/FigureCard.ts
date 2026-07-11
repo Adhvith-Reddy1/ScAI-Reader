@@ -8,10 +8,16 @@
  * page when the user scrolls.
  */
 
-import { AI_NOT_CONFIGURED_CODE, type PageFigure } from "../api.ts";
+import {
+  AI_NOT_CONFIGURED_CODE,
+  AI_QUOTA_EXCEEDED_CODE,
+  type PageFigure,
+} from "../api.ts";
 import { openAiSetup } from "../AiSetup.ts";
+import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
   getFigureState,
+  retryFigureExplanation,
   startFigureExplanation,
   subscribeFigure,
 } from "../figureStore.ts";
@@ -25,6 +31,7 @@ let bodyEl: HTMLDivElement | null = null;
 let unsubscribe: (() => void) | null = null;
 let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
+let activeFigure: PageFigure | null = null;
 
 function ensureCard(): HTMLDivElement {
   if (cardEl) return cardEl;
@@ -96,6 +103,31 @@ function render(): void {
         openAiSetup();
       });
       body.append(msg, setup);
+    } else if (state.code === AI_QUOTA_EXCEEDED_CODE) {
+      body.textContent = "";
+      const msg = document.createElement("span");
+      msg.textContent = "Daily free AI limit reached. Add your own API key to keep going. ";
+      const addKey = document.createElement("button");
+      addKey.type = "button";
+      addKey.className = "explanation-setup-ai";
+      addKey.textContent = "Add key →";
+      addKey.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const docId = activeDocId;
+        const figure = activeFigure;
+        openUserKeyPrompt(() => {
+          if (docId && figure) {
+            retryFigureExplanation(
+              docId,
+              figure.figure_id,
+              figure.page,
+              figure.label,
+              figure.bbox,
+            );
+          }
+        });
+      });
+      body.append(msg, addKey);
     } else {
       body.textContent = state.error;
     }
@@ -153,6 +185,7 @@ export function showFigureCard(
   if (unsubscribe) unsubscribe();
   activeDocId = docId;
   activeFigureId = figure.figure_id;
+  activeFigure = figure;
   if (titleEl) titleEl.textContent = figure.label;
 
   unsubscribe = subscribeFigure(docId, figure.figure_id, () => {
@@ -187,5 +220,6 @@ export function hideFigureCard(): void {
   }
   activeDocId = null;
   activeFigureId = null;
+  activeFigure = null;
   if (cardEl) cardEl.style.display = "none";
 }

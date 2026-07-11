@@ -20,13 +20,14 @@ endpoints; we convert to the 0-indexed page index the extractor expects.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import ai
+from .. import ai, quota
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.pdfium_backend import PdfiumBackend
@@ -38,6 +39,44 @@ from .deps import get_settings
 router = APIRouter(prefix="/documents/{doc_id}", tags=["stateless-ai"])
 
 ExplanationKind = exp.ExplanationKind
+
+
+@dataclass
+class AiGate:
+    """Resolved per-request AI access: which provider config to use, and
+    whether this call is allowed to proceed under the daily quota. A reader
+    who supplies their own key (`X-User-Api-Key`) always gets `quota_ok=True`
+    and isn't counted — they're spending their own budget, not the site's."""
+
+    config: ai.ProviderConfig | None
+    quota_ok: bool
+
+
+def _ai_gate(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+    x_user_api_key: str | None = Header(default=None, alias="X-User-Api-Key"),
+) -> AiGate:
+    shared = ai.get_provider_config(settings)
+    user_key = (x_user_api_key or "").strip()
+    if user_key:
+        return AiGate(config=ai.with_override_key(shared, user_key), quota_ok=True)
+    client_key = quota.resolve_client_key(request, x_client_id)
+    ok = quota.try_consume(settings, client_key, settings.ai_daily_limit)
+    return AiGate(config=shared, quota_ok=ok)
+
+
+async def _gated_stream(
+    gate: AiGate, real: AsyncIterator[tuple[str, str]]
+) -> AsyncIterator[tuple[str, str]]:
+    """Yields the quota-exceeded error frame instead of streaming when the
+    gate denied the call; otherwise passes the real stream through untouched."""
+    if not gate.quota_ok:
+        yield ("error", ai.AI_QUOTA_EXCEEDED_MESSAGE)
+        return
+    async for event in real:
+        yield event
 
 
 def _page_text_for(
@@ -93,15 +132,15 @@ async def ai_explain(
     doc_id: str,
     body: StatelessExplainRequest,
     settings: Settings = Depends(get_settings),
+    gate: AiGate = Depends(_ai_gate),
 ) -> StreamingResponse:
     kind: ExplanationKind = body.kind or exp.classify(body.text)
     page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
-    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield exp._sse_event({"type": "meta", "kind": kind, "cached": False})
-        async for event_type, payload in exp._stream_explanation(
-            config, page_text, body.text, kind
+        async for event_type, payload in _gated_stream(
+            gate, exp._stream_explanation(gate.config, page_text, body.text, kind)
         ):
             if event_type == "delta":
                 yield exp._sse_event({"type": "delta", "text": payload})
@@ -118,16 +157,16 @@ async def ai_chat(
     doc_id: str,
     body: StatelessChatRequest,
     settings: Settings = Depends(get_settings),
+    gate: AiGate = Depends(_ai_gate),
 ) -> StreamingResponse:
     page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
-    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield exp._sse_event(
             {"type": "meta", "kind": body.kind, "cached": False}
         )
-        async for event_type, payload in exp._stream_chat(
-            config, page_text, body
+        async for event_type, payload in _gated_stream(
+            gate, exp._stream_chat(gate.config, page_text, body)
         ):
             if event_type == "delta":
                 yield exp._sse_event({"type": "delta", "text": payload})
@@ -144,9 +183,9 @@ async def ai_refine(
     doc_id: str,
     body: StatelessRefineRequest,
     settings: Settings = Depends(get_settings),
+    gate: AiGate = Depends(_ai_gate),
 ) -> StreamingResponse:
     page_text = _page_text_for(settings, doc_id, body.page, body.page_text)
-    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield exp._sse_event(
@@ -158,8 +197,11 @@ async def ai_refine(
             }
         )
         # No persistence: just stream the rewrite; the client caches it.
-        async for event_type, payload in exp._stream_refine(
-            config, page_text, body.text, body.kind, body.content, body.messages
+        async for event_type, payload in _gated_stream(
+            gate,
+            exp._stream_refine(
+                gate.config, page_text, body.text, body.kind, body.content, body.messages
+            ),
         ):
             if event_type == "delta":
                 yield exp._sse_event({"type": "delta", "text": payload})
@@ -177,6 +219,7 @@ async def ai_explain_figure(
     figure_id: str,
     body: fig.FigureExplainRequest,
     settings: Settings = Depends(get_settings),
+    gate: AiGate = Depends(_ai_gate),
 ) -> StreamingResponse:
     # The figure flow needs the page image, so unlike the text endpoints we
     # can't fall back to empty context — without the cached PDF there is nothing
@@ -207,12 +250,14 @@ async def ai_explain_figure(
         for run in col.runs
         if run.text.strip()
     )
-    config = ai.get_provider_config(settings)
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield fig._sse_event({"type": "meta", "cached": False})
-        async for event_type, payload in fig._stream_figure(
-            config, page_text, page_png, body.label, body.page, cropped=cropped
+        async for event_type, payload in _gated_stream(
+            gate,
+            fig._stream_figure(
+                gate.config, page_text, page_png, body.label, body.page, cropped=cropped
+            ),
         ):
             if event_type == "delta":
                 yield fig._sse_event({"type": "delta", "text": payload})

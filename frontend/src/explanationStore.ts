@@ -132,6 +132,24 @@ export function getExplanationState(annotationId: string): ExplanationState {
 }
 
 /**
+ * Retry after an error — e.g. the reader just added their own API key to get
+ * past the daily quota (see UserKeyPrompt.ts). `startExplanation` no-ops
+ * unless the entry is `idle`, so this resets it first.
+ */
+export function retryExplanation(
+  docId: string,
+  annotationId: string,
+  text: string,
+  page: number,
+  pageText?: string,
+): void {
+  const entry = ensureEntry(annotationId);
+  if (entry.state.status !== "error") return;
+  setState(entry, { status: "idle" });
+  void startExplanation(docId, annotationId, text, page, pageText);
+}
+
+/**
  * Seed the store with a server-cached explanation. No-op if an entry is
  * already in `loading` or `ready` state — we never want to overwrite a
  * fresher local stream with a stale server payload.

@@ -35,6 +35,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
     text,
     tokenize = "unicode61 remove_diacritics 2"
 );
+
+-- Daily AI-call counter, keyed by an anonymous client identifier (see
+-- app.quota) — never a user account. Bounds how much of the shared,
+-- server-funded AI budget one browser can draw on per day; readers who
+-- supply their own API key bypass this entirely (see app.ai.with_override_key).
+CREATE TABLE IF NOT EXISTS ai_usage (
+    client_id    TEXT NOT NULL,
+    day          TEXT NOT NULL,             -- UTC date, YYYY-MM-DD
+    count        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (client_id, day)
+);
 """
 
 

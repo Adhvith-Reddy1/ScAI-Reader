@@ -41,6 +41,15 @@ AI_RATE_LIMITED_MESSAGE = (
 )
 AI_RATE_LIMITED_CODE = "ai_rate_limited"
 
+# Shown when a client (identified only by an anonymous, per-browser id — see
+# app.quota) has used today's free share of the shared AI budget. The UI
+# offers a one-click "bring your own key" prompt in response.
+AI_QUOTA_EXCEEDED_MESSAGE = (
+    "You've used today's free AI explanations. Add your own API key to keep "
+    "going without a daily limit."
+)
+AI_QUOTA_EXCEEDED_CODE = "ai_quota_exceeded"
+
 
 def error_code(message: str) -> str | None:
     """Stable code for a known error message so the UI can special-case it
@@ -49,6 +58,8 @@ def error_code(message: str) -> str | None:
         return AI_NOT_CONFIGURED_CODE
     if message == AI_RATE_LIMITED_MESSAGE:
         return AI_RATE_LIMITED_CODE
+    if message == AI_QUOTA_EXCEEDED_MESSAGE:
+        return AI_QUOTA_EXCEEDED_CODE
     return None
 
 # Recognised providers. "openai_compatible" is OpenAI's wire protocol pointed at
@@ -165,6 +176,22 @@ def get_provider_config(settings: Settings) -> ProviderConfig | None:
         model=model,
         base_url=base_url,
         source="stored",
+    )
+
+
+def with_override_key(config: ProviderConfig | None, api_key: str) -> ProviderConfig:
+    """A config for a reader's own key (sent per-request, never stored — see
+    frontend/src/userApiKey.ts), reusing the site's configured provider/model/
+    base URL so the reader only has to paste a key, not pick a provider. Falls
+    back to OpenRouter, the app's usual free-tier path, when nothing is
+    configured server-side at all."""
+    base = config or ProviderConfig("openrouter", "")
+    return ProviderConfig(
+        provider=base.provider,
+        api_key=api_key,
+        model=base.model,
+        base_url=base.base_url,
+        source="user",
     )
 
 

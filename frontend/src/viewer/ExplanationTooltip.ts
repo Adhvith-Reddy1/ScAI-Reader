@@ -12,13 +12,19 @@
  * the cursor against each blue annotation group's bounding rect.
  */
 
-import { AI_NOT_CONFIGURED_CODE, type DocumentMeta } from "../api.ts";
+import {
+  AI_NOT_CONFIGURED_CODE,
+  AI_QUOTA_EXCEEDED_CODE,
+  type DocumentMeta,
+} from "../api.ts";
 import { openAiSetup } from "../AiSetup.ts";
+import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
   getChat,
   getExplanationState,
   hydrateExplanation,
   refineFromChat,
+  retryExplanation,
   sendChatMessage,
   startExplanation,
   subscribeExplanation,
@@ -488,6 +494,33 @@ function render(annotationId: string): void {
         openAiSetup();
       });
       body.append(msg, setup);
+    } else if (state.code === AI_QUOTA_EXCEEDED_CODE) {
+      title.textContent = "Daily free AI limit reached";
+      body.textContent = "";
+      const msg = document.createElement("span");
+      msg.textContent = "Add your own API key to keep going. ";
+      const addKey = document.createElement("button");
+      addKey.type = "button";
+      addKey.className = "explanation-setup-ai";
+      addKey.textContent = "Add key →";
+      addKey.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const doc = activeDoc;
+        const text = activeText;
+        const page = activePage;
+        openUserKeyPrompt(() => {
+          if (doc && text && page != null) {
+            retryExplanation(
+              doc.id,
+              annotationId,
+              text,
+              page,
+              activePageText ?? undefined,
+            );
+          }
+        });
+      });
+      body.append(msg, addKey);
     } else {
       title.textContent = "Explanation unavailable";
       body.textContent = state.error;
