@@ -46,6 +46,9 @@ class Settings:
     default_dpi: int = 150
     max_dpi: int = 600
     upload_max_bytes: int = 200 * 1024 * 1024
+    # Max AI calls per day per anonymous client before we ask them to bring
+    # their own key (see app.quota). Readers who supply one aren't counted.
+    ai_daily_limit: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -55,6 +58,7 @@ class Settings:
             db_path=data_dir / "reader.db",
             pdf_dir=data_dir / "pdfs",
             render_cache_dir=data_dir / "renders",
+            ai_daily_limit=int(os.environ.get("AI_DAILY_LIMIT", "20")),
         )
 
     def ensure_dirs(self) -> None:

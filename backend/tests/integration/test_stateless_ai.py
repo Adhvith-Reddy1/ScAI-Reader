@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import ai, llm
+from app import ai, llm, quota
 from app.routes import explanations as exp
 
 
@@ -489,3 +489,76 @@ def test_explain_rate_limit_surfaces_friendly_message(
     body = r.text
     assert ai.AI_RATE_LIMITED_MESSAGE in body
     assert ai.AI_RATE_LIMITED_CODE in body
+
+
+# ---------------------------------------------------------------------------
+# Daily AI quota (anonymous, per-browser client id — see app.quota)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_explain_quota_exceeded_yields_coded_error(
+    app_client, tmp_settings, simple_pdf, monkeypatch
+):
+    monkeypatch.setattr(
+        llm, "stream_completion", _fake_stream(("delta", "Hi"), ("done", "Hi"))
+    )
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    doc_id = _upload(app_client, simple_pdf)
+
+    headers = {"X-Client-Id": "quota-test-client-0000000000000000"}
+    for _ in range(tmp_settings.ai_daily_limit):
+        r = app_client.post(
+            f"/documents/{doc_id}/ai/explain",
+            json={"text": "entropy", "page": 1},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert '"type": "done"' in r.text
+
+    r = app_client.post(
+        f"/documents/{doc_id}/ai/explain",
+        json={"text": "entropy", "page": 1},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert ai.AI_QUOTA_EXCEEDED_MESSAGE in body
+    assert ai.AI_QUOTA_EXCEEDED_CODE in body
+    # No LLM call for the denied request: the fake only ever yields "done" text.
+    assert body.count('"type": "done"') == 0
+
+
+@pytest.mark.integration
+def test_explain_user_supplied_key_bypasses_quota(
+    app_client, tmp_settings, simple_pdf, monkeypatch
+):
+    captured: list[str] = []
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        captured.append(config.api_key)
+        yield ("done", "ok")
+
+    monkeypatch.setattr(llm, "stream_completion", _gen)
+    doc_id = _upload(app_client, simple_pdf)
+
+    client_id = "quota-test-client-1111111111111111"
+    for _ in range(tmp_settings.ai_daily_limit):
+        assert quota.try_consume(
+            tmp_settings, f"id:{client_id}", tmp_settings.ai_daily_limit
+        )
+    # This client's shared-key quota is now exhausted for today.
+    assert not quota.try_consume(
+        tmp_settings, f"id:{client_id}", tmp_settings.ai_daily_limit
+    )
+
+    r = app_client.post(
+        f"/documents/{doc_id}/ai/explain",
+        json={"text": "entropy", "page": 1},
+        headers={"X-Client-Id": client_id, "X-User-Api-Key": "sk-personal-test"},
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert ai.AI_QUOTA_EXCEEDED_CODE not in body
+    assert '"type": "done"' in body
+    assert captured == ["sk-personal-test"]

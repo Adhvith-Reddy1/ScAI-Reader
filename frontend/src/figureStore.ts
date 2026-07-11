@@ -61,6 +61,24 @@ export function getFigureState(docId: string, figureId: string): FigureState {
   return ensureEntry(docId, figureId).state;
 }
 
+/**
+ * Retry after an error — e.g. the reader just added their own API key to get
+ * past the daily quota (see UserKeyPrompt.ts). `startFigureExplanation`
+ * no-ops unless the entry is `idle`, so this resets it first.
+ */
+export function retryFigureExplanation(
+  docId: string,
+  figureId: string,
+  page: number,
+  label: string,
+  bbox?: FigureBBox,
+): void {
+  const entry = ensureEntry(docId, figureId);
+  if (entry.state.status !== "error") return;
+  setState(entry, { status: "idle" });
+  void startFigureExplanation(docId, figureId, page, label, bbox);
+}
+
 export function seedFigure(
   docId: string,
   figureId: string,

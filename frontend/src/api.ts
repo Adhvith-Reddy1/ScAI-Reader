@@ -1,3 +1,6 @@
+import { getClientId } from "./clientId.ts";
+import { getUserApiKey } from "./userApiKey.ts";
+
 export interface DocumentMeta {
   id: string;
   filename: string;
@@ -183,6 +186,24 @@ export type ExplanationKind = "definition" | "explanation";
 
 /** Error code on an SSE error frame when the only problem is a missing key. */
 export const AI_NOT_CONFIGURED_CODE = "ai_not_configured";
+/** Error code when the browser has used up today's free shared AI quota. */
+export const AI_QUOTA_EXCEEDED_CODE = "ai_quota_exceeded";
+
+/**
+ * Headers for every AI request: an anonymous per-browser id the backend uses
+ * to bound the shared daily quota (see backend/app/quota.py), plus the
+ * reader's own API key when they've set one after hitting that quota — never
+ * stored server-side, just forwarded for that one call.
+ */
+function aiHeaders(): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Client-Id": getClientId(),
+  };
+  const userKey = getUserApiKey();
+  if (userKey) headers["X-User-Api-Key"] = userKey;
+  return headers;
+}
 
 export interface ExplainCallbacks {
   onMeta?: (kind: ExplanationKind, cached: boolean) => void;
@@ -260,7 +281,7 @@ function streamChatLike(
     try {
       r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: aiHeaders(),
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });
@@ -380,7 +401,7 @@ export function streamFigureExplanation(
     try {
       r = await fetch(`/documents/${docId}/figures/${figureId}/ai-explain`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: aiHeaders(),
         body: JSON.stringify({ page, label, bbox }),
         signal: ctrl.signal,
       });
@@ -453,7 +474,7 @@ export function streamExplanation(
     try {
       r = await fetch(`/documents/${docId}/ai/explain`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: aiHeaders(),
         body: JSON.stringify({ text, page, page_text: pageText }),
         signal: ctrl.signal,
       });

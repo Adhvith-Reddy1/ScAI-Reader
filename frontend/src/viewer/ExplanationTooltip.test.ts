@@ -4,10 +4,21 @@ import {
   dismissExplanationFor,
   _resetForTest as _resetTooltip,
 } from "./ExplanationTooltip.ts";
-import type { ChatStreamCallbacks, DocumentMeta } from "../api.ts";
+import type { ChatStreamCallbacks, DocumentMeta, ExplainCallbacks } from "../api.ts";
+import { _resetForTest as _resetKeyPrompt } from "../UserKeyPrompt.ts";
 
-// Capture the stream callbacks so tests can complete a chat turn, and observe
-// refine kick-offs. hydrate/start are inert so state comes from seedExplanation.
+// Capture the stream callbacks so tests can complete a chat turn, drive an
+// explain error, and observe refine kick-offs. hydrate/start are otherwise
+// inert so state comes from seedExplanation unless a test drives it directly.
+const streamExplanationMock = vi.fn(
+  (
+    _d: string,
+    _p: number,
+    _t: string,
+    _cb: ExplainCallbacks,
+    _pt?: string,
+  ) => () => {},
+);
 const streamChatMock = vi.fn(
   (_d: string, _b: unknown, _cb: ChatStreamCallbacks) => () => {},
 );
@@ -16,7 +27,15 @@ const streamRefineMock = vi.fn(
 );
 
 vi.mock("../api.ts", () => ({
-  streamExplanation: vi.fn(() => () => {}),
+  AI_NOT_CONFIGURED_CODE: "ai_not_configured",
+  AI_QUOTA_EXCEEDED_CODE: "ai_quota_exceeded",
+  streamExplanation: (
+    d: string,
+    p: number,
+    t: string,
+    cb: ExplainCallbacks,
+    pt?: string,
+  ) => streamExplanationMock(d, p, t, cb, pt) ?? (() => {}),
   streamChat: (d: string, b: unknown, cb: ChatStreamCallbacks) =>
     streamChatMock(d, b, cb) ?? (() => {}),
   streamRefine: (d: string, b: unknown, cb: ChatStreamCallbacks) =>
@@ -103,14 +122,19 @@ describe("ExplanationTooltip pin / chat / resize", () => {
     vi.useFakeTimers();
     _resetTooltip();
     _resetStore();
+    _resetKeyPrompt();
+    streamExplanationMock.mockReset().mockReturnValue(() => {});
     streamChatMock.mockReset().mockReturnValue(() => {});
     streamRefineMock.mockReset().mockReturnValue(() => {});
     document.body.innerHTML = "";
+    localStorage.clear();
   });
   afterEach(() => {
     _resetTooltip();
+    _resetKeyPrompt();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("opens the chat and hides the footer (Delete) when pinned", async () => {
@@ -292,5 +316,45 @@ describe("ExplanationTooltip pin / chat / resize", () => {
 
     dismissExplanationFor("a");
     expect(tip.style.display).toBe("none");
+  });
+
+  it("a quota-exceeded error offers to add a personal key and retries", async () => {
+    const group = buildBlueHighlight();
+    bindBlueAnnotation(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve(); // bindBlueAnnotation attaches on a microtask
+    hoverInto(group);
+    vi.advanceTimersByTime(300); // past DWELL_MS
+    // show() awaits hydrate (a mocked cache miss), which itself awaits before
+    // startExplanation's own cache-first check runs and finally calls
+    // streamExplanation — flush a few microtask ticks for that chain.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(streamExplanationMock).toHaveBeenCalledTimes(1);
+    const [, , , firstCallbacks] = streamExplanationMock.mock.calls[0];
+    firstCallbacks.onError("Daily quota used up.", "ai_quota_exceeded");
+
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+    expect(
+      tip.querySelector(".explanation-tooltip-title")!.textContent,
+    ).toBe("Daily free AI limit reached");
+    const addKeyBtn = tip.querySelector<HTMLButtonElement>(
+      ".explanation-setup-ai",
+    )!;
+    addKeyBtn.click();
+
+    const dialog = document.querySelector<HTMLElement>(".ai-setup-dialog")!;
+    expect(dialog).toBeTruthy();
+    const input = dialog.querySelector<HTMLInputElement>(".ai-setup-input")!;
+    input.value = "sk-personal-test";
+    dialog.querySelector<HTMLButtonElement>(".ai-setup-save")!.click();
+    // retryExplanation's startExplanation call awaits its own cache-first
+    // check (mocked miss) before re-invoking streamExplanation.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    // The dialog closes, the key is saved client-side only, and the original
+    // request is retried automatically.
+    expect(document.querySelector(".ai-setup-dialog")).toBeNull();
+    expect(localStorage.getItem("scai.userApiKey")).toBe("sk-personal-test");
+    expect(streamExplanationMock).toHaveBeenCalledTimes(2);
   });
 });
