@@ -356,6 +356,47 @@ def test_figure_ai_chat_404_for_unknown_document(app_client):
     assert r.status_code == 404
 
 
+@pytest.mark.integration
+def test_figure_ai_chat_quota_exceeded_yields_coded_error(
+    app_client, tmp_settings, simple_pdf, monkeypatch
+):
+    """The follow-up chat route must honor the same daily quota gate as
+    every other AI route — it's easy to add a new route and forget to wire
+    it into `_ai_gate`/`_gated_stream`."""
+    monkeypatch.setattr(
+        llm, "stream_completion", _fake_stream(("delta", "Hi"), ("done", "Hi"))
+    )
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    doc_id = _upload(app_client, simple_pdf)
+
+    headers = {"X-Client-Id": "quota-test-client-2222222222222222"}
+    body = {
+        "page": 1,
+        "label": "Figure 1",
+        "content": "x",
+        "messages": [{"role": "user", "content": "why?"}],
+    }
+    for _ in range(tmp_settings.ai_daily_limit):
+        r = app_client.post(
+            f"/documents/{doc_id}/figures/p1_Figure_1/ai-chat",
+            json=body,
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert '"type": "done"' in r.text
+
+    r = app_client.post(
+        f"/documents/{doc_id}/figures/p1_Figure_1/ai-chat",
+        json=body,
+        headers=headers,
+    )
+    assert r.status_code == 200
+    text = r.text
+    assert ai.AI_QUOTA_EXCEEDED_MESSAGE in text
+    assert ai.AI_QUOTA_EXCEEDED_CODE in text
+    assert text.count('"type": "done"') == 0
+
+
 # ---------------------------------------------------------------------------
 # kind defaults via classify
 # ---------------------------------------------------------------------------
