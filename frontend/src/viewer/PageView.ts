@@ -32,7 +32,7 @@ import { getHighlightMode } from "../highlightMode.ts";
 import { getExplainMode } from "../explainMode.ts";
 import { seedExplanation, startExplanation } from "../explanationStore.ts";
 import { getZoom, subscribeZoom } from "../zoom.ts";
-import { getRotation, subscribeRotation } from "../rotation.ts";
+import { getRotation, subscribeRotation, type Rotation } from "../rotation.ts";
 import { rotatedFootprint, screenRectToContent, screenPointToContent } from "./rotate.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
 import { dismissExplanationFor } from "./ExplanationTooltip.ts";
@@ -66,6 +66,12 @@ interface PageState {
   hoveredFigureId: string | null;
   currentDpi: number;
   findHits: HTMLElement[];
+  /** Rotation the content transform was last written for. Zoom/fit ticks
+   * call applyDisplay() far more often than rotation actually changes (every
+   * frame of a pinch gesture vs. an explicit rotate click), so re-parsing an
+   * unchanged `transform` string on every one of those ticks is pure waste —
+   * skip the write when rotation hasn't moved since the last apply. */
+  lastRot: Rotation | null;
 }
 
 export interface PageViewHandle {
@@ -111,6 +117,7 @@ export function buildPageView(
     hoveredFigureId: null,
     currentDpi: 0,
     findHits: [],
+    lastRot: null,
   };
 
   const applyDisplay = (): void => {
@@ -128,7 +135,10 @@ export function buildPageView(
     wrap.style.height = `${foot.height}px`;
     content.style.width = `${widthPx}px`;
     content.style.height = `${heightPx}px`;
-    content.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
+    if (rot !== state.lastRot) {
+      content.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
+      state.lastRot = rot;
+    }
     img.style.width = `${widthPx}px`;
     img.style.height = `${heightPx}px`;
 
