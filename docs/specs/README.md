@@ -191,3 +191,86 @@ sequentially (04 → 05 → 06) over true-simultaneous.
 2. New tests added and the full relevant suite is green.
 3. App builds; Playwright smoke test passes.
 4. No edits outside the spec's declared scope (except the documented shared files).
+
+---
+
+# Phase 2 — Accounts, analytics, sync
+
+Phase 1 (Specs 01–07 above) made the server stateless with a persistent
+content cache, then added a daily AI-usage quota keyed by an anonymous
+per-browser `client_id` (`frontend/src/clientId.ts`, `backend/app/quota.py`,
+header `X-Client-Id`) with a bring-your-own-key fallback. **Every Phase 2
+spec below depends on that quota/BYO-key work being merged to `main` first**
+— they all reuse the `client_id` convention rather than reinventing an
+anonymous identity.
+
+Phase 2's goal: optional sign-in (never required), aggregate usage
+analytics with a dashboard to view them, and the one feature actually worth
+signing up for — cross-device sync.
+
+## Dependency graph & waves
+
+```
+WAVE 1 (start in parallel — independent, both build on X-Client-Id):
+  08-optional-accounts       (Google OAuth, sessions, links client_id -> account)
+  09-usage-analytics         (event tracking: highlights, explanation ratio, sessions)
+
+WAVE 2 (each depends on exactly one Wave-1 spec; the two Wave-2 specs are
+        independent of EACH OTHER, so 10 can start once 09 merges even if
+        08/11 aren't done yet, and vice versa):
+  10-usage-dashboard         (depends on 09 — reads usage_events + ai_usage)
+  11-cross-device-sync       (depends on 08 — reads auth.get_current_user_id)
+
+WAVE 3 (after both 08 and 11 merged):
+  12-signup-nudge            (needs the sign-in entry point AND a real
+                               feature — sync — to honestly promise)
+```
+
+**Why this split is parallel-safe:** 08 and 09 touch disjoint tables/routes
+(`users`/`client_links`/`auth.py` vs. `usage_events`/`analytics.py`) and
+only share the read-only `X-Client-Id` header convention already frozen in
+Phase 1 — no coordination needed between them. 10 and 11 each depend on
+exactly one Wave-1 spec and don't touch each other's files, so once their
+respective prerequisite lands they can run concurrently with each other.
+12 is intentionally last: it's UI/copy only, but it depends on both an
+entry point (08) and a true feature to point to (11).
+
+## Shared Contract D — auth (owned by Spec 08)
+
+```
+GET  /auth/me                -> { signedIn: boolean, email: string | null }
+GET  /auth/google/start      (redirect to Google)
+GET  /auth/google/callback   (redirect back to "/"; sets scai_session cookie)
+POST /auth/logout            -> { signedIn: false }
+```
+Backend: `auth.get_current_user_id(request) -> str | None` — later specs
+import this, they don't parse the session cookie themselves. Frontend:
+`getAccountStatus(): Promise<{signedIn, email}>` in `api.ts`.
+
+## Shared "contract" — usage events (owned by Spec 09)
+
+Not a frozen API in the same sense (nothing outside Spec 10 calls it), but
+Spec 10 depends on this exact shape, so treat it as frozen once 09 merges:
+
+```
+POST /analytics/event   body: { event_type, doc_id?, kind? }   -> 204
+```
+`event_type` ∈ `{highlight_created, explanation_viewed, session_start}`.
+Table: `usage_events(id, client_id, doc_id, event_type, kind, occurred_at)`.
+**Never** put highlighted text, explanation content, or page text in this
+table — see the privacy-boundary note in Spec 09 itself.
+
+## Conflict map addendum (Phase 2)
+
+| File | Touched by | Rule |
+|---|---|---|
+| `frontend/src/main.ts` | 08, 12 | 08 adds the account nav button; 12 adds the nudge trigger. Land 08 first. |
+| `frontend/src/api.ts` | 08, 09, 11 | Each adds only the functions it owns (08: `getAccountStatus`; 09: `trackEvent`; 11: `syncAnnotations*`). Add new functions; avoid reordering. |
+| Highlight-creation call site (`highlightMode.ts`/`HighlightButton.ts`) | 09, 12 | 09 adds the `highlight_created` tracking call; 12 piggybacks on the same call site for its counter rather than adding a second hook. Land 09 first. |
+| `backend/app/storage/db.py` | 08, 09, 11 | Each spec adds its own new `CREATE TABLE IF NOT EXISTS` block; don't touch another spec's tables. |
+
+## Conventions (Phase 2 additions)
+- **Base off** the latest `main` (once the quota/BYO-key work has merged).
+- Everything else in the Conventions section above still applies
+  (branch naming, green-main requirement, test requirements, Definition of
+  done).
