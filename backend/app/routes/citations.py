@@ -168,6 +168,12 @@ def list_page_citations(
         ref_map = (
             _load_reference_map(conn, doc_id) if status == "complete" else {}
         )
+        references_error = None
+        if status == "error":
+            row = conn.execute(
+                "SELECT error FROM reference_runs WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+            references_error = row["error"] if row else None
     refs_ready = status == "complete"
 
     items: list[dict] = []
@@ -186,6 +192,7 @@ def list_page_citations(
         "page_width_pt": dims.width_pt,
         "page_height_pt": dims.height_pt,
         "references_status": status,
+        "references_error": references_error,
         "citations": items,
     }
 

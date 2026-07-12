@@ -24,6 +24,8 @@ function markers(): CitationMarker[] {
       bbox: { x0: 100, y0: 200, x1: 120, y1: 212 },
       numbers: [1],
       raw: "[1]",
+      source: "heuristic",
+      references: [],
     },
     {
       marker_id: "p0_c1",
@@ -31,6 +33,8 @@ function markers(): CitationMarker[] {
       bbox: { x0: 300, y0: 200, x1: 330, y1: 212 },
       numbers: [2, 3],
       raw: "[2, 3]",
+      source: "link",
+      references: [],
     },
   ];
 }
@@ -39,31 +43,33 @@ describe("buildCitationLayer", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("creates one .citation-marker button per marker", () => {
-    const root = buildCitationLayer("doc1", markers(), geom);
+    const root = buildCitationLayer("doc1", markers(), geom, "complete");
     expect(root.querySelectorAll(".citation-marker").length).toBe(2);
   });
 
   it("scales the hotspot from page-space to viewport-space", () => {
-    const root = buildCitationLayer("doc1", markers(), geom);
+    const root = buildCitationLayer("doc1", markers(), geom, "complete");
     const first = root.querySelector(".citation-marker") as HTMLButtonElement;
     expect(parseFloat(first.style.left)).toBeCloseTo(100 * (900 / 612), 1);
     expect(parseFloat(first.style.top)).toBeCloseTo(200 * (1164.7 / 792), 1);
   });
 
-  it("opens the citation card with the marker on click", () => {
+  it("opens the citation card with the marker and status on click", () => {
     const ms = markers();
-    const root = buildCitationLayer("doc1", ms, geom);
+    const root = buildCitationLayer("doc1", ms, geom, "pending");
     const second = root.querySelectorAll(".citation-marker")[1] as HTMLButtonElement;
     second.click();
     expect(showCitationCard).toHaveBeenCalledOnce();
-    const [docId, marker] = (showCitationCard as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const [docId, marker, , status] = (
+      showCitationCard as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
     expect(docId).toBe("doc1");
     expect(marker.numbers).toEqual([2, 3]);
+    expect(status).toBe("pending");
   });
 
   it("renders nothing when there are no markers", () => {
-    const root = buildCitationLayer("doc1", [], geom);
+    const root = buildCitationLayer("doc1", [], geom, "complete");
     expect(root.querySelectorAll(".citation-marker").length).toBe(0);
   });
 });

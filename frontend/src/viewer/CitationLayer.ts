@@ -1,23 +1,27 @@
 /**
  * Clickable overlay for in-text citation markers.
  *
- * One transparent `<button>` per detected marker, positioned over the bracket
- * in the rasterized page. The brackets are already legible in the page image;
- * this layer just makes them clickable (a subtle hover tint signals it). On
- * click we open the citation card with the marker's reference number(s).
+ * One transparent `<button>` per resolved citation, positioned over the marker
+ * in the rasterized page (a subtle hover tint signals it's clickable). On click
+ * we open the citation card, which renders the reference(s) the backend already
+ * attached to the marker.
  *
  * The layer sits above the text layer so clicks land on markers, but it only
- * covers the small bracket hotspots, leaving the rest of the page selectable.
+ * covers the small marker hotspots, leaving the rest of the page selectable.
  */
 
-import type { CitationMarker } from "../api.ts";
+import type { CitationMarker, PageCitationsResponse } from "../api.ts";
 import { pageBBoxToViewport, type PageGeometry } from "./coords.ts";
 import { showCitationCard } from "./CitationCard.ts";
+
+type RefStatus = PageCitationsResponse["references_status"];
 
 export function buildCitationLayer(
   docId: string,
   markers: CitationMarker[],
   geom: PageGeometry,
+  referencesStatus: RefStatus,
+  referencesError: string | null = null,
 ): HTMLDivElement {
   const root = document.createElement("div");
   root.className = "citation-layer";
@@ -41,7 +45,13 @@ export function buildCitationLayer(
     hot.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showCitationCard(docId, marker, hot.getBoundingClientRect());
+      showCitationCard(
+        docId,
+        marker,
+        hot.getBoundingClientRect(),
+        referencesStatus,
+        referencesError,
+      );
     });
 
     root.appendChild(hot);

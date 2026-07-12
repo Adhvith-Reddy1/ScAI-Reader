@@ -9,15 +9,19 @@ import {
   type Annotation,
   type CitationMarker,
   type DocumentMeta,
+  type PageCitationsResponse,
   type PageDimension,
   type PageFigure,
   type PageText,
   type Rect,
 } from "../api.ts";
 import { seedFigure } from "../figureStore.ts";
-import { loadReferences } from "../referenceStore.ts";
+import { loadReferences, subscribeReferences } from "../referenceStore.ts";
 import { getRotation, subscribeRotation } from "../rotation.ts";
 import { buildCitationLayer } from "./CitationLayer.ts";
+import { refreshCitationCard } from "./CitationCard.ts";
+
+type RefStatus = PageCitationsResponse["references_status"];
 import { showFigureCard } from "./FigureCard.ts";
 import { pageBBoxToVisualRect, visualPointToPage } from "./coords.ts";
 import {
@@ -57,6 +61,10 @@ interface PageState {
   figures: PageFigure[];
   citations: CitationMarker[];
   citationsLoaded: boolean;
+  citationsStatus: RefStatus;
+  citationsError: string | null;
+  citationRefetchUnsub: (() => void) | null;
+  disposed: boolean;
   currentDpi: number;
   findHits: HTMLElement[];
 }
@@ -107,6 +115,10 @@ export function buildPageView(
     figures: [],
     citations: [],
     citationsLoaded: false,
+    citationsStatus: "absent",
+    citationsError: null,
+    citationRefetchUnsub: null,
+    disposed: false,
     currentDpi: 0,
     findHits: [],
   };
@@ -176,7 +188,15 @@ export function buildPageView(
     // Citation markers sit above the text layer so their small hotspots get
     // the click; the rest of the page stays selectable.
     if (state.citations.length > 0) {
-      canvas.appendChild(buildCitationLayer(meta.id, state.citations, geom));
+      canvas.appendChild(
+        buildCitationLayer(
+          meta.id,
+          state.citations,
+          geom,
+          state.citationsStatus,
+          state.citationsError,
+        ),
+      );
     }
     registerLiveSelection(canvas, liveSelectionLayer);
     void refreshAnnotations(meta, pageNumber, canvas, state);
@@ -235,6 +255,9 @@ export function buildPageView(
   return {
     element: wrap,
     dispose: () => {
+      state.disposed = true;
+      state.citationRefetchUnsub?.();
+      state.citationRefetchUnsub = null;
       unsubZoom();
       unsubFit();
       unsubRotation();
@@ -386,6 +409,12 @@ async function maybeAutoSaveHighlight(
   }
 }
 
+function applyCitations(state: PageState, resp: PageCitationsResponse): void {
+  state.citations = resp.citations;
+  state.citationsStatus = resp.references_status;
+  state.citationsError = resp.references_error ?? null;
+}
+
 async function loadCitations(
   meta: DocumentMeta,
   pageNumber: number,
@@ -394,19 +423,56 @@ async function loadCitations(
 ): Promise<void> {
   if (state.citationsLoaded) return;
   state.citationsLoaded = true;
+  let resp: PageCitationsResponse;
   try {
-    const resp = await fetchPageCitations(meta.id, pageNumber);
-    state.citations = resp.citations;
+    resp = await fetchPageCitations(meta.id, pageNumber);
   } catch {
-    state.citations = [];
     return;
   }
+  if (state.disposed) return;
+  applyCitations(state, resp);
   if (state.citations.length === 0) return;
-  // Start parsing the bibliography now so the reference list is ready (or
-  // close to it) by the time the reader clicks a marker.
-  loadReferences(meta.id);
   // Re-run layout so the citation layer is drawn over the current geometry.
   redraw();
+
+  // The markers are only fully resolved (references attached, false-positive
+  // superscripts filtered) once the bibliography parse completes. Kick it off
+  // and, while it's still running, re-fetch this page's citations when it
+  // settles so resolution/precision take effect.
+  if (state.citationsStatus === "pending" || state.citationsStatus === "absent") {
+    loadReferences(meta.id);
+    state.citationRefetchUnsub = subscribeReferences(meta.id, (rs) => {
+      if (rs.status === "loading" || rs.status === "idle") return;
+      state.citationRefetchUnsub?.();
+      state.citationRefetchUnsub = null;
+      void refetchCitations(meta, pageNumber, state, redraw);
+    });
+  }
+}
+
+async function refetchCitations(
+  meta: DocumentMeta,
+  pageNumber: number,
+  state: PageState,
+  redraw: () => void,
+): Promise<void> {
+  if (state.disposed) return;
+  let resp: PageCitationsResponse;
+  try {
+    resp = await fetchPageCitations(meta.id, pageNumber);
+  } catch {
+    return;
+  }
+  if (state.disposed) return;
+  applyCitations(state, resp);
+  redraw();
+  // Update (or close) any citation card open for this page.
+  refreshCitationCard(
+    meta.id,
+    state.citations,
+    state.citationsStatus,
+    state.citationsError,
+  );
 }
 
 async function loadFigures(

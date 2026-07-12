@@ -358,8 +358,16 @@ export interface CitationMarker {
   bbox: { x0: number; y0: number; x1: number; y1: number };
   /** Reference numbers this marker resolves to ("[3, 5]" -> [3, 5]). */
   numbers: number[];
-  /** The literal bracket text, e.g. "[3, 5]". */
+  /** The literal marker text, e.g. "[3, 5]" or a superscript "24". */
   raw: string;
+  /** Where the marker came from: a real link annotation vs. text heuristic. */
+  source: "link" | "heuristic";
+  /**
+   * References resolved for this marker's number(s), attached by the backend
+   * once the bibliography is parsed. Empty while parsing, or when a number
+   * isn't in the reference list.
+   */
+  references: ReferenceEntry[];
 }
 
 export interface PageCitationsResponse {
@@ -367,6 +375,10 @@ export interface PageCitationsResponse {
   page: number;
   page_width_pt: number;
   page_height_pt: number;
+  /** State of the bibliography parse the resolution depends on. */
+  references_status: ReferencesStatus | "absent";
+  /** Backend failure detail when references_status is "error". */
+  references_error?: string | null;
   citations: CitationMarker[];
 }
 
