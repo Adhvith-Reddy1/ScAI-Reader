@@ -893,7 +893,18 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .explanation-tooltip-body {
   white-space: pre-wrap;
 }
-.explanation-tooltip.is-loading .explanation-tooltip-body::after {
+.explanation-tooltip-body p,
+.explanation-tooltip-body ul {
+  margin: 0 0 8px;
+}
+.explanation-tooltip-body p:last-child,
+.explanation-tooltip-body ul:last-child {
+  margin-bottom: 0;
+}
+.explanation-tooltip-body ul {
+  padding-left: 18px;
+}
+.explanation-tooltip.is-loading .explanation-tooltip-body :last-child::after {
   content: "";
   display: inline-block;
   width: 6px;
@@ -1027,6 +1038,17 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.explanation-chat-msg p,
+.explanation-chat-msg ul {
+  margin: 0 0 6px;
+}
+.explanation-chat-msg p:last-child,
+.explanation-chat-msg ul:last-child {
+  margin-bottom: 0;
+}
+.explanation-chat-msg ul {
+  padding-left: 16px;
+}
 .explanation-chat-msg.is-user {
   align-self: flex-end;
   background: rgba(79, 140, 255, 0.22);
@@ -1038,7 +1060,8 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 .explanation-chat-thread.is-streaming
-  .explanation-chat-msg.is-assistant:last-child::after {
+  .explanation-chat-msg.is-assistant:last-child
+  :last-child::after {
   content: "";
   display: inline-block;
   width: 6px;
@@ -1191,7 +1214,18 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   padding: 0 14px 12px;
   white-space: pre-wrap;
 }
-.figure-card.is-loading .figure-card-body::after {
+.figure-card-body p,
+.figure-card-body ul {
+  margin: 0 0 8px;
+}
+.figure-card-body p:last-child,
+.figure-card-body ul:last-child {
+  margin-bottom: 0;
+}
+.figure-card-body ul {
+  padding-left: 18px;
+}
+.figure-card.is-loading .figure-card-body :last-child::after {
   content: "";
   display: inline-block;
   width: 6px;

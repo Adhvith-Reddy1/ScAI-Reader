@@ -17,6 +17,7 @@ import {
   AI_QUOTA_EXCEEDED_CODE,
   type DocumentMeta,
 } from "../api.ts";
+import { renderFormattedText } from "../aiText.ts";
 import { openAiSetup } from "../AiSetup.ts";
 import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
@@ -469,12 +470,12 @@ function render(annotationId: string): void {
     el.classList.add("is-loading");
     title.textContent =
       state.kind === "definition" ? "Definition" : "Explanation";
-    body.textContent = state.content || "Thinking…";
+    renderFormattedText(body, state.content || "Thinking…");
   } else if (state.status === "ready") {
     el.classList.add("is-ready");
     title.textContent =
       state.kind === "definition" ? "Definition" : "Explanation";
-    body.textContent = state.content;
+    renderFormattedText(body, state.content);
   } else if (state.status === "error") {
     el.classList.add("is-error");
     if (state.code === AI_NOT_CONFIGURED_CODE) {
@@ -565,7 +566,7 @@ function renderChat(annotationId: string, chatAvailable: boolean): void {
   for (const msg of chat.messages) {
     const row = document.createElement("div");
     row.className = `explanation-chat-msg is-${msg.role}`;
-    row.textContent = msg.content;
+    renderFormattedText(row, msg.content);
     thread.appendChild(row);
   }
   if (chat.streaming) {
@@ -776,6 +777,30 @@ export function bindBlueAnnotation(
     cancelled = true;
     if (resolvedCleanup) resolvedCleanup();
   };
+}
+
+/**
+ * Show the panel immediately, pinned open, for a highlight the reader just
+ * created — so the definition/explanation stays in view while it streams
+ * instead of requiring the reader to keep hovering the highlight. Dismisses
+ * the same way a pinned hover-opened panel does (outside click, Escape, or
+ * the close button).
+ */
+export function showExplanationForNewHighlight(
+  group: SVGGElement,
+  doc: DocumentMeta,
+  annotationId: string,
+  page: number,
+  text: string | null,
+  onDelete: (annotationId: string) => void,
+  pageText: string | null = null,
+): void {
+  pinned = true;
+  pinnedPlaced = false;
+  void show(
+    { group, doc, annotationId, page, text, onDelete, pageText },
+    group.getBoundingClientRect(),
+  );
 }
 
 /** Public hide, for callers that want to dismiss explicitly. */

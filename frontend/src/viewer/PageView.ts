@@ -35,7 +35,10 @@ import { getZoom, subscribeZoom } from "../zoom.ts";
 import { getRotation, subscribeRotation, type Rotation } from "../rotation.ts";
 import { rotatedFootprint, screenRectToContent, screenPointToContent } from "./rotate.ts";
 import { buildAnnotationLayer } from "./AnnotationLayer.ts";
-import { dismissExplanationFor } from "./ExplanationTooltip.ts";
+import {
+  dismissExplanationFor,
+  showExplanationForNewHighlight,
+} from "./ExplanationTooltip.ts";
 import { applyFindToTextLayer, markCurrent } from "./findInPage.ts";
 import {
   buildLiveSelectionLayer,
@@ -279,6 +282,24 @@ function refreshFindMatches(
   });
 }
 
+function makeAnnotationDeleteHandler(
+  meta: DocumentMeta,
+  pageNumber: number,
+  wrap: HTMLElement,
+  state: PageState,
+): (annotationId: string) => Promise<void> {
+  return async (annotationId) => {
+    try {
+      await deleteAnnotation(meta.id, annotationId);
+    } catch {
+      return;
+    }
+    // Close any explanation panel pinned to the highlight we just removed.
+    dismissExplanationFor(annotationId);
+    await refreshAnnotations(meta, pageNumber, wrap, state);
+  };
+}
+
 async function refreshAnnotations(
   meta: DocumentMeta,
   pageNumber: number,
@@ -312,16 +333,7 @@ async function refreshAnnotations(
   const svg = buildAnnotationLayer(
     annotations,
     state.geom,
-    async (annotationId) => {
-      try {
-        await deleteAnnotation(meta.id, annotationId);
-      } catch {
-        return;
-      }
-      // Close any explanation panel pinned to the highlight we just removed.
-      dismissExplanationFor(annotationId);
-      await refreshAnnotations(meta, pageNumber, wrap, state);
-    },
+    makeAnnotationDeleteHandler(meta, pageNumber, wrap, state),
     meta,
     state.text ? flattenPageText(state.text) : null,
   );
@@ -420,19 +432,33 @@ async function maybeAutoSaveHighlight(
   sel.removeAllRanges();
   await refreshAnnotations(meta, pageNumber, wrap, state);
 
-  // Explanation highlights eagerly generate an AI definition/explanation so
-  // that by the time the user hovers, the response is partially or fully ready.
-  // The page text was already fetched to build this page's text layer, so we
-  // send it directly rather than making the server re-derive it from its own
-  // (possibly-evicted, since we run with no disk) copy of the PDF.
+  // Explanation highlights eagerly generate an AI definition/explanation, and
+  // the panel opens right away, pinned — so the reader sees it stream in
+  // without having to hover the highlight (and keep hovering) while it
+  // loads. The page text was already fetched to build this page's text
+  // layer, so we send it directly rather than making the server re-derive it
+  // from its own (possibly-evicted, since we run with no disk) copy of the
+  // PDF.
   if (mode.explain && selectedText) {
-    void startExplanation(
-      meta.id,
-      saved.id,
-      selectedText,
-      pageNumber,
-      state.text ? flattenPageText(state.text) : undefined,
+    const pageText = state.text ? flattenPageText(state.text) : null;
+    const group = state.annotationLayer?.querySelector<SVGGElement>(
+      `[data-annotation-id="${saved.id}"]`,
     );
+    if (group) {
+      showExplanationForNewHighlight(
+        group,
+        meta,
+        saved.id,
+        pageNumber,
+        selectedText,
+        makeAnnotationDeleteHandler(meta, pageNumber, wrap, state),
+        pageText,
+      );
+    } else {
+      // Fallback: couldn't find the group to anchor the panel to — still
+      // kick off the explanation so it's ready for the next hover.
+      void startExplanation(meta.id, saved.id, selectedText, pageNumber, pageText ?? undefined);
+    }
   }
 }
 

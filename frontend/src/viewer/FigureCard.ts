@@ -19,6 +19,7 @@ import {
   AI_QUOTA_EXCEEDED_CODE,
   type PageFigure,
 } from "../api.ts";
+import { renderFormattedText } from "../aiText.ts";
 import { openAiSetup } from "../AiSetup.ts";
 import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
@@ -165,7 +166,7 @@ function renderChat(): void {
   for (const msg of chat.messages) {
     const row = document.createElement("div");
     row.className = `explanation-chat-msg is-${msg.role}`;
-    row.textContent = msg.content;
+    renderFormattedText(row, msg.content);
     thread.appendChild(row);
   }
   thread.classList.toggle("is-streaming", chat.streaming);
@@ -189,10 +190,10 @@ function render(): void {
   el.classList.remove("is-loading", "is-error", "is-ready");
   if (state.status === "loading") {
     el.classList.add("is-loading");
-    body.textContent = state.content || "Looking at the figure…";
+    renderFormattedText(body, state.content || "Looking at the figure…");
   } else if (state.status === "ready") {
     el.classList.add("is-ready");
-    body.textContent = state.content;
+    renderFormattedText(body, state.content);
   } else if (state.status === "error") {
     el.classList.add("is-error");
     if (state.code === AI_NOT_CONFIGURED_CODE) {

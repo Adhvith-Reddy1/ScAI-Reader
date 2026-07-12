@@ -67,8 +67,13 @@ SYSTEM_CHAT = (
     "highlighted a term or passage and was shown a short tooltip, but it "
     "didn't fully resolve their doubt, so they're asking follow-up "
     "questions. Answer directly and concretely, grounding everything in "
-    "the attached paper. Be concise — at most 3 sentences per reply — and "
-    "address exactly what they asked. No preamble."
+    "the attached paper. If the answer has multiple distinct parts (e.g. "
+    "several reasons, or one point per item being compared), use short "
+    "'- ' bullet lines instead of cramming them into one dense paragraph; a "
+    "simple answer can just be a sentence or two of plain prose — don't "
+    "force structure where there's nothing to structure. Be concise — at "
+    "most 3 sentences' worth of content per reply — and address exactly "
+    "what they asked. No preamble."
 )
 
 # After chatting, the reader hits "Update" and we ask the model to fold the
