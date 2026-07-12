@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   bindBlueAnnotation,
   dismissExplanationFor,
+  showExplanationForNewHighlight,
   _resetForTest as _resetTooltip,
 } from "./ExplanationTooltip.ts";
 import type { ChatStreamCallbacks, DocumentMeta, ExplainCallbacks } from "../api.ts";
@@ -53,6 +54,7 @@ import {
   seedExplanation,
   _resetForTest as _resetStore,
 } from "../explanationStore.ts";
+import { getExplanation, putExplanation } from "../storage/localStore.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const DOC: DocumentMeta = {
@@ -356,5 +358,99 @@ describe("ExplanationTooltip pin / chat / resize", () => {
     expect(document.querySelector(".ai-setup-dialog")).toBeNull();
     expect(localStorage.getItem("scai.userApiKey")).toBe("sk-personal-test");
     expect(streamExplanationMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("showExplanationForNewHighlight", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetTooltip();
+    _resetStore();
+    _resetKeyPrompt();
+    streamExplanationMock.mockReset().mockReturnValue(() => {});
+    streamChatMock.mockReset().mockReturnValue(() => {});
+    streamRefineMock.mockReset().mockReturnValue(() => {});
+    // A prior describe block's `vi.restoreAllMocks()` strips these inline
+    // vi.mock() factory mocks down to a bare vi.fn() (no "real"
+    // implementation to restore to) — re-establish them so
+    // writeThroughCache's `putExplanation(...).catch(...)` has a promise to
+    // call `.catch` on.
+    vi.mocked(getExplanation).mockReset().mockResolvedValue(null);
+    vi.mocked(putExplanation).mockReset().mockResolvedValue(undefined);
+    document.body.innerHTML = "";
+    localStorage.clear();
+  });
+  afterEach(() => {
+    _resetTooltip();
+    _resetKeyPrompt();
+    vi.useRealTimers();
+    // Note: no vi.restoreAllMocks() here — it would strip the mocks above
+    // back down to a bare vi.fn(), breaking any later test/file that reuses
+    // this same mocked module.
+    localStorage.clear();
+  });
+
+  it("opens the panel immediately, pinned, without any hover/dwell", async () => {
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    // show() awaits hydrate, which awaits a cache read, before startExplanation
+    // does its own cache-first check and finally calls streamExplanation.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+    expect(tip.style.display).toBe("flex");
+    expect(tip.classList.contains("is-pinned")).toBe(true);
+    // The explanation stream kicked off right away.
+    expect(streamExplanationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays visible while the explanation streams, with no cursor on the highlight", async () => {
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+    const [, , , callbacks] = streamExplanationMock.mock.calls[0];
+    callbacks.onDelta("A measure ");
+    expect(tip.style.display).toBe("flex");
+    expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
+      "A measure",
+    );
+
+    // Simulate the cursor never having been on the highlight at all — no
+    // mousemove/mouseleave was ever dispatched over it — and let any hide
+    // timer that would fire for an unpinned tooltip elapse.
+    vi.advanceTimersByTime(1000);
+    expect(tip.style.display).toBe("flex");
+
+    callbacks.onDone("A measure of disorder.");
+    expect(tip.style.display).toBe("flex");
+    expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
+      "A measure of disorder.",
+    );
+  });
+
+  it("still dismisses via outside click, Escape, or the close button", async () => {
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve();
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(tip.style.display).toBe("none");
+  });
+
+  it("reuses an already-cached explanation instead of re-streaming", async () => {
+    seedExplanation("a", "definition", "cached answer");
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve();
+
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+    expect(tip.style.display).toBe("flex");
+    expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
+      "cached answer",
+    );
+    expect(streamExplanationMock).not.toHaveBeenCalled();
   });
 });

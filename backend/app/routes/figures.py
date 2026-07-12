@@ -46,10 +46,13 @@ SYSTEM_FIGURE = (
     "are the authors using this figure to argue for, and what specific "
     "pattern in the data — which comparison, trend, gap, or outlier — is "
     "the evidence for it? Say what the paper's argument would lose without "
-    "this figure. If panels are labelled (a, b, c), only single out a panel "
-    "when it carries a distinct piece of that argument. Hard limit: 4 "
-    "sentences, 90 words, no preamble, no bullets. The reader wants the "
-    "'so what', not a summary of what's already on the page."
+    "this figure. If panels are labelled (a, b, c) and each one carries a "
+    "distinct piece of that argument, structure your answer as one short "
+    "'- ' bullet line per panel (e.g. '- **a:** ...') instead of running "
+    "them together in one paragraph — that's easier to scan. Otherwise, a "
+    "single short paragraph is fine; don't force bullets onto a one-idea "
+    "figure. Hard limit: 4 sentences, 90 words, no preamble. The reader "
+    "wants the 'so what', not a summary of what's already on the page."
 )
 
 # When the short interpretation wasn't enough, the reader opens a follow-up
@@ -61,9 +64,13 @@ SYSTEM_FIGURE_CHAT = (
     "interpretation of the figure but it didn't fully resolve their "
     "question, so they're asking more. The figure image is attached — refer "
     "to specific panels, axes, or data points when it helps answer. Answer "
-    "directly and concretely, grounded in what's actually shown. Be "
-    "concise — at most 3 sentences per reply — and address exactly what "
-    "they asked. No preamble."
+    "directly and concretely, grounded in what's actually shown. If the "
+    "answer naturally breaks into multiple distinct parts (e.g. one point "
+    "per panel, or a short list of reasons), use short '- ' bullet lines "
+    "instead of one dense paragraph; a simple answer can just be a "
+    "sentence or two of plain prose. Be concise — at most 3 sentences' "
+    "worth of content per reply — and address exactly what they asked. No "
+    "preamble."
 )
 
 
