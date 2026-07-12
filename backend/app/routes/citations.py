@@ -30,8 +30,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.citations import (
-    CitationMarker,
-    detect_citations,
+    PageCitation,
+    build_page_citations,
     extract_references_text,
 )
 from ..pdf.pdfium_backend import PdfiumBackend
@@ -103,13 +103,33 @@ def _doc_exists(settings: Settings, doc_id: str) -> bool:
     return files.pdf_path(settings, doc_id).exists()
 
 
-def _marker_to_dict(m: CitationMarker) -> dict:
+def _citation_to_dict(c: PageCitation, references: list[dict]) -> dict:
     return {
-        "marker_id": m.marker_id,
-        "page": m.page_index + 1,
-        "bbox": {"x0": m.bbox.x0, "y0": m.bbox.y0, "x1": m.bbox.x1, "y1": m.bbox.y1},
-        "numbers": list(m.numbers),
-        "raw": m.raw,
+        "marker_id": c.marker_id,
+        "page": c.page_index + 1,
+        "bbox": {"x0": c.bbox.x0, "y0": c.bbox.y0, "x1": c.bbox.x1, "y1": c.bbox.y1},
+        "numbers": list(c.numbers),
+        "raw": c.raw,
+        "source": c.source,
+        # Resolved reference(s) for this marker's number(s); empty until the
+        # bibliography is parsed or if the number isn't in it.
+        "references": references,
+    }
+
+
+def _load_reference_map(conn, doc_id: str) -> dict[int, dict]:
+    """number -> {number, authors, title} for a document's parsed references."""
+    rows = conn.execute(
+        "SELECT number, authors, title FROM document_references WHERE doc_id = ?",
+        (doc_id,),
+    ).fetchall()
+    return {
+        row["number"]: {
+            "number": row["number"],
+            "authors": row["authors"],
+            "title": row["title"],
+        }
+        for row in rows
     }
 
 
@@ -119,7 +139,15 @@ def list_page_citations(
     page_number: int,
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """In-text citation markers on a single page (stateless regex sweep)."""
+    """Resolved in-text citations on a single page.
+
+    Merges link-annotation markers (ground truth) with heuristic detection,
+    then — once the bibliography is parsed — attaches each marker's reference
+    and drops heuristic markers whose number isn't in the reference set
+    (precision-first: those are almost always affiliation/footnote superscripts,
+    not citations). ``references_status`` tells the client whether resolution is
+    final or still pending the parse.
+    """
     if not _doc_exists(settings, doc_id):
         raise HTTPException(status_code=404, detail="document not found")
     if page_number < 1:
@@ -129,16 +157,36 @@ def list_page_citations(
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
             dims = backend.page_dimensions(page_number - 1)
             page = backend.get_page_text(page_number - 1)
+            links = backend.get_links(page_number - 1)
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    markers = detect_citations(page)
+    citations = build_page_citations(page, links)
+
+    with db.connect(settings.db_path) as conn:
+        status = _fresh_status(conn, doc_id) or "absent"
+        ref_map = (
+            _load_reference_map(conn, doc_id) if status == "complete" else {}
+        )
+    refs_ready = status == "complete"
+
+    items: list[dict] = []
+    for c in citations:
+        resolved = [ref_map[n] for n in c.numbers if n in ref_map]
+        # Precision: with the reference set known, a heuristic marker that
+        # resolves to nothing is almost certainly not a citation — drop it.
+        # Link markers are ground truth and are always kept.
+        if refs_ready and c.source == "heuristic" and not resolved:
+            continue
+        items.append(_citation_to_dict(c, resolved))
+
     return {
         "doc_id": doc_id,
         "page": page_number,
         "page_width_pt": dims.width_pt,
         "page_height_pt": dims.height_pt,
-        "citations": [_marker_to_dict(m) for m in markers],
+        "references_status": status,
+        "citations": items,
     }
 
 

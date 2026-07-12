@@ -76,12 +76,14 @@ class LinkAnnotation:
     ``bbox`` is in page-space points (top-left origin, same convention as
     ``TextRun``). Internal cross-references (a citation marker jumping to its
     entry) carry ``dest_page_index``; external links carry ``uri``. A link may
-    have neither (unresolved), but not typically both.
+    have neither (unresolved), but not typically both. ``text`` is the visible
+    anchor text under the link rect — for a citation link, the marker number.
     """
 
     bbox: BBox
     dest_page_index: int | None = None
     uri: str | None = None
+    text: str = ""
 
 
 @dataclass(frozen=True)

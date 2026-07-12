@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from app.pdf.citations import (
     CITATION_PATTERN,
+    build_page_citations,
     detect_citations,
     extract_references_text,
 )
+from app.pdf.types import LinkAnnotation
 from types import SimpleNamespace
 
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
@@ -105,6 +107,12 @@ def _run(text: str, x0: float, y0: float, x1: float, y1: float) -> TextRun:
 def _page(runs: tuple[TextRun, ...], page_index: int = 0) -> PageText:
     col = TextColumn(bbox=BBox(40, 0, 560, PAGE_H), runs=runs)
     return PageText(page_index=page_index, runs=runs, columns=(col,))
+
+
+def _link(text, x0, y0, x1, y1, dest=1, uri=None) -> LinkAnnotation:
+    return LinkAnnotation(
+        bbox=BBox(x0, y0, x1, y1), dest_page_index=dest, uri=uri, text=text
+    )
 
 
 def test_pattern_matches_numeric_brackets_only():
@@ -280,3 +288,50 @@ def test_extract_references_falls_back_to_whole_document_without_heading():
 def test_extract_references_empty_only_without_any_text():
     page = _page(())  # a page that yielded no runs
     assert extract_references_text([page]) == ""
+
+
+# --- build_page_citations: link + heuristic merge ---------------------------
+
+
+def test_build_prefers_link_over_overlapping_heuristic():
+    # A superscript "5" the heuristic would detect, with a link over the same
+    # spot. The link (ground truth) wins and there's no duplicate.
+    body = _run("AI agents", 72, 80, 120, 90)
+    sup = _super("5", 121, 77, 140, 84)
+    page = _page((body, sup))
+    link = _link("5", 121, 77, 140, 84)
+    cites = build_page_citations(page, [link])
+    assert len(cites) == 1
+    assert cites[0].source == "link"
+    assert cites[0].numbers == (5,)
+    assert cites[0].dest_page_index == 1
+
+
+def test_build_ignores_external_and_nonnumeric_links():
+    page = _page((_run("Body text with nothing citable.", 72, 80, 300, 90),))
+    doi = _link(
+        "https://doi.org/10.1038/x", 72, 80, 200, 90, dest=None,
+        uri="https://doi.org/10.1038/x",
+    )
+    fig = _link("Fig. 1", 210, 80, 240, 90, dest=1)
+    assert build_page_citations(page, [doi, fig]) == []
+
+
+def test_build_combines_link_and_heuristic_markers():
+    page = _page((_run("Prior work [9] and more.", 72, 80, 300, 90),))
+    link = _link("24", 400, 77, 415, 84)  # separate, non-overlapping
+    cites = build_page_citations(page, [link])
+    by_num = {c.numbers: c.source for c in cites}
+    assert by_num.get((9,)) == "heuristic"
+    assert by_num.get((24,)) == "link"
+
+
+def test_build_ids_are_reading_order_stable():
+    page = _page((_run("Body [3] text.", 72, 200, 300, 210),))
+    link = _link("1", 100, 80, 115, 90)  # higher on the page (smaller y)
+    cites = build_page_citations(page, [link])
+    # Marker higher on the page sorts first and gets index 0.
+    assert cites[0].numbers == (1,)
+    assert cites[0].marker_id == "p0_c0"
+    assert cites[1].numbers == (3,)
+    assert cites[1].marker_id == "p0_c1"

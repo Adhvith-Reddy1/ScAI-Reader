@@ -129,12 +129,19 @@ class PdfiumBackend(PdfBackend):
                 page.close()
 
     def get_links(self, page_index: int) -> tuple[LinkAnnotation, ...]:
-        """Link annotations on one page (top-left page-space coords)."""
+        """Link annotations on one page (top-left page-space coords), each with
+        the anchor text under its rect."""
         with _PDFIUM_LOCK:
             page = self._get_page(page_index)
             try:
                 _, page_height = page.get_size()
-                links = extract_page_links(page, self._doc, float(page_height))
+                textpage = page.get_textpage()
+                try:
+                    links = extract_page_links(
+                        page, self._doc, float(page_height), textpage
+                    )
+                finally:
+                    textpage.close()
                 return tuple(links)
             finally:
                 page.close()

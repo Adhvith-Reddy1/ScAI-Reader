@@ -179,3 +179,61 @@ def test_references_without_heading_still_attempts_parse(
     body = app_client.get(f"/documents/{doc_id}/references").json()
     assert body["status"] == "error"
     assert body["references"] == []
+
+
+@pytest.mark.integration
+def test_citations_include_link_source(app_client, tmp_path):
+    # A numeric superscript with an internal cross-reference link -> source=link.
+    path = tmp_path / "linked.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 8)
+    c.drawString(200, 720, "7")
+    c.linkAbsolute("c", "ref7", Rect=(200, 718, 210, 729))
+    c.showPage()
+    c.bookmarkPage("ref7")
+    c.drawString(72, 700, "7. Some reference. 2024.")
+    c.showPage()
+    c.save()
+    doc_id = _upload(app_client, path)
+
+    body = app_client.get(f"/documents/{doc_id}/pages/1/citations").json()
+    linked = [c for c in body["citations"] if c["source"] == "link"]
+    assert any(c["numbers"] == [7] for c in linked)
+
+
+@pytest.mark.integration
+def test_citations_resolve_and_filter_against_references(
+    app_client, tmp_settings, citation_pdf
+):
+    # Seed a completed parse with only refs 1 and 2, then confirm the endpoint
+    # attaches them and drops the heuristic markers that resolve to nothing.
+    from app.routes.citations import REFERENCE_PARSER_VERSION
+    from app.storage import db
+
+    doc_id = _upload(app_client, citation_pdf)
+    with db.connect(tmp_settings.db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO reference_runs "
+            "(doc_id, status, error, parser_version, created_at, updated_at) "
+            "VALUES (?, 'complete', NULL, ?, 't', 't')",
+            (doc_id, REFERENCE_PARSER_VERSION),
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO document_references "
+            "(doc_id, number, authors, title, raw) VALUES (?, ?, ?, ?, ?)",
+            [
+                (doc_id, 1, "A. Smith", "Paper One", None),
+                (doc_id, 2, "B. Jones", "Paper Two", None),
+            ],
+        )
+
+    body = app_client.get(f"/documents/{doc_id}/pages/1/citations").json()
+    assert body["references_status"] == "complete"
+    by_num = {tuple(c["numbers"]): c for c in body["citations"]}
+
+    # [1] resolves to reference 1.
+    assert by_num[(1,)]["references"][0]["title"] == "Paper One"
+    # [2, 3]: 2 resolves, 3 doesn't -> kept with just the resolved one.
+    assert [r["number"] for r in by_num[(2, 3)]["references"]] == [2]
+    # [4-6]: none in the reference set -> dropped (precision-first).
+    assert (4, 5, 6) not in by_num

@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .types import BBox, PageText, TextRun
+from .types import BBox, LinkAnnotation, PageText, TextRun
 
 # Every dash-like character we treat as a range separator: hyphen-minus, the
 # Unicode hyphen/dash block (U+2010–U+2015), and the minus sign (U+2212). Kept
@@ -273,6 +273,90 @@ def detect_citations(page_text: PageText) -> list[CitationMarker]:
                 )
                 idx += 1
     return markers
+
+
+@dataclass(frozen=True)
+class PageCitation:
+    """A merged, source-tagged citation marker for one page — the unit the
+    resolution endpoint returns. ``source`` is "link" (a real cross-reference
+    annotation, ground truth) or "heuristic" (detected from text)."""
+
+    marker_id: str
+    page_index: int
+    bbox: BBox
+    numbers: tuple[int, ...]
+    source: str
+    raw: str
+    dest_page_index: int | None = None
+
+
+def _rects_overlap(a: BBox, b: BBox) -> bool:
+    return not (a.x1 <= b.x0 or b.x1 <= a.x0 or a.y1 <= b.y0 or b.y1 <= a.y0)
+
+
+def _citation_link_numbers(link: LinkAnnotation) -> tuple[int, ...]:
+    """The reference numbers a link resolves to IF it is a citation link, else ().
+
+    Precision-first: only an internal cross-reference (has a destination, no
+    external URL) whose entire anchor text is a citation-number token counts.
+    This rejects DOI/URL links (anchors full of digits) and figure/section
+    links (non-numeric anchors)."""
+    if link.dest_page_index is None or link.uri:
+        return ()
+    m = _SUPERSCRIPT_BODY.match((link.text or "").strip())
+    if not m:
+        return ()
+    return _expand_numbers(m.group(1))
+
+
+def build_page_citations(
+    page_text: PageText,
+    links: tuple[LinkAnnotation, ...] | list[LinkAnnotation],
+) -> list[PageCitation]:
+    """Merge link-based and heuristic citation markers for one page.
+
+    Links are the higher-precision source: where a citation link overlaps a
+    heuristic marker they refer to the same spot, so the link wins and the
+    heuristic duplicate is dropped. Returned in reading order with stable ids.
+    """
+    link_items: list[tuple[BBox, tuple[int, ...], str, int | None]] = []
+    for link in links:
+        nums = _citation_link_numbers(link)
+        if nums:
+            link_items.append(
+                (link.bbox, nums, (link.text or "").strip(), link.dest_page_index)
+            )
+
+    heuristic = detect_citations(page_text)
+    kept_heuristic = [
+        h
+        for h in heuristic
+        if not any(_rects_overlap(h.bbox, lb) for lb, _, _, _ in link_items)
+    ]
+
+    combined: list[tuple[BBox, tuple[int, ...], str, str, int | None]] = []
+    for bbox, nums, raw, dest in link_items:
+        combined.append((bbox, nums, "link", raw, dest))
+    for h in kept_heuristic:
+        combined.append((h.bbox, h.numbers, "heuristic", h.raw, None))
+
+    # Reading order (top-to-bottom, then left-to-right) for stable ids.
+    combined.sort(key=lambda it: (round(it[0].y0, 1), it[0].x0))
+
+    out: list[PageCitation] = []
+    for idx, (bbox, nums, source, raw, dest) in enumerate(combined):
+        out.append(
+            PageCitation(
+                marker_id=f"p{page_text.page_index}_c{idx}",
+                page_index=page_text.page_index,
+                bbox=bbox,
+                numbers=nums,
+                source=source,
+                raw=raw,
+                dest_page_index=dest,
+            )
+        )
+    return out
 
 
 def has_reference_heading(runs: list[TextRun]) -> bool:

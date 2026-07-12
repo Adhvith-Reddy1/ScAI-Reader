@@ -64,11 +64,14 @@ def extract_page_links(
     page: pdfium.PdfPage,
     doc: pdfium.PdfDocument,
     page_height_pt: float,
+    textpage=None,
 ) -> list[LinkAnnotation]:
     """Enumerate every link annotation on ``page``.
 
     Caller must hold the pdfium lock (this touches raw handles). Rects are
-    converted to top-left page-space points. Zero-area links are skipped.
+    converted to top-left page-space points. Zero-area links are skipped. If a
+    ``textpage`` is provided, each link's anchor text (glyphs under its rect)
+    is captured — that's the citation number for a citation link.
     """
     raw_page = page.raw
     raw_doc = doc.raw
@@ -95,11 +98,18 @@ def extract_page_links(
         )
         if bbox.width <= 0 or bbox.height <= 0:
             continue
+        anchor = ""
+        if textpage is not None:
+            try:
+                anchor = textpage.get_text_bounded(x0, bot_pdf, x1, top_pdf) or ""
+            except Exception:  # noqa: BLE001 — text extraction is best-effort
+                anchor = ""
         out.append(
             LinkAnnotation(
                 bbox=bbox,
                 dest_page_index=_dest_page_index(raw_doc, link),
                 uri=_link_uri(raw_doc, link),
+                text=anchor,
             )
         )
     return out
