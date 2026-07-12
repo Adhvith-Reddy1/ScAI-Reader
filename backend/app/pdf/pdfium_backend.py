@@ -8,9 +8,11 @@ import pypdfium2 as pdfium
 
 from .backend import PdfBackend, PdfError
 from .columns import cluster_into_columns
+from .links import extract_page_links
 from .types import (
     BBox,
     DocumentMetadata,
+    LinkAnnotation,
     OutlineNode,
     PageDimensions,
     PageText,
@@ -123,6 +125,17 @@ class PdfiumBackend(PdfBackend):
                     )
                 finally:
                     textpage.close()
+            finally:
+                page.close()
+
+    def get_links(self, page_index: int) -> tuple[LinkAnnotation, ...]:
+        """Link annotations on one page (top-left page-space coords)."""
+        with _PDFIUM_LOCK:
+            page = self._get_page(page_index)
+            try:
+                _, page_height = page.get_size()
+                links = extract_page_links(page, self._doc, float(page_height))
+                return tuple(links)
             finally:
                 page.close()
 

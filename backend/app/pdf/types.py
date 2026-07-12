@@ -70,6 +70,21 @@ class OutlineNode:
 
 
 @dataclass(frozen=True)
+class LinkAnnotation:
+    """A clickable link annotation on a page.
+
+    ``bbox`` is in page-space points (top-left origin, same convention as
+    ``TextRun``). Internal cross-references (a citation marker jumping to its
+    entry) carry ``dest_page_index``; external links carry ``uri``. A link may
+    have neither (unresolved), but not typically both.
+    """
+
+    bbox: BBox
+    dest_page_index: int | None = None
+    uri: str | None = None
+
+
+@dataclass(frozen=True)
 class DocumentMetadata:
     page_count: int
     title: str | None = None
