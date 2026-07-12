@@ -237,3 +237,53 @@ def test_citations_resolve_and_filter_against_references(
     assert [r["number"] for r in by_num[(2, 3)]["references"]] == [2]
     # [4-6]: none in the reference set -> dropped (precision-first).
     assert (4, 5, 6) not in by_num
+
+
+@pytest.mark.integration
+def test_affiliation_link_dropped_by_dest_page(app_client, tmp_settings, tmp_path):
+    # An affiliation superscript "1" links to a note on its OWN page; a citation
+    # superscript "7" links forward to the reference list. Both numbers are in
+    # the reference set, so only the destination page distinguishes them.
+    path = tmp_path / "affil.pdf"
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 8)
+    c.drawString(200, 720, "1")
+    c.linkAbsolute("aff", "aff1", Rect=(200, 718, 208, 729))  # -> page 0
+    c.drawString(300, 720, "7")
+    c.linkAbsolute("cite", "ref7", Rect=(300, 718, 308, 729))  # -> page 2
+    c.bookmarkPage("aff1")                                      # affiliation note (page 0)
+    c.drawString(72, 600, "1. Stanford University, Stanford, CA.")
+    c.showPage()
+    c.drawString(72, 700, "Middle page.")
+    c.showPage()
+    c.bookmarkPage("ref7")                                      # reference list (page 2)
+    c.drawString(72, 700, "7. Wu, Q. et al. AutoGen. 2024.")
+    c.showPage()
+    c.save()
+    doc_id = _upload(app_client, path)
+
+    from app.routes.citations import REFERENCE_PARSER_VERSION
+    from app.storage import db
+
+    with db.connect(tmp_settings.db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO reference_runs "
+            "(doc_id, status, error, parser_version, ref_start_page, "
+            " created_at, updated_at) VALUES (?, 'complete', NULL, ?, 2, 't', 't')",
+            (doc_id, REFERENCE_PARSER_VERSION),
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO document_references "
+            "(doc_id, number, authors, title, raw) VALUES (?, ?, ?, ?, ?)",
+            [
+                (doc_id, 1, "Stanford", "Affiliation", None),
+                (doc_id, 7, "Wu, Q. et al.", "AutoGen", None),
+            ],
+        )
+
+    body = app_client.get(f"/documents/{doc_id}/pages/1/citations").json()
+    by_num = {tuple(c["numbers"]): c for c in body["citations"]}
+    # Citation kept and resolved; affiliation link dropped.
+    assert (7,) in by_num
+    assert by_num[(7,)]["source"] == "link"
+    assert (1,) not in by_num

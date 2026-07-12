@@ -12,6 +12,7 @@ from app.pdf.citations import (
     build_page_citations,
     detect_citations,
     extract_references_text,
+    reference_start_page,
 )
 from app.pdf.types import LinkAnnotation
 from types import SimpleNamespace
@@ -335,3 +336,28 @@ def test_build_ids_are_reading_order_stable():
     assert cites[0].marker_id == "p0_c0"
     assert cites[1].numbers == (3,)
     assert cites[1].marker_id == "p0_c1"
+
+
+# --- reference_start_page ----------------------------------------------------
+
+
+def test_reference_start_page_finds_heading_page():
+    p0 = _page((_run("Body text on page 0.", 40, 100, 400, 112),), page_index=0)
+    p1 = _page(
+        (
+            _run("References", 40, 50, 200, 62),
+            _run("[1] A. Smith. A paper. 2020.", 40, 80, 560, 92),
+        ),
+        page_index=1,
+    )
+    assert reference_start_page([p0, p1]) == 1
+
+
+def test_reference_start_page_fallback_without_heading():
+    # No heading -> back-half midpoint. 4 single-run pages -> flat index 2.
+    pages = [_page((_run("x", 40, 50, 100, 60),), page_index=i) for i in range(4)]
+    assert reference_start_page(pages) == 2
+
+
+def test_reference_start_page_none_without_text():
+    assert reference_start_page([_page(())]) is None

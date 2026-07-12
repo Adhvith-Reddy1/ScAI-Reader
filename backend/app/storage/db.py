@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS reference_runs (
     status          TEXT NOT NULL,             -- pending | complete | error | empty
     error           TEXT,
     parser_version  INTEGER NOT NULL DEFAULT 0,-- bumped when extraction improves
+    ref_start_page  INTEGER,                   -- 0-indexed page the ref list begins
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -117,6 +118,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE reference_runs ADD COLUMN "
             "parser_version INTEGER NOT NULL DEFAULT 0"
+        )
+    if "ref_start_page" not in cols:
+        conn.execute(
+            "ALTER TABLE reference_runs ADD COLUMN ref_start_page INTEGER"
         )
 
 

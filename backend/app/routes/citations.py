@@ -33,6 +33,7 @@ from ..pdf.citations import (
     PageCitation,
     build_page_citations,
     extract_references_text,
+    reference_start_page,
 )
 from ..pdf.pdfium_backend import PdfiumBackend
 from ..storage import db, files
@@ -163,13 +164,19 @@ def list_page_citations(
 
     citations = build_page_citations(page, links)
 
+    ref_start_page: int | None = None
     with db.connect(settings.db_path) as conn:
         status = _fresh_status(conn, doc_id) or "absent"
-        ref_map = (
-            _load_reference_map(conn, doc_id) if status == "complete" else {}
-        )
+        ref_map = {}
         references_error = None
-        if status == "error":
+        if status == "complete":
+            ref_map = _load_reference_map(conn, doc_id)
+            row = conn.execute(
+                "SELECT ref_start_page FROM reference_runs WHERE doc_id = ?",
+                (doc_id,),
+            ).fetchone()
+            ref_start_page = row["ref_start_page"] if row else None
+        elif status == "error":
             row = conn.execute(
                 "SELECT error FROM reference_runs WHERE doc_id = ?", (doc_id,)
             ).fetchone()
@@ -179,10 +186,21 @@ def list_page_citations(
     items: list[dict] = []
     for c in citations:
         resolved = [ref_map[n] for n in c.numbers if n in ref_map]
-        # Precision: with the reference set known, a heuristic marker that
-        # resolves to nothing is almost certainly not a citation — drop it.
-        # Link markers are ground truth and are always kept.
         if refs_ready and c.source == "heuristic" and not resolved:
+            # A heuristic marker that resolves to nothing is almost certainly
+            # not a citation (stray number) — drop it.
+            continue
+        if (
+            refs_ready
+            and c.source == "link"
+            and ref_start_page is not None
+            and c.dest_page_index is not None
+            and c.dest_page_index < ref_start_page
+        ):
+            # A link that jumps to a page BEFORE the reference list isn't a
+            # citation — it's an author-affiliation / footnote superscript that
+            # points to a same-page note. Drop it (and it already shadowed the
+            # overlapping heuristic marker during the merge).
             continue
         items.append(_citation_to_dict(c, resolved))
 
@@ -257,12 +275,16 @@ def _claim_run(conn, doc_id: str) -> bool:
 
 
 def _finish_run(
-    conn, doc_id: str, status: str, error: str | None = None
+    conn,
+    doc_id: str,
+    status: str,
+    error: str | None = None,
+    ref_start_page: int | None = None,
 ) -> None:
     conn.execute(
         "UPDATE reference_runs SET status = ?, error = ?, "
-        "parser_version = ?, updated_at = ? WHERE doc_id = ?",
-        (status, error, REFERENCE_PARSER_VERSION, _now(), doc_id),
+        "parser_version = ?, ref_start_page = ?, updated_at = ? WHERE doc_id = ?",
+        (status, error, REFERENCE_PARSER_VERSION, ref_start_page, _now(), doc_id),
     )
 
 
@@ -284,9 +306,11 @@ def _store_references(conn, doc_id: str, entries: list[dict]) -> None:
     )
 
 
-def _gather_references_text(settings: Settings, doc_id: str) -> str:
+def _gather_references_text(
+    settings: Settings, doc_id: str
+) -> tuple[str, int | None]:
     """Open the PDF once, pull every page's text, and slice out the reference
-    section. Runs at most once per document (gated by the run claim)."""
+    section. Returns (text, start_page). Runs at most once per document."""
     pdf_path = files.pdf_path(settings, doc_id)
     pages = []
     with PdfiumBackend.open(pdf_path) as backend:
@@ -295,7 +319,7 @@ def _gather_references_text(settings: Settings, doc_id: str) -> str:
                 pages.append(backend.get_page_text(i))
             except Exception:  # noqa: BLE001
                 log.exception("text extraction failed for page %d", i)
-    return extract_references_text(pages)
+    return extract_references_text(pages), reference_start_page(pages)
 
 
 def _extract_json_array(text: str) -> list:
@@ -458,7 +482,7 @@ async def get_references(
 
     # We own the parse. Extract the reference text, hand it to Claude, persist.
     try:
-        references_text = _gather_references_text(settings, doc_id)
+        references_text, ref_start = _gather_references_text(settings, doc_id)
     except PdfError as e:
         with db.connect(settings.db_path) as conn:
             _finish_run(conn, doc_id, "error", str(e))
@@ -482,7 +506,7 @@ async def get_references(
     with db.connect(settings.db_path) as conn:
         if entries:
             _store_references(conn, doc_id, entries)
-            _finish_run(conn, doc_id, "complete")
+            _finish_run(conn, doc_id, "complete", ref_start_page=ref_start)
         else:
             _finish_run(conn, doc_id, "empty")
 

@@ -425,3 +425,30 @@ def extract_references_text(pages: list[PageText]) -> str:
     # can find the references wherever they sit.
     whole = "\n".join(r.text.strip() for r in flat if r.text.strip())
     return whole[-_MAX_REFERENCES_CHARS:]
+
+
+def reference_start_page(pages: list[PageText]) -> int | None:
+    """The 0-indexed page where the reference list begins, or None.
+
+    Mirrors ``extract_references_text``'s location logic but reports the page,
+    so link-based citation resolution can reject markers whose destination
+    lands *before* the references (e.g. author-affiliation superscripts, which
+    link to a same-page affiliation note rather than the bibliography)."""
+    flat_with_page: list[tuple[int, TextRun]] = []
+    for page in pages:
+        runs = (
+            [r for col in page.columns for r in col.runs]
+            if page.columns
+            else list(page.runs)
+        )
+        for r in runs:
+            flat_with_page.append((page.page_index, r))
+    if not flat_with_page:
+        return None
+
+    flat = [r for _, r in flat_with_page]
+    found = _find_reference_heading(flat)
+    if found is not None:
+        return flat_with_page[found[0]][0]
+    # Whole-document fallback: references sit somewhere in the back half.
+    return flat_with_page[len(flat_with_page) // 2][0]
