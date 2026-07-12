@@ -25,6 +25,7 @@ import os
 from datetime import datetime, timezone
 
 import anthropic
+import openai
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import Settings
@@ -93,6 +94,35 @@ REFERENCE_TOOL = {
         },
         "required": ["references"],
     },
+}
+
+# --- OpenAI provider (used when OPENAI_API_KEY is set) ----------------------
+# Override with OPENAI_REFERENCES_MODEL; must support Structured Outputs
+# (gpt-4o / gpt-4o-mini / gpt-4.1 / o-series, 2024-08-06 or later).
+OPENAI_MODEL_REFERENCES = os.environ.get("OPENAI_REFERENCES_MODEL", "gpt-4o")
+
+# Strict Structured Outputs schema — OpenAI's analog to forced tool use. Strict
+# mode requires every property listed in `required` and additionalProperties
+# false, so authors/title are nullable rather than optional.
+OPENAI_REFERENCES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "references": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "number": {"type": "integer"},
+                    "authors": {"type": ["string", "null"]},
+                    "title": {"type": ["string", "null"]},
+                },
+                "required": ["number", "authors", "title"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["references"],
+    "additionalProperties": False,
 }
 
 
@@ -452,6 +482,67 @@ async def _parse_with_claude(references_text: str) -> list[dict]:
     return _entries_from_response(msg.content, getattr(msg, "stop_reason", None))
 
 
+def _entries_from_openai(content: str) -> list[dict]:
+    """Coerce an OpenAI Structured Outputs reply into reference rows.
+
+    Strict schema guarantees a JSON object ``{"references": [...]}``; we stay
+    tolerant and fall back to array extraction if that ever fails."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return _coerce_entries(_extract_json_array(content))
+    refs = data.get("references") if isinstance(data, dict) else None
+    if isinstance(refs, list):
+        return _coerce_entries(refs)
+    return _coerce_entries(_extract_json_array(content))
+
+
+async def _parse_with_openai(references_text: str) -> list[dict]:
+    """Extract structured reference rows via OpenAI Structured Outputs.
+
+    The json_schema response_format is the OpenAI equivalent of Claude's forced
+    tool use — the reply is guaranteed to match the schema."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY not set on backend")
+
+    blob = references_text
+    client = openai.AsyncOpenAI()
+    resp = await client.chat.completions.create(
+        model=OPENAI_MODEL_REFERENCES,
+        max_completion_tokens=16000,
+        messages=[
+            {"role": "system", "content": SYSTEM_REFERENCES},
+            {
+                "role": "user",
+                "content": (
+                    "Extract the numbered reference list from this paper text. "
+                    "The text may include body content, methods or figure "
+                    "captions with scrambled line wrapping; find the references "
+                    f"within it.\n\n<paper>\n{blob}\n</paper>"
+                ),
+            },
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "reference_list",
+                "strict": True,
+                "schema": OPENAI_REFERENCES_SCHEMA,
+            },
+        },
+    )
+    content = resp.choices[0].message.content or ""
+    return _entries_from_openai(content)
+
+
+async def _parse_references(references_text: str) -> list[dict]:
+    """Parse references with whichever LLM provider is configured. Prefers
+    OpenAI when OPENAI_API_KEY is set, else Anthropic."""
+    if os.environ.get("OPENAI_API_KEY"):
+        return await _parse_with_openai(references_text)
+    return await _parse_with_claude(references_text)
+
+
 @router.get("/references")
 async def get_references(
     doc_id: str,
@@ -494,7 +585,7 @@ async def get_references(
         return {"doc_id": doc_id, "status": "empty", "references": []}
 
     try:
-        entries = await _parse_with_claude(references_text)
+        entries = await _parse_references(references_text)
     except Exception as e:  # noqa: BLE001
         log.exception("reference parsing failed")
         detail = f"{type(e).__name__}: {e}"

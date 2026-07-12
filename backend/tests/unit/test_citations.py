@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from app.pdf.types import BBox, PageText, TextColumn, TextRun
 from app.routes.citations import (
     _coerce_entries,
+    _entries_from_openai,
     _entries_from_response,
     _extract_json_array,
 )
@@ -361,3 +362,54 @@ def test_reference_start_page_fallback_without_heading():
 
 def test_reference_start_page_none_without_text():
     assert reference_start_page([_page(())]) is None
+
+
+# --- provider selection (OpenAI vs Anthropic) --------------------------------
+
+
+def test_entries_from_openai_parses_structured_object():
+    out = _entries_from_openai(
+        '{"references":[{"number":24,"authors":"Wu, Q.","title":"AutoGen"},'
+        '{"number":3,"authors":null,"title":"Gao"}]}'
+    )
+    assert [e["number"] for e in out] == [24, 3]
+    assert out[1]["authors"] is None
+
+
+def test_entries_from_openai_tolerates_bare_array():
+    out = _entries_from_openai('[{"number":1,"authors":"A","title":"T"}]')
+    assert out[0]["number"] == 1
+
+
+def test_parse_references_prefers_openai_when_key_set(monkeypatch):
+    import asyncio
+
+    from app.routes import citations as mod
+
+    async def fake_openai(_):
+        return [{"via": "openai"}]
+
+    async def fake_claude(_):
+        return [{"via": "claude"}]
+
+    monkeypatch.setattr(mod, "_parse_with_openai", fake_openai)
+    monkeypatch.setattr(mod, "_parse_with_claude", fake_claude)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert asyncio.run(mod._parse_references("x"))[0]["via"] == "openai"
+
+
+def test_parse_references_falls_back_to_anthropic(monkeypatch):
+    import asyncio
+
+    from app.routes import citations as mod
+
+    async def fake_openai(_):
+        return [{"via": "openai"}]
+
+    async def fake_claude(_):
+        return [{"via": "claude"}]
+
+    monkeypatch.setattr(mod, "_parse_with_openai", fake_openai)
+    monkeypatch.setattr(mod, "_parse_with_claude", fake_claude)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert asyncio.run(mod._parse_references("x"))[0]["via"] == "claude"
