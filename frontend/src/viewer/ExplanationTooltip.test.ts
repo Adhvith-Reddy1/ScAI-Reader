@@ -390,7 +390,7 @@ describe("showExplanationForNewHighlight", () => {
     localStorage.clear();
   });
 
-  it("opens the panel immediately, pinned, without any hover/dwell", async () => {
+  it("opens the panel immediately in the collapsed look, without any hover/dwell", async () => {
     const group = buildBlueHighlight();
     showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
     // show() awaits hydrate, which awaits a cache read, before startExplanation
@@ -398,8 +398,16 @@ describe("showExplanationForNewHighlight", () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
-    expect(tip.style.display).toBe("flex");
-    expect(tip.classList.contains("is-pinned")).toBe(true);
+    // Collapsed look — not the full pinned chat UI — matching how a normal
+    // hover-opened tooltip renders.
+    expect(tip.style.display).toBe("block");
+    expect(tip.classList.contains("is-pinned")).toBe(false);
+    expect(tip.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "none",
+    );
+    expect(
+      tip.querySelector<HTMLElement>(".explanation-tooltip-foot")!.style.display,
+    ).not.toBe("none");
     // The explanation stream kicked off right away.
     expect(streamExplanationMock).toHaveBeenCalledTimes(1);
   });
@@ -412,7 +420,7 @@ describe("showExplanationForNewHighlight", () => {
     const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
     const [, , , callbacks] = streamExplanationMock.mock.calls[0];
     callbacks.onDelta("A measure ");
-    expect(tip.style.display).toBe("flex");
+    expect(tip.style.display).toBe("block");
     expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
       "A measure",
     );
@@ -421,21 +429,61 @@ describe("showExplanationForNewHighlight", () => {
     // mousemove/mouseleave was ever dispatched over it — and let any hide
     // timer that would fire for an unpinned tooltip elapse.
     vi.advanceTimersByTime(1000);
-    expect(tip.style.display).toBe("flex");
+    expect(tip.style.display).toBe("block");
 
     callbacks.onDone("A measure of disorder.");
-    expect(tip.style.display).toBe("flex");
+    expect(tip.style.display).toBe("block");
     expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
       "A measure of disorder.",
     );
   });
 
-  it("still dismisses via outside click, Escape, or the close button", async () => {
+  it("dismisses via outside click", async () => {
     const group = buildBlueHighlight();
     showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
     await Promise.resolve();
     const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
 
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(tip.style.display).toBe("none");
+  });
+
+  it("dismisses via Escape", async () => {
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve();
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(tip.style.display).toBe("none");
+  });
+
+  it("clicking inside the panel does not dismiss it", async () => {
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve();
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+
+    tip.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(tip.style.display).toBe("block");
+  });
+
+  it("'Ask a follow-up' promotes it to the full pinned chat panel", async () => {
+    seedExplanation("a", "definition", "A measure of disorder.");
+    const group = buildBlueHighlight();
+    showExplanationForNewHighlight(group, DOC, "a", 1, "entropy", vi.fn());
+    await Promise.resolve();
+    const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
+
+    tip.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
+
+    expect(tip.classList.contains("is-pinned")).toBe(true);
+    expect(tip.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
+
+    // Now behaves exactly like a normal pinned panel: moving the cursor away
+    // still doesn't close it, but outside click does.
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     expect(tip.style.display).toBe("none");
   });
@@ -447,7 +495,7 @@ describe("showExplanationForNewHighlight", () => {
     await Promise.resolve();
 
     const tip = document.querySelector<HTMLElement>(".explanation-tooltip")!;
-    expect(tip.style.display).toBe("flex");
+    expect(tip.style.display).toBe("block");
     expect(tip.querySelector(".explanation-tooltip-body")!.textContent).toBe(
       "cached answer",
     );

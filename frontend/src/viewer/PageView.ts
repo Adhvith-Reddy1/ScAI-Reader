@@ -562,6 +562,16 @@ function wireFigureInteractions(
     if (!fig || !state.geom) return;
 
     e.preventDefault();
+    // A double-click landing inside a figure's bounds routinely lands near
+    // *some* real text run too (dense scientific figures are full of small
+    // embedded labels/gene names) — the browser's native double-click word
+    // selection can pick one up even though it's not what `target.closest`
+    // resolved to. Left alone, that stray selection would be picked up by
+    // wireHighlightOnSelection's deferred mouseup handler (still queued at
+    // this point — it defers via setTimeout) and turned into a bogus
+    // explanation highlight alongside the figure card. Clearing it here runs
+    // before that deferred check does.
+    window.getSelection()?.removeAllRanges();
     // Anchor the card to the figure's actual rendered outline, which already
     // reflects the current rotation, rather than recomputing a screen rect.
     const figEl = state.figureLayer?.querySelector<SVGGElement>(

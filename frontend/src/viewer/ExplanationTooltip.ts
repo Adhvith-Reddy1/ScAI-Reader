@@ -65,6 +65,13 @@ let pendingAnnotationId: string | null = null;
 // auto-hiding and stops following the cursor to other highlights, so they can
 // type a follow-up without it vanishing.
 let pinned = false;
+// Set instead of `pinned` when a highlight was just created: the panel opens
+// and stays put without hovering (same no-auto-hide, no-cursor-swap
+// guarantees as pinned), but renders in the collapsed hover-tooltip look
+// (Delete / "Ask a follow-up ›" footer) rather than jumping straight to the
+// full chat UI. Clicking "Ask a follow-up" (or resolving normally) promotes
+// it to a real `pinned` panel.
+let stickyOpen = false;
 // Context for the pinned annotation, captured on show().
 let activeDoc: DocumentMeta | null = null;
 let activeText: string | null = null;
@@ -143,6 +150,7 @@ function ensureTooltip(): HTMLDivElement {
   close.textContent = "×";
   close.addEventListener("click", () => {
     pinned = false;
+    stickyOpen = false;
     hide();
   });
   head.appendChild(title);
@@ -197,6 +205,7 @@ function ensureTooltip(): HTMLDivElement {
     // finishes, ready for the next time they hover.
     refineFromChat(doc.id, id, text, activePage ?? 1, activePageText ?? undefined);
     pinned = false;
+    stickyOpen = false;
     hide();
   });
   chat.appendChild(apply);
@@ -223,6 +232,7 @@ function ensureTooltip(): HTMLDivElement {
   openChat.textContent = "Ask a follow-up ›";
   openChat.addEventListener("click", () => {
     pinned = true;
+    stickyOpen = false;
     rerender();
     inputEl?.focus();
   });
@@ -247,19 +257,23 @@ function ensureTooltip(): HTMLDivElement {
   });
   el.addEventListener("mouseleave", () => scheduleHide());
 
-  // Escape closes a pinned conversation (standard for a focusable panel).
+  // Escape closes a pinned (or sticky-open) conversation (standard for a
+  // focusable panel).
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && pinned) {
+    if (e.key === "Escape" && (pinned || stickyOpen)) {
       pinned = false;
+      stickyOpen = false;
       hide();
     }
   });
 
-  // Clicking anywhere outside the panel closes a pinned conversation.
+  // Clicking anywhere outside the panel closes a pinned (or sticky-open)
+  // conversation.
   document.addEventListener("pointerdown", (e) => {
-    if (!pinned || !tooltipEl) return;
+    if ((!pinned && !stickyOpen) || !tooltipEl) return;
     if (!tooltipEl.contains(e.target as Node)) {
       pinned = false;
+      stickyOpen = false;
       hide();
     }
   });
@@ -365,9 +379,10 @@ function clearSubscription(): void {
 }
 
 function hide(): void {
-  // A pinned tooltip stays put — the reader is mid-conversation. Only an
-  // explicit close (which clears `pinned` first) gets through.
-  if (pinned) return;
+  // A pinned or sticky-open tooltip stays put — the reader is mid-
+  // conversation, or just made this highlight and hasn't dismissed it yet.
+  // Only an explicit close (which clears both flags first) gets through.
+  if (pinned || stickyOpen) return;
   if (dwellTimer != null) {
     window.clearTimeout(dwellTimer);
     dwellTimer = null;
@@ -396,7 +411,7 @@ function hide(): void {
 }
 
 function scheduleHide(): void {
-  if (pinned) return;
+  if (pinned || stickyOpen) return;
   if (hideTimer != null) window.clearTimeout(hideTimer);
   hideTimer = window.setTimeout(() => {
     // Only hide if the cursor isn't back on the tooltip or a tracked group.
@@ -656,9 +671,9 @@ function findHitRegistration(
 
 function setupWrapListeners(wrap: HTMLElement): WrapState {
   const onMove = (e: MouseEvent) => {
-    // While pinned the reader owns the tooltip — don't let cursor movement
-    // over other highlights swap it out from under their conversation.
-    if (pinned) return;
+    // While pinned (or sticky-open) the reader owns the tooltip — don't let
+    // cursor movement over other highlights swap it out from under them.
+    if (pinned || stickyOpen) return;
     const state = wrapStates.get(wrap);
     if (!state) return;
     const hit = findHitRegistration(state, e.clientX, e.clientY);
@@ -751,10 +766,11 @@ export function bindBlueAnnotation(
     // Keep the live delete callback fresh if the panel is already open for it.
     if (activeAnnotationId === annotationId) activeOnDelete = onDelete;
 
-    // If a pinned conversation is open for this highlight and the page just
-    // re-laid-out (zoom/scroll rebuilds the SVG), re-anchor to the new group
-    // so the panel tracks the highlight instead of stranding at (0,0).
-    if (pinned && activeAnnotationId === annotationId) {
+    // If a pinned (or sticky-open) conversation is open for this highlight
+    // and the page just re-laid-out (zoom/scroll rebuilds the SVG), re-anchor
+    // to the new group so the panel tracks the highlight instead of
+    // stranding at (0,0).
+    if ((pinned || stickyOpen) && activeAnnotationId === annotationId) {
       activeGroup = group;
       position(group.getBoundingClientRect());
     }
@@ -780,11 +796,13 @@ export function bindBlueAnnotation(
 }
 
 /**
- * Show the panel immediately, pinned open, for a highlight the reader just
+ * Show the panel immediately, sticky-open, for a highlight the reader just
  * created — so the definition/explanation stays in view while it streams
- * instead of requiring the reader to keep hovering the highlight. Dismisses
- * the same way a pinned hover-opened panel does (outside click, Escape, or
- * the close button).
+ * instead of requiring the reader to keep hovering the highlight. Renders in
+ * the normal collapsed look (Delete / "Ask a follow-up ›"), not the full
+ * chat UI — that still only opens when the reader asks for it. Dismisses the
+ * same way a pinned hover-opened panel does (outside click, Escape, or the
+ * close button).
  */
 export function showExplanationForNewHighlight(
   group: SVGGElement,
@@ -795,8 +813,7 @@ export function showExplanationForNewHighlight(
   onDelete: (annotationId: string) => void,
   pageText: string | null = null,
 ): void {
-  pinned = true;
-  pinnedPlaced = false;
+  stickyOpen = true;
   void show(
     { group, doc, annotationId, page, text, onDelete, pageText },
     group.getBoundingClientRect(),
@@ -806,12 +823,14 @@ export function showExplanationForNewHighlight(
 /** Public hide, for callers that want to dismiss explicitly. */
 export function hideExplanationTooltip(): void {
   pinned = false;
+  stickyOpen = false;
   hide();
 }
 
 /** Test-only: tear down the singleton tooltip and reset module state. */
 export function _resetForTest(): void {
   pinned = false;
+  stickyOpen = false;
   pinnedPlaced = false;
   savedSize = null;
   if (currentUnsubscribe) currentUnsubscribe();
@@ -840,6 +859,7 @@ export function _resetForTest(): void {
 export function dismissExplanationFor(annotationId: string): void {
   if (activeAnnotationId === annotationId) {
     pinned = false;
+    stickyOpen = false;
     hide();
   }
 }
