@@ -30,9 +30,18 @@ import {
   startFigureExplanation,
   subscribeFigure,
 } from "../figureStore.ts";
+import { ResizablePanel } from "./ResizablePanel.ts";
 
-const CARD_WIDTH_PX = 340;
+// Defaults mirror the explanation/definition panel's pinned-chat sizing —
+// wide/tall enough to read comfortably, capped well under the viewport so
+// the thread scrolls internally instead of the card growing without limit.
+const DEFAULT_CARD_WIDTH = 380;
+const DEFAULT_CAP_PX = 480;
+const RESIZE_MIN_W = 260;
+const RESIZE_MIN_H = 200;
 const MARGIN_PX = 12;
+
+const SAVED_SIZE_KEY = "scai.figureBoxSize";
 
 let cardEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
@@ -47,6 +56,11 @@ let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
 let activeFigure: PageFigure | null = null;
 let activeRectViewport: DOMRect | null = null;
+// Owns the card's resize handles, drag-to-resize, and remembered
+// {width, height} — the same shared behavior the pinned explanation panel
+// uses, so the two panels can't drift apart. Built once, alongside the rest
+// of the DOM, in ensureCard().
+let resizePanel: ResizablePanel | null = null;
 
 function ensureCard(): HTMLDivElement {
   if (cardEl) return cardEl;
@@ -106,6 +120,18 @@ function ensureCard(): HTMLDivElement {
   });
   chat.appendChild(form);
   el.appendChild(chat);
+
+  // Eight resize handles (edges + corners) — shared with the pinned
+  // explanation/definition panel so the two panels' resize behavior can't
+  // drift apart.
+  resizePanel = new ResizablePanel({
+    el,
+    storageKey: SAVED_SIZE_KEY,
+    defaultWidth: DEFAULT_CARD_WIDTH,
+    defaultHeight: DEFAULT_CAP_PX,
+    minWidth: RESIZE_MIN_W,
+    minHeight: RESIZE_MIN_H,
+  });
 
   document.body.appendChild(el);
   cardEl = el;
@@ -247,18 +273,36 @@ function render(): void {
 
 function positionCard(figureRectViewport: DOMRect): void {
   const el = ensureCard();
-  el.style.display = "block";
-  el.style.width = `${CARD_WIDTH_PX}px`;
-  const cardHeight = el.offsetHeight;
+  const panel = resizePanel!;
+  el.style.display = "flex";
+
+  // The card is positioned (and sized) exactly once per open session — same
+  // rule as the pinned explanation panel. After that, re-renders (new chat
+  // messages arriving) and resize drags own its geometry; the capped height
+  // means content growth never needs to push the card around anyway.
+  if (panel.placed) return;
+
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+
+  const size = panel.size;
+  const width = Math.min(size.width, vw - MARGIN_PX * 2);
+  el.style.width = `${width}px`;
+  // Height is left to grow with content up to the cap (the thread scrolls
+  // once it hits that), so clear any stale explicit height and apply a
+  // provisional cap to measure with.
+  el.style.height = "";
+  el.style.maxHeight = `${Math.min(size.height, vh - MARGIN_PX * 2)}px`;
+  panel.markPlaced();
+
+  const cardHeight = el.offsetHeight;
 
   // Try right side of the figure first.
   let left = figureRectViewport.right + MARGIN_PX;
   let top = figureRectViewport.top;
-  if (left + CARD_WIDTH_PX > vw - MARGIN_PX) {
+  if (left + width > vw - MARGIN_PX) {
     // Try left side.
-    const altLeft = figureRectViewport.left - CARD_WIDTH_PX - MARGIN_PX;
+    const altLeft = figureRectViewport.left - width - MARGIN_PX;
     if (altLeft >= MARGIN_PX) {
       left = altLeft;
     } else {
@@ -266,10 +310,8 @@ function positionCard(figureRectViewport: DOMRect): void {
       left = Math.max(
         MARGIN_PX,
         Math.min(
-          figureRectViewport.left +
-            figureRectViewport.width / 2 -
-            CARD_WIDTH_PX / 2,
-          vw - CARD_WIDTH_PX - MARGIN_PX,
+          figureRectViewport.left + figureRectViewport.width / 2 - width / 2,
+          vw - width - MARGIN_PX,
         ),
       );
       top = figureRectViewport.bottom + MARGIN_PX;
@@ -280,6 +322,10 @@ function positionCard(figureRectViewport: DOMRect): void {
     top = Math.max(MARGIN_PX, vh - cardHeight - MARGIN_PX);
   }
   if (top < MARGIN_PX) top = MARGIN_PX;
+
+  // Final cap: grow only as far as the bottom of the screen allows, never
+  // past the remembered/default cap. Beyond this the thread scrolls.
+  el.style.maxHeight = `${Math.min(size.height, vh - top - MARGIN_PX)}px`;
 
   el.style.left = `${left + window.scrollX}px`;
   el.style.top = `${top + window.scrollY}px`;
@@ -304,8 +350,9 @@ export function showFigureCard(
       activeFigureId === figure.figure_id
     ) {
       render();
-      // Content (or the chat thread) can change the card's height —
-      // re-clamp to the viewport so it never drifts off-screen.
+      // positionCard() no-ops once the card has been placed for this open
+      // session (its height is capped, so content/chat growth never needs
+      // to push it around) — this call just re-anchors it the first time.
       if (activeRectViewport) positionCard(activeRectViewport);
     }
   });
@@ -335,7 +382,15 @@ export function hideFigureCard(): void {
   activeFigureId = null;
   activeFigure = null;
   activeRectViewport = null;
-  if (cardEl) cardEl.style.display = "none";
+  // The card must be re-placed next open, but the reader's chosen size is
+  // remembered by resizePanel and re-applied then.
+  resizePanel?.reset();
+  if (cardEl) {
+    cardEl.style.display = "none";
+    // Drop the explicit height so the saved height is re-applied as the
+    // grow-to cap (rather than a stale fixed value) next open.
+    cardEl.style.height = "";
+  }
 }
 
 /** Test-only: tear down the singleton card and reset module state. */
@@ -355,4 +410,5 @@ export function _resetForTest(): void {
   chatErrorEl = null;
   inputEl = null;
   sendEl = null;
+  resizePanel = null;
 }

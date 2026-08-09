@@ -30,6 +30,7 @@ import {
   startExplanation,
   subscribeExplanation,
 } from "../explanationStore.ts";
+import { ResizablePanel } from "./ResizablePanel.ts";
 
 const DWELL_MS = 200;
 const GAP_PX = 8;
@@ -39,6 +40,8 @@ const TOOLTIP_WIDTH_PX = 360;
 // well under the viewport so it never dominates the page.
 const DEFAULT_PINNED_WIDTH = 600;
 const DEFAULT_CAP_PX = 620;
+const RESIZE_MIN_W = 260;
+const RESIZE_MIN_H = 200;
 
 // Tooltip singleton state.
 let tooltipEl: HTMLDivElement | null = null;
@@ -83,36 +86,12 @@ let activePage: number | null = null;
 let activePageText: string | null = null;
 let activeGroup: SVGGElement | null = null;
 let activeOnDelete: ((annotationId: string) => void) | null = null;
-// The reader's preferred panel size, remembered across opens (and reloads via
-// localStorage). Applied each time the panel is pinned.
-let savedSize: { width: number; height: number } | null = loadSavedSize();
-// Whether the pinned panel has been positioned for the current open session.
-// Once placed (or resized), re-renders leave its geometry alone.
-let pinnedPlaced = false;
+// Owns the pinned panel's resize handles, drag-to-resize, and remembered
+// {width, height} (persisted across opens/reloads via localStorage). Built
+// once, alongside the rest of the DOM, in ensureTooltip().
+let resizePanel: ResizablePanel | null = null;
 
 const SAVED_SIZE_KEY = "scai.explanationBoxSize";
-
-function loadSavedSize(): { width: number; height: number } | null {
-  try {
-    const raw = localStorage.getItem(SAVED_SIZE_KEY);
-    if (!raw) return null;
-    const o = JSON.parse(raw);
-    if (typeof o?.width === "number" && typeof o?.height === "number") {
-      return { width: o.width, height: o.height };
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function persistSavedSize(): void {
-  try {
-    if (savedSize) localStorage.setItem(SAVED_SIZE_KEY, JSON.stringify(savedSize));
-  } catch {
-    /* ignore */
-  }
-}
 
 interface BlueRegistration {
   group: SVGGElement;
@@ -239,13 +218,16 @@ function ensureTooltip(): HTMLDivElement {
   foot.appendChild(openChat);
   el.appendChild(foot);
 
-  // Eight resize handles (edges + corners), only interactive when pinned.
-  for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
-    const handle = document.createElement("div");
-    handle.className = `explanation-resize-handle resize-${dir}`;
-    handle.addEventListener("pointerdown", (ev) => startResize(dir, ev));
-    el.appendChild(handle);
-  }
+  // Eight resize handles (edges + corners), only interactive when pinned —
+  // shared with FigureCard so the two panels can't drift apart.
+  resizePanel = new ResizablePanel({
+    el,
+    storageKey: SAVED_SIZE_KEY,
+    defaultWidth: DEFAULT_PINNED_WIDTH,
+    defaultHeight: DEFAULT_CAP_PX,
+    minWidth: RESIZE_MIN_W,
+    minHeight: RESIZE_MIN_H,
+  });
 
   // While the cursor is over the tooltip itself, cancel any pending hide
   // so the user can read it (or type) without it flickering away.
@@ -317,60 +299,6 @@ function rerender(): void {
   if (activeGroup) position(activeGroup.getBoundingClientRect());
 }
 
-const RESIZE_MIN_W = 260;
-const RESIZE_MIN_H = 200;
-
-/** Drag a resize handle to size the panel; content reflows to fit. */
-function startResize(dir: string, e: PointerEvent): void {
-  if (!tooltipEl) return;
-  e.preventDefault();
-  e.stopPropagation();
-  const el = tooltipEl;
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const rect = el.getBoundingClientRect();
-  const startW = rect.width;
-  const startH = rect.height;
-  const startLeft = parseFloat(el.style.left) || rect.left + window.scrollX;
-  const startTop = parseFloat(el.style.top) || rect.top + window.scrollY;
-  const maxW = window.innerWidth - 24;
-  const maxH = window.innerHeight - 24;
-
-  const onMove = (ev: PointerEvent) => {
-    const dx = ev.clientX - startX;
-    const dy = ev.clientY - startY;
-    let w = startW;
-    let h = startH;
-    if (dir.includes("e")) w = startW + dx;
-    if (dir.includes("w")) w = startW - dx;
-    if (dir.includes("s")) h = startH + dy;
-    if (dir.includes("n")) h = startH - dy;
-    w = Math.max(RESIZE_MIN_W, Math.min(maxW, w));
-    h = Math.max(RESIZE_MIN_H, Math.min(maxH, h));
-    // Dragging a west/north edge keeps the opposite edge anchored.
-    const left = dir.includes("w") ? startLeft + (startW - w) : startLeft;
-    const top = dir.includes("n") ? startTop + (startH - h) : startTop;
-
-    el.style.width = `${w}px`;
-    // Set height AND max-height together so the drag can grow the panel past
-    // the placement cap; the dragged height becomes the new cap.
-    el.style.height = `${h}px`;
-    el.style.maxHeight = `${h}px`;
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-    pinnedPlaced = true;
-    // Remember this size (height is the grow-to cap) for the next open.
-    savedSize = { width: w, height: h };
-    persistSavedSize();
-  };
-  const onUp = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-  };
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", onUp);
-}
-
 function clearSubscription(): void {
   if (currentUnsubscribe) {
     currentUnsubscribe();
@@ -400,8 +328,8 @@ function hide(): void {
   activeGroup = null;
   activeOnDelete = null;
   // The panel must be re-placed next open, but the reader's chosen size is
-  // remembered (in savedSize) and re-applied then.
-  pinnedPlaced = false;
+  // remembered by resizePanel and re-applied then.
+  resizePanel?.reset();
   if (tooltipEl) {
     tooltipEl.style.display = "none";
     // Drop the explicit height so a fresh collapsed hover sizes to content;
@@ -427,7 +355,7 @@ function position(anchorRect: DOMRect): void {
 
   // The pinned panel is positioned (and sized) exactly once per open session.
   // After that, re-renders and resize drags own its geometry — don't yank it.
-  if (pinned && pinnedPlaced) return;
+  if (pinned && resizePanel?.placed) return;
 
   const margin = 12;
   const vw = window.innerWidth;
@@ -435,15 +363,16 @@ function position(anchorRect: DOMRect): void {
 
   let width: number;
   if (pinned) {
-    width = Math.min(savedSize?.width ?? DEFAULT_PINNED_WIDTH, vw - margin * 2);
+    const size = resizePanel!.size;
+    width = Math.min(size.width, vw - margin * 2);
     el.style.width = `${width}px`;
     // The panel height is left to grow with content (the thread scrolls once
     // it hits the cap), so clear any stale explicit height and apply a
     // provisional cap to measure with.
     el.style.height = "";
-    const cap = Math.min(savedSize?.height ?? DEFAULT_CAP_PX, vh - margin * 2);
+    const cap = Math.min(size.height, vh - margin * 2);
     el.style.maxHeight = `${cap}px`;
-    pinnedPlaced = true;
+    resizePanel!.markPlaced();
   } else {
     width = Math.min(TOOLTIP_WIDTH_PX, vw - margin * 2);
     el.style.width = `${width}px`;
@@ -465,7 +394,7 @@ function position(anchorRect: DOMRect): void {
   if (pinned) {
     // Final cap: grow only as far as the bottom of the screen allows, never
     // past the remembered/default cap. Beyond this the thread scrolls.
-    const cap = Math.min(savedSize?.height ?? DEFAULT_CAP_PX, vh - y - margin);
+    const cap = Math.min(resizePanel!.size.height, vh - y - margin);
     el.style.maxHeight = `${cap}px`;
   }
 
@@ -831,8 +760,7 @@ export function hideExplanationTooltip(): void {
 export function _resetForTest(): void {
   pinned = false;
   stickyOpen = false;
-  pinnedPlaced = false;
-  savedSize = null;
+  resizePanel = null;
   if (currentUnsubscribe) currentUnsubscribe();
   currentUnsubscribe = null;
   if (dwellTimer != null) window.clearTimeout(dwellTimer);

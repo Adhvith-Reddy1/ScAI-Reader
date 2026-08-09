@@ -53,10 +53,12 @@ describe("FigureCard dismiss / follow-up chat", () => {
     streamFigureExplanationMock.mockReset().mockReturnValue(() => {});
     streamFigureChatMock.mockReset().mockReturnValue(() => {});
     document.body.innerHTML = "";
+    localStorage.clear();
   });
   afterEach(() => {
     _resetForTest();
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("clicking outside the card closes it", () => {
@@ -64,7 +66,9 @@ describe("FigureCard dismiss / follow-up chat", () => {
     showFigureCard("doc", figure("fig-1"), RECT);
 
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    expect(card.style.display).toBe("block");
+    // Flex column (not "block") — same pinned layout as the highlight
+    // tooltip, so the thread can scroll while header/body stay put.
+    expect(card.style.display).toBe("flex");
 
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     expect(card.style.display).toBe("none");
@@ -78,7 +82,7 @@ describe("FigureCard dismiss / follow-up chat", () => {
     card
       .querySelector(".figure-card-body")!
       .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    expect(card.style.display).toBe("block");
+    expect(card.style.display).toBe("flex");
   });
 
   it("Escape closes the card", () => {
@@ -167,5 +171,119 @@ describe("FigureCard dismiss / follow-up chat", () => {
 
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     expect(card.style.display).toBe("none");
+  });
+
+  // Resize/cap behavior mirrors ExplanationTooltip's pinned panel exactly —
+  // the bug this suite guards against is the card growing without limit as
+  // the chat thread accumulates messages instead of capping and scrolling
+  // internally.
+  it("caps the card height (grow-then-scroll) when not resized", () => {
+    seedFigure("doc", "fig-9", "x");
+    showFigureCard("doc", figure("fig-9"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    // A bounded max-height is applied so the thread (overflow-y:auto) scrolls
+    // instead of the card growing without limit. jsdom viewport is 768 tall.
+    const cap = parseFloat(card.style.maxHeight);
+    expect(cap).toBeGreaterThan(0);
+    expect(cap).toBeLessThanOrEqual(480);
+    // Height is left to grow with content rather than pinned to a value.
+    expect(card.style.height).toBe("");
+  });
+
+  it("has eight resize handles", () => {
+    seedFigure("doc", "fig-10", "x");
+    showFigureCard("doc", figure("fig-10"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    const handles = card.querySelectorAll(".explanation-resize-handle");
+    expect(handles.length).toBe(8);
+    for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+      expect(card.querySelector(`.resize-${dir}`)).toBeTruthy();
+    }
+  });
+
+  it("dragging the SE handle resizes the card", () => {
+    seedFigure("doc", "fig-11", "x");
+    showFigureCard("doc", figure("fig-11"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    card.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 100,
+        right: 480,
+        bottom: 360,
+        width: 380,
+        height: 260,
+        x: 100,
+        y: 100,
+        toJSON() {},
+      }) as DOMRect;
+    card.style.left = "100px";
+    card.style.top = "100px";
+
+    const se = card.querySelector<HTMLElement>(".resize-se")!;
+    se.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 480, clientY: 360, bubbles: true }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 580, clientY: 460 }),
+    );
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+
+    expect(card.style.width).toBe("480px");
+    expect(card.style.height).toBe("360px");
+    expect(card.style.left).toBe("100px");
+    expect(card.style.top).toBe("100px");
+  });
+
+  it("remembers the resized size after close and reopen", () => {
+    seedFigure("doc", "fig-12", "x");
+    showFigureCard("doc", figure("fig-12"), RECT);
+    let card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    card.getBoundingClientRect = () =>
+      ({ width: 380, height: 260 }) as DOMRect;
+    const se = card.querySelector<HTMLElement>(".resize-se")!;
+    se.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 0, clientY: 0, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 100, clientY: 100 }));
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+    expect(card.style.width).toBe("480px"); // 380 + 100
+    expect(card.style.height).toBe("360px"); // 260 + 100
+
+    hideFigureCard();
+    expect(card.style.display).toBe("none");
+
+    showFigureCard("doc", figure("fig-12"), RECT);
+    card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    // Width is restored exactly; the remembered height comes back as the
+    // grow-to cap (max-height) so the card still expands-then-scrolls.
+    expect(card.style.width).toBe("480px");
+    expect(card.style.maxHeight).toBe("360px");
+    expect(card.style.height).toBe("");
+  });
+
+  it("persists resized size independently from the explanation tooltip's key", () => {
+    seedFigure("doc", "fig-13", "x");
+    showFigureCard("doc", figure("fig-13"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    card.getBoundingClientRect = () =>
+      ({ width: 380, height: 260 }) as DOMRect;
+    const se = card.querySelector<HTMLElement>(".resize-se")!;
+    se.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 0, clientY: 0, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 40, clientY: 40 }));
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+
+    expect(localStorage.getItem("scai.figureBoxSize")).toBe(
+      JSON.stringify({ width: 420, height: 300 }),
+    );
+    expect(localStorage.getItem("scai.explanationBoxSize")).toBeNull();
   });
 });

@@ -1166,27 +1166,39 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .explanation-resize-handle.resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
 .explanation-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
-/* Figure-explain pinned card. Stays open until dismissed, anchors next
-   to the figure so it doesn't occlude the page text. */
+/* Figure-explain card. Stays open until dismissed, anchors next to the
+   figure so it doesn't occlude the page text. It has no separate "pinned"
+   state — it's always in the resizable, capped-height layout the highlight
+   tooltip only switches into once pinned, so the header/body/close chrome
+   below is written to match `.explanation-tooltip*` values exactly (the
+   "gold standard" chat panel look) rather than duplicating slightly
+   different numbers that would drift out of sync over time. */
 .figure-card {
   position: absolute;
+  box-sizing: border-box;
   z-index: 220;
   background: #1f242c;
   color: #e6e8eb;
-  border: 1px solid rgba(120, 180, 255, 0.5);
-  border-radius: 12px;
-  padding: 0;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(33, 150, 243, 0.55);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.45;
   pointer-events: auto;
-  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  /* Fallback cap; JS sets a precise inline max-height that grows with content
+     up to a readable size and then lets the thread scroll — same rule as
+     `.explanation-tooltip.is-pinned`. */
+  max-height: min(480px, calc(100vh - 24px));
+  overflow: hidden;
+  resize: none;
 }
 .figure-card-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  padding: 10px 14px 6px;
   gap: 8px;
 }
 .figure-card-title {
@@ -1194,25 +1206,25 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(140, 200, 255, 0.95);
+  color: rgba(120, 180, 255, 0.95);
+  margin-bottom: 6px;
 }
 .figure-card-close {
+  flex: 0 0 auto;
   background: transparent;
   border: none;
-  color: rgba(220, 220, 220, 0.6);
+  color: rgba(230, 232, 235, 0.7);
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 0 2px;
 }
 .figure-card-close:hover {
   color: #fff;
-  background: rgba(255, 255, 255, 0.08);
 }
 .figure-card-body {
-  padding: 0 14px 12px;
   white-space: pre-wrap;
+  flex: 0 0 auto;
 }
 .figure-card-body p,
 .figure-card-body ul {
@@ -1232,11 +1244,16 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   height: 12px;
   margin-left: 2px;
   vertical-align: -2px;
-  background: rgba(140, 200, 255, 0.85);
+  background: rgba(120, 180, 255, 0.85);
   animation: explanation-shimmer 1s infinite;
 }
 .figure-card.is-error {
   border-color: rgba(244, 67, 54, 0.6);
+}
+/* The card is always in the resizable, capped-height layout (no collapsed
+   look to toggle out of), so its resize handles are always interactive. */
+.figure-card .explanation-resize-handle {
+  display: block;
 }
 
 /* --- AI setup: nav button, status dot, first-run nudge, dialog ----------- */
