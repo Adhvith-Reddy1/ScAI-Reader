@@ -1025,6 +1025,26 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   min-height: 0;
   overflow-y: auto;
   margin-bottom: 8px;
+  /* Firefox: thin track, pill thumb darker than the panel's own background.
+     (The figure card's copy of this thread doesn't scroll on its own — see
+     `.figure-card-scroll .explanation-chat-thread` — so this only applies
+     to the highlight explanation/definition panel.) */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.4) transparent;
+}
+/* Chrome/Safari: same look — narrow, transparent track, rounded thumb. */
+.explanation-chat-thread::-webkit-scrollbar {
+  width: 6px;
+}
+.explanation-chat-thread::-webkit-scrollbar-track {
+  background: transparent;
+}
+.explanation-chat-thread::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 999px;
+}
+.explanation-chat-thread::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.55);
 }
 .explanation-chat-thread:empty {
   flex: 0 0 auto;
