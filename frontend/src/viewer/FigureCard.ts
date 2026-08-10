@@ -25,6 +25,7 @@ import { renderFormattedText } from "../aiText.ts";
 import { openAiSetup } from "../AiSetup.ts";
 import { openUserKeyPrompt } from "../UserKeyPrompt.ts";
 import {
+  forgetFigureExplanation,
   getFigureChat,
   getFigureState,
   retryFigureExplanation,
@@ -51,10 +52,9 @@ let bodyEl: HTMLDivElement | null = null;
 let chatEl: HTMLDivElement | null = null;
 let threadEl: HTMLDivElement | null = null;
 let chatErrorEl: HTMLDivElement | null = null;
-let formEl: HTMLFormElement | null = null;
-let followUpBtnEl: HTMLButtonElement | null = null;
 let inputEl: HTMLInputElement | null = null;
 let sendEl: HTMLButtonElement | null = null;
+let footEl: HTMLDivElement | null = null;
 let unsubscribe: (() => void) | null = null;
 let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
@@ -62,8 +62,9 @@ let activeFigure: PageFigure | null = null;
 let activeRectViewport: DOMRect | null = null;
 // The box itself pops up fully on double-click (no separate step for that —
 // double-click is a deliberate "explain this" action). But the text input
-// stays behind a "Follow up" button until the reader clicks it, same as
-// typing a message shouldn't be one accidental click away.
+// stays behind an "Ask a follow-up ›" button (alongside Delete) until the
+// reader clicks it, same as typing a message shouldn't be one accidental
+// click away.
 let followUpOpened = false;
 // Owns the card's resize handles, drag-to-resize, and remembered
 // {width, height} — the same shared behavior the pinned explanation panel
@@ -99,7 +100,8 @@ function ensureCard(): HTMLDivElement {
   el.appendChild(body);
 
   // Follow-up chat — same structure/classes as the highlight tooltip's
-  // pinned chat, so it picks up the same styling for free.
+  // pinned chat, so it picks up the same styling for free. Hidden until the
+  // reader clicks "Ask a follow-up ›" in the footer below.
   const chat = document.createElement("div");
   chat.className = "explanation-chat";
 
@@ -110,19 +112,6 @@ function ensureCard(): HTMLDivElement {
   const chatError = document.createElement("div");
   chatError.className = "explanation-chat-error";
   chat.appendChild(chatError);
-
-  // No text input until the reader deliberately asks for one — typing
-  // shouldn't be a single accidental click away.
-  const followUpBtn = document.createElement("button");
-  followUpBtn.type = "button";
-  followUpBtn.className = "explanation-chat-open";
-  followUpBtn.textContent = "Follow up";
-  followUpBtn.addEventListener("click", () => {
-    followUpOpened = true;
-    renderChat();
-    inputEl?.focus();
-  });
-  chat.appendChild(followUpBtn);
 
   const form = document.createElement("form");
   form.className = "explanation-chat-form";
@@ -143,6 +132,37 @@ function ensureCard(): HTMLDivElement {
   chat.appendChild(form);
   el.appendChild(chat);
 
+  // Footer: Delete on the left, "Ask a follow-up ›" on the right — reuses
+  // the highlight explanation tooltip's own classes (`.explanation-tooltip-
+  // foot`/`-delete`) directly rather than duplicating the layout/colors, so
+  // this can't visually drift from it. Hidden once the reader asks for the
+  // chat (same rule as the tooltip's footer once pinned).
+  const foot = document.createElement("div");
+  foot.className = "explanation-tooltip-foot";
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "explanation-tooltip-delete";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => {
+    if (!activeDocId || !activeFigureId) return;
+    void forgetFigureExplanation(activeDocId, activeFigureId);
+    hideFigureCard();
+  });
+  foot.appendChild(del);
+
+  const followUpBtn = document.createElement("button");
+  followUpBtn.type = "button";
+  followUpBtn.className = "explanation-chat-open";
+  followUpBtn.textContent = "Ask a follow-up ›";
+  followUpBtn.addEventListener("click", () => {
+    followUpOpened = true;
+    renderChat();
+    inputEl?.focus();
+  });
+  foot.appendChild(followUpBtn);
+  el.appendChild(foot);
+
   // Eight resize handles (edges + corners) — shared with the pinned
   // explanation/definition panel so the two panels' resize behavior can't
   // drift apart.
@@ -162,10 +182,9 @@ function ensureCard(): HTMLDivElement {
   chatEl = chat;
   threadEl = thread;
   chatErrorEl = chatError;
-  formEl = form;
-  followUpBtnEl = followUpBtn;
   inputEl = input;
   sendEl = send;
+  footEl = foot;
 
   // Esc dismisses.
   document.addEventListener("keydown", (e) => {
@@ -206,12 +225,9 @@ function renderChat(): void {
   if (!activeDocId || !activeFigureId) return;
   const state = getFigureState(activeDocId, activeFigureId);
   const chatAvailable = state.status === "ready";
-  if (chatEl) chatEl.style.display = chatAvailable ? "flex" : "none";
-  if (followUpBtnEl) {
-    followUpBtnEl.style.display = chatAvailable && !followUpOpened ? "inline-flex" : "none";
-  }
-  if (formEl) formEl.style.display = chatAvailable && followUpOpened ? "flex" : "none";
-  if (!chatAvailable) return;
+  if (chatEl) chatEl.style.display = chatAvailable && followUpOpened ? "flex" : "none";
+  if (footEl) footEl.style.display = chatAvailable && !followUpOpened ? "flex" : "none";
+  if (!chatAvailable || !followUpOpened) return;
 
   const chat = getFigureChat(activeDocId, activeFigureId);
 
@@ -440,9 +456,8 @@ export function _resetForTest(): void {
   chatEl = null;
   threadEl = null;
   chatErrorEl = null;
-  formEl = null;
-  followUpBtnEl = null;
   inputEl = null;
   sendEl = null;
+  footEl = null;
   resizePanel = null;
 }

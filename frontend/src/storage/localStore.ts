@@ -205,6 +205,14 @@ export async function getExplanation(
   return (await db.get("explanations", [docId, annotationId])) ?? null;
 }
 
+export async function deleteExplanation(
+  docId: string,
+  annotationId: string,
+): Promise<void> {
+  const db = await getDB();
+  await db.delete("explanations", [docId, annotationId]);
+}
+
 // View state -------------------------------------------------------------
 
 export async function getViewState(docId: string): Promise<ViewState | null> {

@@ -7,6 +7,7 @@
 import type { ChatTurn, FigureBBox } from "./api.ts";
 import { streamFigureChat, streamFigureExplanation } from "./api.ts";
 import {
+  deleteExplanation,
   getExplanation as getCachedExplanation,
   putExplanation,
 } from "./storage/localStore.ts";
@@ -184,6 +185,31 @@ export async function startFigureExplanation(
 /** The follow-up thread for a figure. */
 export function getFigureChat(docId: string, figureId: string): FigureChatThread {
   return ensureEntry(docId, figureId).chat;
+}
+
+/**
+ * Figures have no annotation to delete (they're detected from the PDF, not
+ * created by the reader) — "Delete" instead forgets this interpretation, both
+ * the persisted cache and the in-memory state, so the next double-click
+ * generates a fresh one instead of reusing the old answer.
+ */
+export async function forgetFigureExplanation(
+  docId: string,
+  figureId: string,
+): Promise<void> {
+  const entry = ensureEntry(docId, figureId);
+  entry.abort?.();
+  entry.chatAbort?.();
+  entry.abort = undefined;
+  entry.chatAbort = undefined;
+  setState(entry, { status: "idle" });
+  entry.chat = freshChat();
+  notify(entry);
+  try {
+    await deleteExplanation(docId, figureId);
+  } catch {
+    /* best-effort cache clear */
+  }
 }
 
 function currentFigureContent(entry: Entry): string {

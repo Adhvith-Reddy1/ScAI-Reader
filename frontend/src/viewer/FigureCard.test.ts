@@ -22,12 +22,16 @@ vi.mock("../api.ts", () => ({
     streamFigureChatMock(d, f, b, cb) ?? (() => {}),
 }));
 
+const deleteExplanationMock = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("../storage/localStore.ts", () => ({
   getExplanation: vi.fn().mockResolvedValue(null),
   putExplanation: vi.fn().mockResolvedValue(undefined),
+  deleteExplanation: (docId: string, annotationId: string) =>
+    deleteExplanationMock(docId, annotationId),
 }));
 
-import { seedFigure } from "../figureStore.ts";
+import { getFigureState, seedFigure } from "../figureStore.ts";
 import { showFigureCard, hideFigureCard, _resetForTest } from "./FigureCard.ts";
 
 const RECT = { left: 100, top: 100, right: 300, bottom: 200 } as DOMRect;
@@ -52,6 +56,7 @@ describe("FigureCard dismiss / follow-up chat", () => {
     _resetForTest();
     streamFigureExplanationMock.mockReset().mockReturnValue(() => {});
     streamFigureChatMock.mockReset().mockReturnValue(() => {});
+    deleteExplanationMock.mockReset().mockResolvedValue(undefined);
     document.body.innerHTML = "";
     localStorage.clear();
   });
@@ -120,29 +125,44 @@ describe("FigureCard dismiss / follow-up chat", () => {
     );
   });
 
-  it("keeps the text input hidden behind a Follow up button until clicked", () => {
+  it("keeps the text input hidden behind a Delete / Ask-a-follow-up footer until clicked", () => {
     seedFigure("doc", "fig-7a", "A bar chart of results.");
     showFigureCard("doc", figure("fig-7a"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     // The box itself (interpretation, resize handles) is already fully open —
-    // only the text input specifically is gated.
+    // only the text input specifically is gated, behind a footer matching
+    // the highlight explanation tooltip's own: Delete left, follow-up right.
     expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
-      "flex",
+      "none",
     );
-    expect(
-      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
-    ).toBe("none");
-    const followUpBtn = card.querySelector<HTMLButtonElement>(".explanation-chat-open")!;
-    expect(followUpBtn.style.display).toBe("inline-flex");
-    expect(followUpBtn.textContent).toBe("Follow up");
+    const foot = card.querySelector<HTMLElement>(".explanation-tooltip-foot")!;
+    expect(foot.style.display).toBe("flex");
+    const deleteBtn = foot.querySelector<HTMLButtonElement>(".explanation-tooltip-delete")!;
+    const followUpBtn = foot.querySelector<HTMLButtonElement>(".explanation-chat-open")!;
+    expect(deleteBtn.textContent).toBe("Delete");
+    expect(followUpBtn.textContent).toBe("Ask a follow-up ›");
 
     followUpBtn.click();
 
-    expect(
-      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
-    ).toBe("flex");
-    expect(followUpBtn.style.display).toBe("none");
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
+    expect(foot.style.display).toBe("none");
+  });
+
+  it("Delete clears the cached interpretation and closes the card", () => {
+    seedFigure("doc", "fig-7c", "A bar chart of results.");
+    showFigureCard("doc", figure("fig-7c"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    card.querySelector<HTMLButtonElement>(".explanation-tooltip-delete")!.click();
+
+    expect(card.style.display).toBe("none");
+    expect(deleteExplanationMock).toHaveBeenCalledWith("doc", "fig-7c");
+    // The in-memory entry resets to idle so a later open re-fetches instead
+    // of reusing the forgotten interpretation.
+    expect(getFigureState("doc", "fig-7c")).toEqual({ status: "idle" });
   });
 
   it("shows the chat once ready and streams a follow-up reply into the thread", () => {
@@ -151,9 +171,12 @@ describe("FigureCard dismiss / follow-up chat", () => {
     const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
-      "flex",
+      "none",
     );
     card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
 
     const input = card.querySelector<HTMLInputElement>(".explanation-chat-input")!;
     input.value = "why does that matter?";
@@ -184,25 +207,25 @@ describe("FigureCard dismiss / follow-up chat", () => {
     ]);
   });
 
-  it("reopening a figure hides the input behind Follow up again, even if it was open before", () => {
+  it("reopening a figure hides the input behind the footer again, even if it was open before", () => {
     seedFigure("doc", "fig-7b", "x");
     showFigureCard("doc", figure("fig-7b"), RECT);
     let card = document.querySelector<HTMLElement>(".figure-card")!;
     card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
-    expect(
-      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
-    ).toBe("flex");
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
 
     hideFigureCard();
     showFigureCard("doc", figure("fig-7b"), RECT);
     card = document.querySelector<HTMLElement>(".figure-card")!;
 
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "none",
+    );
     expect(
-      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
-    ).toBe("none");
-    expect(
-      card.querySelector<HTMLElement>(".explanation-chat-open")!.style.display,
-    ).toBe("inline-flex");
+      card.querySelector<HTMLElement>(".explanation-tooltip-foot")!.style.display,
+    ).toBe("flex");
   });
 
   it("clicking outside while chatting still closes the card (no separate pinned state)", () => {
