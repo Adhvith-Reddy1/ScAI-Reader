@@ -1,15 +1,13 @@
 /**
- * Singleton card showing the AI explanation for a figure.
+ * Singleton pinned card showing the AI explanation for a figure.
  *
- * Mirrors the highlight explanation/definition tooltip's collapsed → pinned
- * flow: double-click opens it collapsed (interpretation text + an "Ask a
- * follow-up ›" button), and only clicking that promotes it to the full
- * resizable chat panel. It dismisses in either state when the reader clicks
- * outside it, presses Escape, or (once pinned) clicks its own close button.
- * Unlike the highlight tooltip it isn't hover-driven — it opens on
- * double-click rather than a dwell timer, and there's no "sticky-open new
- * highlight" equivalent — but the collapsed/pinned chrome and behavior are
- * otherwise the same.
+ * Like the definition/explanation tooltip once it's pinned open, this
+ * dismisses when the reader clicks outside it, presses Escape, or clicks
+ * its own close button — and supports a follow-up chat thread for when the
+ * first interpretation wasn't enough. Unlike the highlight tooltip it isn't
+ * hover-driven: it opens directly on double-click and stays open (no
+ * separate "pinned" state to toggle), so the chat is available as soon as
+ * an interpretation is ready.
  *
  * It anchors to the right margin of the figure if there's room, otherwise
  * just below the figure. Positioning is page-anchored so it follows the
@@ -34,12 +32,9 @@ import {
 } from "../figureStore.ts";
 import { ResizablePanel } from "./ResizablePanel.ts";
 
-// Collapsed width mirrors the explanation/definition tooltip's collapsed
-// look (content-sized, no resize). Pinned defaults mirror its pinned-chat
-// sizing — wide/tall enough to read comfortably, capped well under the
-// viewport so the thread scrolls internally instead of the card growing
-// without limit.
-const COLLAPSED_WIDTH_PX = 340;
+// Defaults mirror the explanation/definition panel's pinned-chat sizing —
+// wide/tall enough to read comfortably, capped well under the viewport so
+// the thread scrolls internally instead of the card growing without limit.
 const DEFAULT_CARD_WIDTH = 380;
 const DEFAULT_CAP_PX = 480;
 const RESIZE_MIN_W = 260;
@@ -51,22 +46,16 @@ const SAVED_SIZE_KEY = "scai.figureBoxSize";
 let cardEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
 let bodyEl: HTMLDivElement | null = null;
-let closeEl: HTMLButtonElement | null = null;
 let chatEl: HTMLDivElement | null = null;
 let threadEl: HTMLDivElement | null = null;
 let chatErrorEl: HTMLDivElement | null = null;
 let inputEl: HTMLInputElement | null = null;
 let sendEl: HTMLButtonElement | null = null;
-let footEl: HTMLDivElement | null = null;
 let unsubscribe: (() => void) | null = null;
 let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
 let activeFigure: PageFigure | null = null;
 let activeRectViewport: DOMRect | null = null;
-// Once the reader clicks "Ask a follow-up ›" the card is "pinned": the full
-// resizable chat panel replaces the collapsed footer — same distinction as
-// the highlight explanation tooltip's collapsed vs. pinned state.
-let pinned = false;
 // Owns the card's resize handles, drag-to-resize, and remembered
 // {width, height} — the same shared behavior the pinned explanation panel
 // uses, so the two panels can't drift apart. Built once, alongside the rest
@@ -87,13 +76,10 @@ function ensureCard(): HTMLDivElement {
   title.className = "figure-card-title";
   header.appendChild(title);
 
-  // Hidden until pinned — collapsed state dismisses via outside-click/Escape
-  // only, same as the highlight explanation tooltip's collapsed look.
   const close = document.createElement("button");
   close.className = "figure-card-close";
   close.setAttribute("aria-label", "Close figure explanation");
   close.textContent = "×";
-  close.style.display = "none";
   close.addEventListener("click", () => hideFigureCard());
   header.appendChild(close);
 
@@ -104,8 +90,7 @@ function ensureCard(): HTMLDivElement {
   el.appendChild(body);
 
   // Follow-up chat — same structure/classes as the highlight tooltip's
-  // pinned chat, so it picks up the same styling for free. Hidden until the
-  // card is pinned.
+  // pinned chat, so it picks up the same styling for free.
   const chat = document.createElement("div");
   chat.className = "explanation-chat";
 
@@ -136,26 +121,9 @@ function ensureCard(): HTMLDivElement {
   chat.appendChild(form);
   el.appendChild(chat);
 
-  // Collapsed-state footer: just "Ask a follow-up ›" (figures have no
-  // Delete-equivalent, unlike the highlight tooltip's footer).
-  const foot = document.createElement("div");
-  foot.className = "figure-card-foot";
-  const openChat = document.createElement("button");
-  openChat.type = "button";
-  openChat.className = "explanation-chat-open";
-  openChat.textContent = "Ask a follow-up ›";
-  openChat.addEventListener("click", () => {
-    pinned = true;
-    render();
-    if (activeRectViewport) positionCard(activeRectViewport);
-    inputEl?.focus();
-  });
-  foot.appendChild(openChat);
-  el.appendChild(foot);
-
   // Eight resize handles (edges + corners) — shared with the pinned
   // explanation/definition panel so the two panels' resize behavior can't
-  // drift apart. Only interactive once pinned (gated in CSS via .is-pinned).
+  // drift apart.
   resizePanel = new ResizablePanel({
     el,
     storageKey: SAVED_SIZE_KEY,
@@ -169,13 +137,11 @@ function ensureCard(): HTMLDivElement {
   cardEl = el;
   titleEl = title;
   bodyEl = body;
-  closeEl = close;
   chatEl = chat;
   threadEl = thread;
   chatErrorEl = chatError;
   inputEl = input;
   sendEl = send;
-  footEl = foot;
 
   // Esc dismisses.
   document.addEventListener("keydown", (e) => {
@@ -214,19 +180,10 @@ function submitChat(): void {
 
 function renderChat(): void {
   if (!activeDocId || !activeFigureId) return;
-  const el = cardEl!;
   const state = getFigureState(activeDocId, activeFigureId);
   const chatAvailable = state.status === "ready";
-
-  el.classList.toggle("is-pinned", pinned);
-  // Close (×) only appears once pinned — same rule as the highlight
-  // explanation tooltip. The collapsed footer ("Ask a follow-up ›") shows
-  // only once there's an interpretation worth following up on, and hides
-  // once pinned (the chat itself replaces it).
-  if (closeEl) closeEl.style.display = pinned ? "block" : "none";
-  if (footEl) footEl.style.display = !pinned && chatAvailable ? "flex" : "none";
-  if (chatEl) chatEl.style.display = pinned && chatAvailable ? "flex" : "none";
-  if (!pinned || !chatAvailable) return;
+  if (chatEl) chatEl.style.display = chatAvailable ? "flex" : "none";
+  if (!chatAvailable) return;
 
   const chat = getFigureChat(activeDocId, activeFigureId);
 
@@ -317,36 +274,26 @@ function render(): void {
 function positionCard(figureRectViewport: DOMRect): void {
   const el = ensureCard();
   const panel = resizePanel!;
-  el.style.display = pinned ? "flex" : "block";
+  el.style.display = "flex";
 
-  // Once pinned, the card is positioned (and sized) exactly once per open
-  // session — same rule as the pinned explanation panel. After that,
-  // re-renders (new chat messages arriving) and resize drags own its
-  // geometry; the capped height means content growth never needs to push
-  // the card around anyway. While collapsed, keep repositioning each render
-  // (content — the streaming interpretation — can change its height).
-  if (pinned && panel.placed) return;
+  // The card is positioned (and sized) exactly once per open session — same
+  // rule as the pinned explanation panel. After that, re-renders (new chat
+  // messages arriving) and resize drags own its geometry; the capped height
+  // means content growth never needs to push the card around anyway.
+  if (panel.placed) return;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  let width: number;
-  if (pinned) {
-    const size = panel.size;
-    width = Math.min(size.width, vw - MARGIN_PX * 2);
-    el.style.width = `${width}px`;
-    // Height is left to grow with content up to the cap (the thread scrolls
-    // once it hits that), so clear any stale explicit height and apply a
-    // provisional cap to measure with.
-    el.style.height = "";
-    el.style.maxHeight = `${Math.min(size.height, vh - MARGIN_PX * 2)}px`;
-    panel.markPlaced();
-  } else {
-    width = Math.min(COLLAPSED_WIDTH_PX, vw - MARGIN_PX * 2);
-    el.style.width = `${width}px`;
-    el.style.height = "";
-    el.style.maxHeight = "";
-  }
+  const size = panel.size;
+  const width = Math.min(size.width, vw - MARGIN_PX * 2);
+  el.style.width = `${width}px`;
+  // Height is left to grow with content up to the cap (the thread scrolls
+  // once it hits that), so clear any stale explicit height and apply a
+  // provisional cap to measure with.
+  el.style.height = "";
+  el.style.maxHeight = `${Math.min(size.height, vh - MARGIN_PX * 2)}px`;
+  panel.markPlaced();
 
   const cardHeight = el.offsetHeight;
 
@@ -377,11 +324,8 @@ function positionCard(figureRectViewport: DOMRect): void {
   if (top < MARGIN_PX) top = MARGIN_PX;
 
   // Final cap: grow only as far as the bottom of the screen allows, never
-  // past the remembered/default cap. Beyond this the thread scrolls. Only
-  // applies while pinned — the collapsed card isn't capped.
-  if (pinned) {
-    el.style.maxHeight = `${Math.min(panel.size.height, vh - top - MARGIN_PX)}px`;
-  }
+  // past the remembered/default cap. Beyond this the thread scrolls.
+  el.style.maxHeight = `${Math.min(size.height, vh - top - MARGIN_PX)}px`;
 
   el.style.left = `${left + window.scrollX}px`;
   el.style.top = `${top + window.scrollY}px`;
@@ -398,9 +342,6 @@ export function showFigureCard(
   activeFigureId = figure.figure_id;
   activeFigure = figure;
   activeRectViewport = figureRectViewport;
-  // Every open starts collapsed — same as the highlight explanation
-  // tooltip, the chat only opens when the reader asks for it.
-  pinned = false;
   if (titleEl) titleEl.textContent = figure.label;
 
   unsubscribe = subscribeFigure(docId, figure.figure_id, () => {
@@ -441,7 +382,6 @@ export function hideFigureCard(): void {
   activeFigureId = null;
   activeFigure = null;
   activeRectViewport = null;
-  pinned = false;
   // The card must be re-placed next open, but the reader's chosen size is
   // remembered by resizePanel and re-applied then.
   resizePanel?.reset();
@@ -461,17 +401,14 @@ export function _resetForTest(): void {
   activeFigureId = null;
   activeFigure = null;
   activeRectViewport = null;
-  pinned = false;
   cardEl?.remove();
   cardEl = null;
   titleEl = null;
   bodyEl = null;
-  closeEl = null;
   chatEl = null;
   threadEl = null;
   chatErrorEl = null;
   inputEl = null;
   sendEl = null;
-  footEl = null;
   resizePanel = null;
 }

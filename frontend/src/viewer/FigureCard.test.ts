@@ -47,12 +47,7 @@ function lastChatCallbacks(): ChatStreamCallbacks {
   return calls[calls.length - 1][3];
 }
 
-/** Promote a ready, collapsed card into full pinned chat mode. */
-function pin(card: HTMLElement): void {
-  card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
-}
-
-describe("FigureCard collapsed / pinned chat", () => {
+describe("FigureCard dismiss / follow-up chat", () => {
   beforeEach(() => {
     _resetForTest();
     streamFigureExplanationMock.mockReset().mockReturnValue(() => {});
@@ -61,135 +56,74 @@ describe("FigureCard collapsed / pinned chat", () => {
     localStorage.clear();
   });
   afterEach(() => {
-    // ensureCard() registers a fresh document-level pointerdown/keydown
-    // listener on every call (one per test, since each test starts from a
-    // null cardEl). Closing explicitly before resetting keeps those stale
-    // listeners inert — they early-return once their captured el is
-    // hidden — instead of spuriously closing a later test's still-open card.
-    hideFigureCard();
     _resetForTest();
     vi.restoreAllMocks();
     localStorage.clear();
   });
 
-  // Collapsed state — same shape as the highlight explanation tooltip's
-  // collapsed look: interpretation text + "Ask a follow-up ›", no chat yet.
-  it("opens collapsed with an Ask a follow-up button, not the full chat", () => {
+  it("clicking outside the card closes it", () => {
     seedFigure("doc", "fig-1", "A bar chart of results.");
     showFigureCard("doc", figure("fig-1"), RECT);
+
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-
-    expect(card.style.display).toBe("block");
-    expect(card.classList.contains("is-pinned")).toBe(false);
-    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
-      "none",
-    );
-    expect(card.querySelector<HTMLElement>(".figure-card-foot")!.style.display).toBe(
-      "flex",
-    );
-    expect(
-      card.querySelector<HTMLElement>(".figure-card-close")!.style.display,
-    ).toBe("none");
-  });
-
-  it("the Ask a follow-up footer stays hidden until the explanation is ready", () => {
-    showFigureCard("doc", figure("fig-2"), RECT); // starts idle -> loading
-    const card = document.querySelector<HTMLElement>(".figure-card")!;
-    expect(card.querySelector<HTMLElement>(".figure-card-foot")!.style.display).toBe(
-      "none",
-    );
-    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
-      "none",
-    );
-  });
-
-  it("clicking Ask a follow-up pins the card into full chat mode", () => {
-    seedFigure("doc", "fig-3", "A scatter plot.");
-    showFigureCard("doc", figure("fig-3"), RECT);
-    const card = document.querySelector<HTMLElement>(".figure-card")!;
-
-    pin(card);
-
+    // Flex column (not "block") — same pinned layout as the highlight
+    // tooltip, so the thread can scroll while header/body stay put.
     expect(card.style.display).toBe("flex");
-    expect(card.classList.contains("is-pinned")).toBe(true);
-    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
-      "flex",
-    );
-    expect(card.querySelector<HTMLElement>(".figure-card-foot")!.style.display).toBe(
-      "none",
-    );
-    expect(
-      card.querySelector<HTMLElement>(".figure-card-close")!.style.display,
-    ).toBe("block");
-  });
-
-  it("clicking outside a collapsed card closes it", () => {
-    seedFigure("doc", "fig-4", "A bar chart of results.");
-    showFigureCard("doc", figure("fig-4"), RECT);
-    const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     expect(card.style.display).toBe("none");
   });
 
   it("clicking inside the card does not close it", () => {
-    seedFigure("doc", "fig-5", "A scatter plot.");
-    showFigureCard("doc", figure("fig-5"), RECT);
+    seedFigure("doc", "fig-2", "A scatter plot.");
+    showFigureCard("doc", figure("fig-2"), RECT);
 
     const card = document.querySelector<HTMLElement>(".figure-card")!;
     card
       .querySelector(".figure-card-body")!
       .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    expect(card.style.display).toBe("block");
+    expect(card.style.display).toBe("flex");
   });
 
   it("Escape closes the card", () => {
-    seedFigure("doc", "fig-6", "x");
-    showFigureCard("doc", figure("fig-6"), RECT);
+    seedFigure("doc", "fig-3", "x");
+    showFigureCard("doc", figure("fig-3"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(card.style.display).toBe("none");
   });
 
-  it("the close button closes a pinned card", () => {
-    seedFigure("doc", "fig-7", "x");
-    showFigureCard("doc", figure("fig-7"), RECT);
+  it("the close button closes the card", () => {
+    seedFigure("doc", "fig-4", "x");
+    showFigureCard("doc", figure("fig-4"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     card.querySelector<HTMLButtonElement>(".figure-card-close")!.click();
     expect(card.style.display).toBe("none");
   });
 
   it("hideFigureCard closes it explicitly", () => {
-    seedFigure("doc", "fig-8", "x");
-    showFigureCard("doc", figure("fig-8"), RECT);
+    seedFigure("doc", "fig-5", "x");
+    showFigureCard("doc", figure("fig-5"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     hideFigureCard();
     expect(card.style.display).toBe("none");
   });
 
-  it("reopening a different figure starts collapsed again, even if the previous one was pinned", () => {
-    seedFigure("doc", "fig-9a", "x");
-    showFigureCard("doc", figure("fig-9a"), RECT);
-    let card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
-    expect(card.classList.contains("is-pinned")).toBe(true);
-
-    seedFigure("doc", "fig-9b", "y");
-    showFigureCard("doc", figure("fig-9b", "Figure 2"), RECT);
-    card = document.querySelector<HTMLElement>(".figure-card")!;
-    expect(card.classList.contains("is-pinned")).toBe(false);
-    expect(card.style.display).toBe("block");
+  it("the follow-up chat is hidden until the explanation is ready", () => {
+    showFigureCard("doc", figure("fig-6"), RECT); // starts idle -> loading
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "none",
+    );
   });
 
-  it("shows the chat once pinned and streams a follow-up reply into the thread", () => {
-    seedFigure("doc", "fig-10", "A bar chart of results.");
-    showFigureCard("doc", figure("fig-10"), RECT);
+  it("shows the chat once ready and streams a follow-up reply into the thread", () => {
+    seedFigure("doc", "fig-7", "A bar chart of results.");
+    showFigureCard("doc", figure("fig-7"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
       "flex",
@@ -224,11 +158,10 @@ describe("FigureCard collapsed / pinned chat", () => {
     ]);
   });
 
-  it("clicking outside while pinned and chatting still closes the card", () => {
-    seedFigure("doc", "fig-11", "x");
-    showFigureCard("doc", figure("fig-11"), RECT);
+  it("clicking outside while chatting still closes the card (no separate pinned state)", () => {
+    seedFigure("doc", "fig-8", "x");
+    showFigureCard("doc", figure("fig-8"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     const input = card.querySelector<HTMLInputElement>(".explanation-chat-input")!;
     input.value = "follow up";
@@ -243,13 +176,11 @@ describe("FigureCard collapsed / pinned chat", () => {
   // Resize/cap behavior mirrors ExplanationTooltip's pinned panel exactly —
   // the bug this suite guards against is the card growing without limit as
   // the chat thread accumulates messages instead of capping and scrolling
-  // internally. Only meaningful once pinned — the collapsed card isn't
-  // resizable, same as the highlight tooltip's collapsed look.
-  it("caps the card height (grow-then-scroll) once pinned", () => {
-    seedFigure("doc", "fig-12", "x");
-    showFigureCard("doc", figure("fig-12"), RECT);
+  // internally.
+  it("caps the card height (grow-then-scroll) when not resized", () => {
+    seedFigure("doc", "fig-9", "x");
+    showFigureCard("doc", figure("fig-9"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     // A bounded max-height is applied so the thread (overflow-y:auto) scrolls
     // instead of the card growing without limit. jsdom viewport is 768 tall.
@@ -261,8 +192,8 @@ describe("FigureCard collapsed / pinned chat", () => {
   });
 
   it("has eight resize handles", () => {
-    seedFigure("doc", "fig-13", "x");
-    showFigureCard("doc", figure("fig-13"), RECT);
+    seedFigure("doc", "fig-10", "x");
+    showFigureCard("doc", figure("fig-10"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
 
     const handles = card.querySelectorAll(".explanation-resize-handle");
@@ -272,11 +203,10 @@ describe("FigureCard collapsed / pinned chat", () => {
     }
   });
 
-  it("dragging the SE handle resizes a pinned card", () => {
-    seedFigure("doc", "fig-14", "x");
-    showFigureCard("doc", figure("fig-14"), RECT);
+  it("dragging the SE handle resizes the card", () => {
+    seedFigure("doc", "fig-11", "x");
+    showFigureCard("doc", figure("fig-11"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     card.getBoundingClientRect = () =>
       ({
@@ -309,10 +239,9 @@ describe("FigureCard collapsed / pinned chat", () => {
   });
 
   it("remembers the resized size after close and reopen", () => {
-    seedFigure("doc", "fig-15", "x");
-    showFigureCard("doc", figure("fig-15"), RECT);
+    seedFigure("doc", "fig-12", "x");
+    showFigureCard("doc", figure("fig-12"), RECT);
     let card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     card.getBoundingClientRect = () =>
       ({ width: 380, height: 260 }) as DOMRect;
@@ -328,9 +257,8 @@ describe("FigureCard collapsed / pinned chat", () => {
     hideFigureCard();
     expect(card.style.display).toBe("none");
 
-    showFigureCard("doc", figure("fig-15"), RECT);
+    showFigureCard("doc", figure("fig-12"), RECT);
     card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     // Width is restored exactly; the remembered height comes back as the
     // grow-to cap (max-height) so the card still expands-then-scrolls.
@@ -340,10 +268,9 @@ describe("FigureCard collapsed / pinned chat", () => {
   });
 
   it("persists resized size independently from the explanation tooltip's key", () => {
-    seedFigure("doc", "fig-16", "x");
-    showFigureCard("doc", figure("fig-16"), RECT);
+    seedFigure("doc", "fig-13", "x");
+    showFigureCard("doc", figure("fig-13"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
-    pin(card);
 
     card.getBoundingClientRect = () =>
       ({ width: 380, height: 260 }) as DOMRect;

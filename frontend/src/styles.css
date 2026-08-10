@@ -1167,9 +1167,11 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .explanation-resize-handle.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
 /* Figure-explain card. Stays open until dismissed, anchors next to the
-   figure so it doesn't occlude the page text. Collapsed → pinned states
-   mirror `.explanation-tooltip`/`.explanation-tooltip.is-pinned` exactly
-   (the "gold standard" chat panel look) rather than duplicating slightly
+   figure so it doesn't occlude the page text. It has no separate "pinned"
+   state — it's always in the resizable, capped-height layout the highlight
+   tooltip only switches into once pinned, so the header/body/close chrome
+   below is written to match `.explanation-tooltip*` values exactly (the
+   "gold standard" chat panel look) rather than duplicating slightly
    different numbers that would drift out of sync over time. */
 .figure-card {
   position: absolute;
@@ -1184,23 +1186,14 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-size: 13px;
   line-height: 1.45;
   pointer-events: auto;
-  max-width: 360px;
-}
-/* Pinned = the interactive, resizable panel. Same rule as
-   `.explanation-tooltip.is-pinned`: flex column so the thread can scroll
-   while the header/body/footer stay put, height capped to the viewport. */
-.figure-card.is-pinned {
-  max-width: none;
   display: flex;
   flex-direction: column;
   /* Fallback cap; JS sets a precise inline max-height that grows with content
-     up to a readable size and then lets the thread scroll. */
+     up to a readable size and then lets the thread scroll — same rule as
+     `.explanation-tooltip.is-pinned`. */
   max-height: min(480px, calc(100vh - 24px));
   overflow: hidden;
   resize: none;
-}
-.figure-card.is-pinned .figure-card-body {
-  flex: 0 0 auto;
 }
 .figure-card-header {
   display: flex;
@@ -1216,10 +1209,7 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   color: rgba(120, 180, 255, 0.95);
   margin-bottom: 6px;
 }
-/* Hidden until pinned — collapsed state dismisses via outside-click/Escape
-   only, same as `.explanation-tooltip-close`. */
 .figure-card-close {
-  display: none;
   flex: 0 0 auto;
   background: transparent;
   border: none;
@@ -1234,6 +1224,7 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 }
 .figure-card-body {
   white-space: pre-wrap;
+  flex: 0 0 auto;
 }
 .figure-card-body p,
 .figure-card-body ul {
@@ -1259,17 +1250,9 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .figure-card.is-error {
   border-color: rgba(244, 67, 54, 0.6);
 }
-/* Collapsed-state footer: just "Ask a follow-up ›" (figures have no
-   Delete-equivalent, unlike `.explanation-tooltip-foot`). */
-.figure-card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-/* Resize handles only interactive once pinned — same rule as
-   `.explanation-tooltip.is-pinned .explanation-resize-handle`. */
-.figure-card.is-pinned .explanation-resize-handle {
+/* The card is always in the resizable, capped-height layout (no collapsed
+   look to toggle out of), so its resize handles are always interactive. */
+.figure-card .explanation-resize-handle {
   display: block;
 }
 
