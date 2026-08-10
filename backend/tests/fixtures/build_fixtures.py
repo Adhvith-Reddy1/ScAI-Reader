@@ -224,6 +224,45 @@ def build_page_with_image(path: Path) -> None:
     c.save()
 
 
+def build_citation_doc(path: Path) -> None:
+    """A 2-page fixture mimicking a real academic paper's numeric/IEEE-style
+    citations: body text with in-text bracket markers on page 1, and a
+    References section with matching numbered entries on page 2. Exercises
+    the full real pipeline (PDFium text extraction + detect_citations)
+    end-to-end, the way build_figure_doc does for figure detection."""
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setTitle("Citation Doc")
+
+    # --- Page 1: body text with in-text markers ---------------------------
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(72, 740, "1. Introduction")
+    c.setFont("Helvetica", 11)
+    for i, line in enumerate(
+        [
+            "Prior work established the baseline approach [1].",
+            "A follow-up study extended it to new domains [2].",
+            "We build directly on both results in this paper.",
+        ]
+    ):
+        c.drawString(72, 712 - i * 16, line)
+    c.showPage()
+
+    # --- Page 2: References section, numeric style -------------------------
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(72, 740, "References")
+    c.setFont("Helvetica", 11)
+    for i, line in enumerate(
+        [
+            '[1] Smith, J. "A Great Paper." Journal of Examples, 2020.',
+            '[2] Doe, A. "Another Great Paper." Journal of Examples, 2019.',
+        ]
+    ):
+        c.drawString(72, 712 - i * 16, line)
+    c.showPage()
+
+    c.save()
+
+
 def build_all(into: Path = FIXTURES_DIR) -> dict[str, Path]:
     into.mkdir(parents=True, exist_ok=True)
     built: dict[str, Path] = {}
@@ -233,6 +272,7 @@ def build_all(into: Path = FIXTURES_DIR) -> dict[str, Path]:
         "two_column.pdf": build_two_column,
         "page_with_image.pdf": build_page_with_image,
         "figure_doc.pdf": build_figure_doc,
+        "citation_doc.pdf": build_citation_doc,
     }
     for name, fn in spec.items():
         target = into / name

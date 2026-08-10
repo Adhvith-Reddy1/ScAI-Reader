@@ -6,8 +6,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 
 from ..config import Settings
 from ..pdf.backend import PdfError
+from ..pdf.citations import detect_citations
 from ..pdf.pdfium_backend import PdfiumBackend
 from ..pdf.types import PageText
+from ..storage import citations as citations_storage
 from ..storage import db, files
 from .deps import get_settings
 
@@ -127,13 +129,14 @@ async def upload_document(
             [(doc_id, i, d.width_pt, d.height_pt) for i, d in enumerate(dims)],
         )
 
-    # Per-page text extraction + column clustering (needed only for the FTS
-    # index) is the expensive part of opening a large/image-heavy paper, and
-    # the reader doesn't need search until they hit Cmd-F. Run it after the
+    # Per-page text extraction + column clustering (needed for both the FTS
+    # index and citation detection) is the expensive part of opening a
+    # large/image-heavy paper, and the reader doesn't need search or
+    # citations until they hit Cmd-F or click a reference. Run it after the
     # response goes out instead of making the client wait on it before it can
     # start rendering pages. Reuses the already-open backend (closed inside
     # the task) rather than re-parsing the file a second time.
-    background_tasks.add_task(_index_search_text, settings, doc_id, backend, meta.page_count)
+    background_tasks.add_task(_index_derived_data, settings, doc_id, backend, meta.page_count)
 
     return {
         "id": doc_id,
@@ -144,15 +147,14 @@ async def upload_document(
     }
 
 
-def _index_search_text(
+def _index_derived_data(
     settings: Settings, doc_id: str, backend: PdfiumBackend, page_count: int
 ) -> None:
     try:
-        page_texts = [
-            _flatten_page_text(backend.get_page_text(i)) for i in range(page_count)
-        ]
+        pages = [backend.get_page_text(i) for i in range(page_count)]
     finally:
         backend.close()
+
     # FTS5 doesn't support ON CONFLICT; doc_id is SHA-keyed so content is
     # identical on re-upload. Delete-then-insert keeps the index in sync
     # without growing duplicate rows.
@@ -160,8 +162,12 @@ def _index_search_text(
         conn.execute("DELETE FROM pages_fts WHERE doc_id = ?", (doc_id,))
         conn.executemany(
             "INSERT INTO pages_fts (doc_id, page_index, text) VALUES (?, ?, ?)",
-            [(doc_id, i + 1, text) for i, text in enumerate(page_texts)],
+            [(doc_id, i + 1, _flatten_page_text(p)) for i, p in enumerate(pages)],
         )
+
+    citations, mentions = detect_citations(pages)
+    with db.connect(settings.db_path) as conn:
+        citations_storage.replace_citations(conn, doc_id, citations, mentions)
 
 
 @router.get("/{doc_id}")

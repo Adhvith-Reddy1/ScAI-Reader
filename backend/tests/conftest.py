@@ -68,6 +68,11 @@ def figure_pdf(fixture_pdfs: dict[str, Path]) -> Path:
     return fixture_pdfs["figure_doc.pdf"]
 
 
+@pytest.fixture(scope="session")
+def citation_pdf(fixture_pdfs: dict[str, Path]) -> Path:
+    return fixture_pdfs["citation_doc.pdf"]
+
+
 # ---------------------------------------------------------------------------
 # Isolated app settings per integration test
 # ---------------------------------------------------------------------------

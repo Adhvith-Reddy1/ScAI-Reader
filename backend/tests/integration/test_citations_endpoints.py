@@ -1,9 +1,12 @@
 """Integration tests for the citation-listing endpoints.
 
-`detect_citations` isn't implemented yet (see app.pdf.citations), so upload
-alone never populates these tables -- these tests insert fixture rows
-directly via app.storage.citations.replace_citations, the same storage path
-the (future) upload-time wiring will use.
+Most of these tests seed the tables directly via
+app.storage.citations.replace_citations rather than relying on real
+detection, to isolate route behavior from detect_citations' own parsing
+logic (which has its own dedicated tests in test_citations.py).
+test_upload_populates_citations_via_background_task below is the one
+end-to-end check that upload -> background detection -> these routes is
+actually wired together.
 """
 
 from __future__ import annotations
@@ -135,3 +138,27 @@ def test_citation_mentions_lists_seeded_mentions_for_page(
     r3 = app_client.get(f"/documents/{doc_id}/pages/3/citation-mentions")
     assert r3.status_code == 200
     assert r3.json()["mentions"] == []
+
+
+@pytest.mark.integration
+def test_upload_populates_citations_via_background_task(app_client, citation_pdf):
+    """No manual seeding: uploading a document with a real bibliography
+    should populate both tables through the same background task that
+    indexes pages_fts, with no further requests needed."""
+    doc_id = _upload(app_client, citation_pdf)
+
+    r = app_client.get(f"/documents/{doc_id}/citations")
+    assert r.status_code == 200
+    entries = r.json()["citations"]
+    assert {c["key"] for c in entries} == {"1", "2"}
+    first = next(c for c in entries if c["key"] == "1")
+    assert "Smith" in first["raw_text"]
+    assert first["page"] == 2  # References section is on page 2
+
+    r2 = app_client.get(f"/documents/{doc_id}/pages/1/citation-mentions")
+    assert r2.status_code == 200
+    mentions = r2.json()["mentions"]
+    assert {m["key"] for m in mentions} == {"1", "2"}
+    for m in mentions:
+        assert m["bbox"]["x1"] > m["bbox"]["x0"]
+        assert m["bbox"]["y1"] > m["bbox"]["y0"]
