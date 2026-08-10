@@ -36,6 +36,44 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
     tokenize = "unicode61 remove_diacritics 2"
 );
 
+-- Bibliography entries parsed from a document's reference list. Derived
+-- purely from the PDF's own text (not personal data), so it lives here next
+-- to page_dimensions/pages_fts rather than in the browser's IndexedDB. `key`
+-- is the literal marker text as it appears in the paper (e.g. "12" for
+-- numeric/IEEE style, "Smith2020" for author-date style) -- see
+-- app.pdf.citations. Populated once at upload time by detect_citations,
+-- deleted+rebuilt on re-upload (same pattern as pages_fts).
+CREATE TABLE IF NOT EXISTS citations (
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    key          TEXT NOT NULL,
+    raw_text     TEXT NOT NULL,
+    page_index   INTEGER NOT NULL,
+    authors      TEXT,
+    title        TEXT,
+    year         TEXT,
+    venue        TEXT,
+    doi          TEXT,
+    PRIMARY KEY (doc_id, key)
+);
+
+-- In-text occurrences of a citation marker (e.g. the "[12]" inline in a
+-- sentence). Not unique per (doc_id, key, page_index): the same marker can
+-- appear multiple times on one page, so this uses a surrogate key instead of
+-- a composite one. No FK to citations(doc_id, key) -- SQLite composite FKs
+-- against a table keyed the way `citations` is are awkward to enforce
+-- cleanly here, so we just FK doc_id to documents for cascade-delete
+-- cleanup, matching how page_dimensions does it.
+CREATE TABLE IF NOT EXISTS citation_mentions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    key          TEXT NOT NULL,
+    page_index   INTEGER NOT NULL,
+    x0           REAL NOT NULL,
+    y0           REAL NOT NULL,
+    x1           REAL NOT NULL,
+    y1           REAL NOT NULL
+);
+
 -- Daily AI-call counter, keyed by an anonymous client identifier (see
 -- app.quota) — never a user account. Bounds how much of the shared,
 -- server-funded AI budget one browser can draw on per day; readers who
