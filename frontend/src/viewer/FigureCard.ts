@@ -6,8 +6,10 @@
  * its own close button — and supports a follow-up chat thread for when the
  * first interpretation wasn't enough. Unlike the highlight tooltip it isn't
  * hover-driven: it opens directly on double-click and stays open (no
- * separate "pinned" state to toggle), so the chat is available as soon as
- * an interpretation is ready.
+ * separate "pinned" state to toggle) — double-click is a deliberate "explain
+ * this" action, so the box itself needs no extra confirming click. The text
+ * input is the one thing still gated behind a click ("Follow up"), so typing
+ * isn't a single accidental click away.
  *
  * It anchors to the right margin of the figure if there's room, otherwise
  * just below the figure. Positioning is page-anchored so it follows the
@@ -49,6 +51,8 @@ let bodyEl: HTMLDivElement | null = null;
 let chatEl: HTMLDivElement | null = null;
 let threadEl: HTMLDivElement | null = null;
 let chatErrorEl: HTMLDivElement | null = null;
+let formEl: HTMLFormElement | null = null;
+let followUpBtnEl: HTMLButtonElement | null = null;
 let inputEl: HTMLInputElement | null = null;
 let sendEl: HTMLButtonElement | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -56,6 +60,11 @@ let activeDocId: string | null = null;
 let activeFigureId: string | null = null;
 let activeFigure: PageFigure | null = null;
 let activeRectViewport: DOMRect | null = null;
+// The box itself pops up fully on double-click (no separate step for that —
+// double-click is a deliberate "explain this" action). But the text input
+// stays behind a "Follow up" button until the reader clicks it, same as
+// typing a message shouldn't be one accidental click away.
+let followUpOpened = false;
 // Owns the card's resize handles, drag-to-resize, and remembered
 // {width, height} — the same shared behavior the pinned explanation panel
 // uses, so the two panels can't drift apart. Built once, alongside the rest
@@ -102,6 +111,19 @@ function ensureCard(): HTMLDivElement {
   chatError.className = "explanation-chat-error";
   chat.appendChild(chatError);
 
+  // No text input until the reader deliberately asks for one — typing
+  // shouldn't be a single accidental click away.
+  const followUpBtn = document.createElement("button");
+  followUpBtn.type = "button";
+  followUpBtn.className = "explanation-chat-open";
+  followUpBtn.textContent = "Follow up";
+  followUpBtn.addEventListener("click", () => {
+    followUpOpened = true;
+    renderChat();
+    inputEl?.focus();
+  });
+  chat.appendChild(followUpBtn);
+
   const form = document.createElement("form");
   form.className = "explanation-chat-form";
   const input = document.createElement("input");
@@ -140,6 +162,8 @@ function ensureCard(): HTMLDivElement {
   chatEl = chat;
   threadEl = thread;
   chatErrorEl = chatError;
+  formEl = form;
+  followUpBtnEl = followUpBtn;
   inputEl = input;
   sendEl = send;
 
@@ -183,6 +207,10 @@ function renderChat(): void {
   const state = getFigureState(activeDocId, activeFigureId);
   const chatAvailable = state.status === "ready";
   if (chatEl) chatEl.style.display = chatAvailable ? "flex" : "none";
+  if (followUpBtnEl) {
+    followUpBtnEl.style.display = chatAvailable && !followUpOpened ? "inline-flex" : "none";
+  }
+  if (formEl) formEl.style.display = chatAvailable && followUpOpened ? "flex" : "none";
   if (!chatAvailable) return;
 
   const chat = getFigureChat(activeDocId, activeFigureId);
@@ -342,6 +370,8 @@ export function showFigureCard(
   activeFigureId = figure.figure_id;
   activeFigure = figure;
   activeRectViewport = figureRectViewport;
+  // Every open starts with the text input behind the "Follow up" button.
+  followUpOpened = false;
   if (titleEl) titleEl.textContent = figure.label;
 
   unsubscribe = subscribeFigure(docId, figure.figure_id, () => {
@@ -382,6 +412,7 @@ export function hideFigureCard(): void {
   activeFigureId = null;
   activeFigure = null;
   activeRectViewport = null;
+  followUpOpened = false;
   // The card must be re-placed next open, but the reader's chosen size is
   // remembered by resizePanel and re-applied then.
   resizePanel?.reset();
@@ -401,6 +432,7 @@ export function _resetForTest(): void {
   activeFigureId = null;
   activeFigure = null;
   activeRectViewport = null;
+  followUpOpened = false;
   cardEl?.remove();
   cardEl = null;
   titleEl = null;
@@ -408,6 +440,8 @@ export function _resetForTest(): void {
   chatEl = null;
   threadEl = null;
   chatErrorEl = null;
+  formEl = null;
+  followUpBtnEl = null;
   inputEl = null;
   sendEl = null;
   resizePanel = null;

@@ -120,6 +120,31 @@ describe("FigureCard dismiss / follow-up chat", () => {
     );
   });
 
+  it("keeps the text input hidden behind a Follow up button until clicked", () => {
+    seedFigure("doc", "fig-7a", "A bar chart of results.");
+    showFigureCard("doc", figure("fig-7a"), RECT);
+    const card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    // The box itself (interpretation, resize handles) is already fully open —
+    // only the text input specifically is gated.
+    expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
+      "flex",
+    );
+    expect(
+      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
+    ).toBe("none");
+    const followUpBtn = card.querySelector<HTMLButtonElement>(".explanation-chat-open")!;
+    expect(followUpBtn.style.display).toBe("inline-flex");
+    expect(followUpBtn.textContent).toBe("Follow up");
+
+    followUpBtn.click();
+
+    expect(
+      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
+    ).toBe("flex");
+    expect(followUpBtn.style.display).toBe("none");
+  });
+
   it("shows the chat once ready and streams a follow-up reply into the thread", () => {
     seedFigure("doc", "fig-7", "A bar chart of results.");
     showFigureCard("doc", figure("fig-7"), RECT);
@@ -128,6 +153,7 @@ describe("FigureCard dismiss / follow-up chat", () => {
     expect(card.querySelector<HTMLElement>(".explanation-chat")!.style.display).toBe(
       "flex",
     );
+    card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
 
     const input = card.querySelector<HTMLInputElement>(".explanation-chat-input")!;
     input.value = "why does that matter?";
@@ -158,10 +184,32 @@ describe("FigureCard dismiss / follow-up chat", () => {
     ]);
   });
 
+  it("reopening a figure hides the input behind Follow up again, even if it was open before", () => {
+    seedFigure("doc", "fig-7b", "x");
+    showFigureCard("doc", figure("fig-7b"), RECT);
+    let card = document.querySelector<HTMLElement>(".figure-card")!;
+    card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
+    expect(
+      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
+    ).toBe("flex");
+
+    hideFigureCard();
+    showFigureCard("doc", figure("fig-7b"), RECT);
+    card = document.querySelector<HTMLElement>(".figure-card")!;
+
+    expect(
+      card.querySelector<HTMLElement>(".explanation-chat-form")!.style.display,
+    ).toBe("none");
+    expect(
+      card.querySelector<HTMLElement>(".explanation-chat-open")!.style.display,
+    ).toBe("inline-flex");
+  });
+
   it("clicking outside while chatting still closes the card (no separate pinned state)", () => {
     seedFigure("doc", "fig-8", "x");
     showFigureCard("doc", figure("fig-8"), RECT);
     const card = document.querySelector<HTMLElement>(".figure-card")!;
+    card.querySelector<HTMLButtonElement>(".explanation-chat-open")!.click();
 
     const input = card.querySelector<HTMLInputElement>(".explanation-chat-input")!;
     input.value = "follow up";
