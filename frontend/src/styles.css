@@ -1233,6 +1233,23 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Firefox: thin track, pill thumb darker than the card's own background. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.4) transparent;
+}
+/* Chrome/Safari: same look — narrow, transparent track, rounded thumb. */
+.figure-card-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.figure-card-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.figure-card-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 999px;
+}
+.figure-card-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.55);
 }
 /* The thread no longer scrolls on its own — `.figure-card-scroll` above
    handles that for body + thread together. */
