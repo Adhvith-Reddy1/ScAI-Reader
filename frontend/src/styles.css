@@ -1222,6 +1222,32 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
 .figure-card-close:hover {
   color: #fff;
 }
+/* Single scroll region for interpretation + message thread — deliberately
+   different from the highlight explanation tooltip, where the definition
+   text stays pinned above a separately-scrolling thread. Here the whole
+   conversation (including the initial interpretation) scrolls as one. */
+.figure-card-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* The thread no longer scrolls on its own — `.figure-card-scroll` above
+   handles that for body + thread together. */
+.figure-card-scroll .explanation-chat-thread {
+  flex: 0 0 auto;
+  overflow-y: visible;
+}
+/* `.explanation-chat` now only holds the error line + input row (the thread
+   moved into `.figure-card-scroll` above) — it should stay fixed at the
+   bottom, not compete with the scroll region for the card's extra height
+   (overriding the base rule's `flex: 1 1 auto`, sized for the explanation
+   tooltip's own layout where the thread lives inside it). */
+.figure-card .explanation-chat {
+  flex: 0 0 auto;
+}
 .figure-card-body {
   white-space: pre-wrap;
   flex: 0 0 auto;

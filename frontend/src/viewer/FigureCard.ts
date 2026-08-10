@@ -49,6 +49,11 @@ const SAVED_SIZE_KEY = "scai.figureBoxSize";
 let cardEl: HTMLDivElement | null = null;
 let titleEl: HTMLDivElement | null = null;
 let bodyEl: HTMLDivElement | null = null;
+// Wraps body + thread as a single scroll region — unlike the highlight
+// explanation panel, the initial interpretation scrolls away with the
+// conversation instead of staying pinned above a separately-scrolling
+// thread (a deliberate difference from that panel, not an oversight).
+let scrollWrapEl: HTMLDivElement | null = null;
 let chatEl: HTMLDivElement | null = null;
 let threadEl: HTMLDivElement | null = null;
 let chatErrorEl: HTMLDivElement | null = null;
@@ -95,19 +100,29 @@ function ensureCard(): HTMLDivElement {
 
   el.appendChild(header);
 
+  // Body + message thread share one scroll region, so the interpretation
+  // scrolls away with the conversation instead of staying pinned above it.
+  const scrollWrap = document.createElement("div");
+  scrollWrap.className = "figure-card-scroll";
+  el.appendChild(scrollWrap);
+
   const body = document.createElement("div");
   body.className = "figure-card-body";
-  el.appendChild(body);
+  scrollWrap.appendChild(body);
 
-  // Follow-up chat — same structure/classes as the highlight tooltip's
-  // pinned chat, so it picks up the same styling for free. Hidden until the
-  // reader clicks "Ask a follow-up ›" in the footer below.
-  const chat = document.createElement("div");
-  chat.className = "explanation-chat";
-
+  // Message thread — same classes as the highlight tooltip's pinned chat for
+  // the same bubble/spacing styling, but its own scrolling is disabled (see
+  // `.figure-card-scroll .explanation-chat-thread` in styles.css) since the
+  // wrapper above scrolls body + thread together.
   const thread = document.createElement("div");
   thread.className = "explanation-chat-thread";
-  chat.appendChild(thread);
+  scrollWrap.appendChild(thread);
+
+  // Error line + input row stay outside the scroll region, pinned at the
+  // bottom of the card — same idea as a typical chat UI's fixed composer.
+  // Hidden until the reader clicks "Ask a follow-up ›" in the footer below.
+  const chat = document.createElement("div");
+  chat.className = "explanation-chat";
 
   const chatError = document.createElement("div");
   chatError.className = "explanation-chat-error";
@@ -179,6 +194,7 @@ function ensureCard(): HTMLDivElement {
   cardEl = el;
   titleEl = title;
   bodyEl = body;
+  scrollWrapEl = scrollWrap;
   chatEl = chat;
   threadEl = thread;
   chatErrorEl = chatError;
@@ -240,7 +256,10 @@ function renderChat(): void {
     thread.appendChild(row);
   }
   thread.classList.toggle("is-streaming", chat.streaming);
-  thread.scrollTop = thread.scrollHeight;
+  // The thread itself no longer scrolls independently (see
+  // `.figure-card-scroll` in styles.css) — scroll the shared wrapper instead
+  // so new replies (and the streaming caret) stay in view.
+  if (scrollWrapEl) scrollWrapEl.scrollTop = scrollWrapEl.scrollHeight;
 
   if (chatErrorEl) {
     chatErrorEl.textContent = chat.error ?? "";
@@ -453,6 +472,7 @@ export function _resetForTest(): void {
   cardEl = null;
   titleEl = null;
   bodyEl = null;
+  scrollWrapEl = null;
   chatEl = null;
   threadEl = null;
   chatErrorEl = null;
