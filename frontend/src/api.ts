@@ -363,12 +363,23 @@ export interface PageFigure {
   caption_bbox: FigureBBox;
 }
 
+/** Whether the optional vision-verification pass over the heuristic's
+ * detected regions actually ran and changed anything (see
+ * backend/app/routes/figure_verify.py). `reason` explains why not when
+ * `applied` is false: "not_configured", "quota_exceeded", a
+ * "provider_error: ..." message, "empty_reply", or "unparseable_reply". */
+export interface FigureVerification {
+  applied: boolean;
+  reason: string | null;
+}
+
 export interface PageFiguresResponse {
   doc_id: string;
   page: number;
   page_width_pt: number;
   page_height_pt: number;
   figures: PageFigure[];
+  verification: FigureVerification;
 }
 
 export async function fetchPageFigures(

@@ -89,8 +89,10 @@ def test_parse_empty_array_is_valid():
 
 def test_no_config_returns_heuristic_unchanged():
     heuristic = [_region("Figure 1", 10, 10, 100, 100)]
-    result = _run(fv.verify_figures(None, heuristic, b"png", 0, PAGE_W, PAGE_H))
-    assert result == heuristic
+    outcome = _run(fv.verify_figures(None, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    assert outcome.regions == heuristic
+    assert outcome.applied is False
+    assert outcome.reason == "not_configured"
 
 
 def test_correction_replaces_bbox_for_matched_label(monkeypatch):
@@ -100,8 +102,11 @@ def test_correction_replaces_bbox_for_matched_label(monkeypatch):
         llm, "stream_completion", _fake_stream(("done", reply))
     )
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    result = outcome.regions
 
+    assert outcome.applied is True
+    assert outcome.reason is None
     assert len(result) == 1
     assert result[0].label == "Figure 1"
     assert result[0].bbox.x0 == pytest.approx(0.1 * PAGE_W)
@@ -121,8 +126,10 @@ def test_adds_a_figure_the_heuristic_missed(monkeypatch):
     )
     monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    result = outcome.regions
 
+    assert outcome.applied is True
     labels = {r.label for r in result}
     assert labels == {"Figure 1", "Figure 2"}
     added = next(r for r in result if r.label == "Figure 2")
@@ -140,7 +147,8 @@ def test_label_the_reply_omits_is_kept_not_dropped(monkeypatch):
     reply = '[{"label": "Figure 1", "x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2}]'
     monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    result = outcome.regions
 
     labels = {r.label for r in result}
     assert labels == {"Figure 1", "Figure 2"}
@@ -154,10 +162,13 @@ def test_degenerate_bbox_from_reply_is_dropped(monkeypatch):
     reply = '[{"label": "Figure 2", "x0": 0.5, "y0": 0.5, "x1": 0.5, "y1": 0.9}]'
     monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
 
     # The bogus addition is dropped; the untouched heuristic label survives.
-    assert result == heuristic
+    # Note this still counts as "applied" -- the model responded with usable
+    # JSON, we just discarded one bogus entry from it.
+    assert outcome.applied is True
+    assert outcome.regions == heuristic
 
 
 def test_provider_error_falls_back_to_heuristic(monkeypatch):
@@ -166,9 +177,11 @@ def test_provider_error_falls_back_to_heuristic(monkeypatch):
         llm, "stream_completion", _fake_stream(("error", "boom"))
     )
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
 
-    assert result == heuristic
+    assert outcome.regions == heuristic
+    assert outcome.applied is False
+    assert outcome.reason == "provider_error: boom"
 
 
 def test_unparseable_reply_falls_back_to_heuristic(monkeypatch):
@@ -177,6 +190,8 @@ def test_unparseable_reply_falls_back_to_heuristic(monkeypatch):
         llm, "stream_completion", _fake_stream(("done", "sorry, I can't help with that"))
     )
 
-    result = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
+    outcome = _run(fv.verify_figures(CONFIG, heuristic, b"png", 0, PAGE_W, PAGE_H))
 
-    assert result == heuristic
+    assert outcome.regions == heuristic
+    assert outcome.applied is False
+    assert outcome.reason == "unparseable_reply"

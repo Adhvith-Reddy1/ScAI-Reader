@@ -128,16 +128,24 @@ async def list_page_figures(
     # (they're spending their own budget); otherwise it draws on the same
     # daily shared quota as every other AI feature. Skipped entirely (no
     # quota consumed) when no provider is configured at all, since the call
-    # would have nothing to do.
+    # would have nothing to do. `verification_reason` is echoed in the
+    # response below (see figure_verify.VerificationOutcome) so a caller can
+    # tell WHY nothing changed instead of just seeing the heuristic result
+    # with no way to distinguish "verified and confirmed" from "never ran".
     verify_config: ai.ProviderConfig | None = None
+    verification_reason: str | None = None
     shared_config = ai.get_provider_config(settings)
     user_key = (x_user_api_key or "").strip()
     if user_key:
         verify_config = ai.with_override_key(shared_config, user_key)
-    elif shared_config is not None:
+    elif shared_config is None:
+        verification_reason = "not_configured"
+    else:
         client_key = quota.resolve_client_key(request, x_client_id)
         if quota.try_consume(settings, client_key, settings.ai_daily_limit):
             verify_config = shared_config
+        else:
+            verification_reason = "quota_exceeded"
 
     try:
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
@@ -171,10 +179,14 @@ async def list_page_figures(
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    verification_applied = False
     if page_png is not None:
-        regions = await figure_verify.verify_figures(
+        outcome = await figure_verify.verify_figures(
             verify_config, regions, page_png, page_number - 1, dims.width_pt, dims.height_pt
         )
+        regions = outcome.regions
+        verification_applied = outcome.applied
+        verification_reason = outcome.reason
 
     return {
         "doc_id": doc_id,
@@ -182,6 +194,7 @@ async def list_page_figures(
         "page_width_pt": dims.width_pt,
         "page_height_pt": dims.height_pt,
         "figures": [_region_to_dict(r) for r in regions],
+        "verification": {"applied": verification_applied, "reason": verification_reason},
     }
 
 

@@ -20,6 +20,7 @@ import base64
 import json
 import logging
 import re
+from dataclasses import dataclass
 
 from .. import ai, llm
 from ..pdf.figures import MIN_FIGURE_DIMENSION_PT, FigureRegion, _figure_id
@@ -27,6 +28,18 @@ from ..pdf.pdfium_backend import sniff_image_mime
 from ..pdf.types import BBox
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VerificationOutcome:
+    """What `verify_figures` actually did, for callers that want to surface
+    it (the `/figures` route echoes this back so it's visible without
+    digging through server logs — see routes/figures.py). `reason` is None
+    exactly when `applied` is True."""
+
+    regions: list[FigureRegion]
+    applied: bool
+    reason: str | None
 
 # Rendering the whole page for verification, same DPI the figure-explain
 # flow already renders at (see routes/stateless_ai.py) — no need for more
@@ -165,11 +178,12 @@ async def verify_figures(
     page_index: int,
     page_width_pt: float,
     page_height_pt: float,
-) -> list[FigureRegion]:
-    """Best-effort vision pass over `heuristic`'s regions. Returns `heuristic`
-    unchanged if no provider is configured or the call/parse fails."""
+) -> VerificationOutcome:
+    """Best-effort vision pass over `heuristic`'s regions. `regions` falls
+    back to `heuristic` unchanged (with `applied=False` and a `reason`) if no
+    provider is configured or the call/parse fails."""
     if config is None or not config.api_key:
-        return heuristic
+        return VerificationOutcome(regions=heuristic, applied=False, reason="not_configured")
 
     media_type = sniff_image_mime(page_png_bytes)
     page_b64 = base64.standard_b64encode(page_png_bytes).decode("ascii")
@@ -185,18 +199,29 @@ async def verify_figures(
     ]
 
     text: str | None = None
+    error: str | None = None
     async for event_type, payload in llm.stream_completion(
         config, system=SYSTEM_FIGURE_VERIFY, messages=messages, max_tokens=1200
     ):
         if event_type == "done":
             text = payload
         elif event_type == "error":
+            error = payload
             log.warning("Figure verification call failed, using heuristic only: %s", payload)
 
     if not text:
-        return heuristic
+        return VerificationOutcome(
+            regions=heuristic, applied=False, reason=f"provider_error: {error}" if error else "empty_reply"
+        )
     items = _parse_verified_items(text)
     if items is None:
         log.warning("Figure verification reply wasn't parseable JSON, using heuristic only")
-        return heuristic
-    return _merge_verified(heuristic, items, page_index, page_width_pt, page_height_pt)
+        return VerificationOutcome(regions=heuristic, applied=False, reason="unparseable_reply")
+
+    merged = _merge_verified(heuristic, items, page_index, page_width_pt, page_height_pt)
+    log.info(
+        "Figure verification applied: %d region(s) after merge (heuristic had %d)",
+        len(merged),
+        len(heuristic),
+    )
+    return VerificationOutcome(regions=merged, applied=True, reason=None)

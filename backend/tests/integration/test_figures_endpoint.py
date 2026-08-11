@@ -185,7 +185,9 @@ def test_no_provider_configured_skips_verification_entirely(
     r = app_client.get(f"/documents/{doc_id}/pages/1/figures")
 
     assert r.status_code == 200
-    assert r.json()["figures"][0]["label"] == "Figure 1"
+    body = r.json()
+    assert body["figures"][0]["label"] == "Figure 1"
+    assert body["verification"] == {"applied": False, "reason": "not_configured"}
 
 
 @pytest.mark.integration
@@ -204,6 +206,7 @@ def test_verification_corrects_bbox_and_adds_missed_figure(
 
     assert r.status_code == 200
     body = r.json()
+    assert body["verification"] == {"applied": True, "reason": None}
     by_label = {f["label"]: f for f in body["figures"]}
     assert set(by_label) == {"Figure 1", "Table 1"}
 
@@ -227,9 +230,11 @@ def test_verification_call_failure_falls_back_to_heuristic(
     r = app_client.get(f"/documents/{doc_id}/pages/1/figures")
 
     assert r.status_code == 200
-    figures = r.json()["figures"]
+    body = r.json()
+    figures = body["figures"]
     assert len(figures) == 1
     assert figures[0]["label"] == "Figure 1"
+    assert body["verification"] == {"applied": False, "reason": "provider_error: boom"}
 
 
 @pytest.mark.integration
@@ -254,8 +259,10 @@ def test_verification_skipped_once_daily_quota_is_used_up(
 
     r = app_client.get(f"/documents/{doc_id}/pages/1/figures", headers=headers)
     assert r.status_code == 200
-    labels = {f["label"] for f in r.json()["figures"]}
+    body = r.json()
+    labels = {f["label"] for f in body["figures"]}
     assert labels == {"Figure 1"}  # heuristic only -- quota used up
+    assert body["verification"] == {"applied": False, "reason": "quota_exceeded"}
 
 
 @pytest.mark.integration
@@ -276,4 +283,6 @@ def test_readers_own_api_key_bypasses_exhausted_quota(
         headers={**headers, "X-User-Api-Key": "sk-ant-reader-own-key"},
     )
     assert r.status_code == 200
-    assert "Table 1" in {f["label"] for f in r.json()["figures"]}
+    body = r.json()
+    assert "Table 1" in {f["label"] for f in body["figures"]}
+    assert body["verification"] == {"applied": True, "reason": None}
