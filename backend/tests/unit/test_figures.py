@@ -197,6 +197,54 @@ def test_detects_table_captions():
     assert figs[0].figure_id == "p0_Table_3"
 
 
+# --- unnumbered "Table:" captions -------------------------------------------
+# A real FDA report appendix used "Summary Table: An overview of ..." with no
+# number at all -- CAPTION_PATTERN requires a number and correctly doesn't
+# match it, so this needs its own narrower pattern (see
+# UNNUMBERED_TABLE_PATTERN).
+
+
+def test_finds_unnumbered_summary_table_caption():
+    runs = (
+        _run("Some body text.", 40, 50, 560, 62),
+        _run("Summary Table: An overview of results.", 40, 200, 560, 212),
+    )
+    found = _find_caption_runs(runs)
+    assert len(found) == 1
+    assert found[0][1] == "Summary Table"
+
+
+def test_finds_unnumbered_bare_table_caption():
+    runs = (_run("Table: Results by group.", 40, 200, 560, 212),)
+    found = _find_caption_runs(runs)
+    assert len(found) == 1
+    assert found[0][1] == "Table"
+
+
+def test_unnumbered_table_pattern_requires_a_colon():
+    # Ordinary prose that happens to start a line with "Table" but isn't a
+    # caption at all -- no colon right after the word, so this must not match
+    # (this is exactly the failure mode CAPTION_PATTERN's own lowercase-word
+    # lookahead already guards against for the numbered form).
+    runs = (_run("Table tennis is a fun sport to watch.", 40, 200, 560, 212),)
+    assert _find_caption_runs(runs) == []
+
+
+def test_detect_figures_finds_unnumbered_table_end_to_end():
+    runs = (
+        _run("Some body text on the page.", 40, 50, 290, 62),
+        _run("More body text below it.", 40, 70, 290, 82),
+        _run("Summary Table: An overview of results.", 40, 200, 290, 212),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 290, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+
+    figs = detect_figures(page, PAGE_W, PAGE_H)
+    assert len(figs) == 1
+    assert figs[0].label == "Summary Table"
+    assert figs[0].figure_id == "p0_Summary_Table"
+
+
 # --- graphics-based bbox tightening -----------------------------------------
 
 
@@ -551,6 +599,92 @@ def test_find_panel_labels_dedupes_and_respects_region():
     found = _find_panel_labels(runs, region)
     assert set(found) == {"a", "b"}
     assert found["a"].bbox.y0 == 10  # first occurrence, not the second "a"
+
+
+# --- panel-label corner-proximity validation --------------------------------
+# Real bug, found testing a real paper: a rotated y-axis title ("Probability
+# of success (%)") got extracted as one text run per glyph, and one of those
+# glyphs -- literally the letter "a" -- looked exactly like a genuine panel
+# tag. Without validating that a candidate label actually sits at some
+# graphic's own top-left corner, that stray glyph won the "panel a" slot and
+# produced a bogus split (see figures.py's PANEL_LABEL_CORNER_MAX_DX_PT
+# comment for the full story).
+
+
+def test_find_panel_labels_rejects_candidate_far_from_any_graphic():
+    runs = (_run("a", 300, 300, 305, 308),)  # nowhere near the graphic below
+    region = BBox(0, 0, 500, 500)
+    graphics = (BBox(x0=10, y0=10, x1=100, y1=100),)
+    assert _find_panel_labels(runs, region, graphics) == {}
+
+
+def test_find_panel_labels_accepts_candidate_at_graphic_corner():
+    runs = (_run("a", 12, 0, 17, 8),)  # just above the graphic's top-left
+    region = BBox(0, 0, 500, 500)
+    graphics = (BBox(x0=10, y0=15, x1=100, y1=100),)
+    found = _find_panel_labels(runs, region, graphics)
+    assert set(found) == {"a"}
+
+
+def test_find_panel_labels_no_graphics_arg_skips_corner_check():
+    # Backward-compatible default: callers that don't pass graphics get the
+    # old, unfiltered behavior (existing callers/tests rely on this).
+    runs = (_run("a", 300, 300, 305, 308),)
+    region = BBox(0, 0, 500, 500)
+    assert set(_find_panel_labels(runs, region)) == {"a"}
+
+
+def test_find_panel_labels_skips_stray_first_occurrence_for_real_second():
+    runs = (
+        _run("a", 300, 300, 305, 308),  # stray glyph, far from any graphic
+        _run("a", 12, 0, 17, 8),  # the real label, at the graphic's corner
+    )
+    region = BBox(0, 0, 500, 500)
+    graphics = (BBox(x0=10, y0=15, x1=100, y1=100),)
+    found = _find_panel_labels(runs, region, graphics)
+    assert set(found) == {"a"}
+    assert found["a"].bbox.x0 == 12  # the real one, not the stray one
+
+
+def test_detect_sub_panels_rejects_split_when_panel_a_is_a_stray_glyph():
+    # Same shape as the real bug: genuine "b"/"c" labels sit at their own
+    # panels' corners, but the only "a"-shaped run on the page is an
+    # unrelated stray glyph -- positioned inside the search region (so it's
+    # a real candidate, not just excluded by being off-page) but nowhere
+    # near any graphic's corner. _contiguous_from_a requires a REAL "a" to
+    # anchor the sequence, so the whole split must be rejected -- b/c alone
+    # (however genuine) don't count without it.
+    runs = (
+        _run("a", 150, 100, 155, 108),  # in-region, but far from any corner
+        _run("b", 60, 50, 65, 58),
+        _run("c", 220, 50, 225, 58),
+    )
+    graphics = (BBox(60, 65, 150, 150), BBox(220, 65, 310, 150))
+    figure_bbox = BBox(60, 65, 310, 150)
+    assert _detect_sub_panels(figure_bbox, graphics, runs) == {}
+
+
+def test_detect_figures_falls_back_to_one_region_when_panel_a_is_a_stray_glyph():
+    # End-to-end version of the above, reproducing the real bug's shape: a
+    # single caption (so the wide-bbox retry in detect_figures always fires
+    # -- see _other_caption_in_window), genuine "b"/"c" panel labels, and one
+    # stray "a"-shaped run positioned within the wide retry's page-width
+    # search window but far from any graphic. The whole figure must stay a
+    # single region (not split, and definitely not split into a wrong or
+    # partial set) rather than let that stray glyph pass as "panel a".
+    runs = (
+        _run("a", 500, 190, 505, 198),  # stray, unrelated to either panel
+        _run("b", 60, 50, 65, 58),
+        _run("c", 220, 50, 225, 58),
+        _run("Figure 1: Two panels", 40, 300, 400, 312),
+    )
+    col = TextColumn(bbox=BBox(40, 0, 400, PAGE_H), runs=runs)
+    page = PageText(page_index=0, runs=runs, columns=(col,))
+    graphics = (BBox(60, 65, 150, 150), BBox(220, 65, 310, 150))
+
+    figs = detect_figures(page, PAGE_W, PAGE_H, graphics)
+    assert len(figs) == 1
+    assert figs[0].label == "Figure 1"
 
 
 def test_group_labels_into_rows_by_y_proximity():

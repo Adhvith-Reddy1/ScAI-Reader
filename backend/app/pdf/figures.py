@@ -54,6 +54,17 @@ CAPTION_PATTERN = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
+# A table captioned without a number -- "Table:", "Summary Table:" -- common
+# in an appendix where there's only ever one such table so the paper doesn't
+# bother numbering it (real example: an FDA report's "Appendix C: Summary
+# Table"). Deliberately a separate, narrower pattern rather than making the
+# number optional in CAPTION_PATTERN above: that would make it match any
+# ordinary sentence starting with the word "Table". Requiring a literal ":"
+# right after "Table" keeps it just as safe while still catching this case.
+UNNUMBERED_TABLE_PATTERN = re.compile(
+    r"^\s*(?P<summary>Summary\s+)?Table\s*:", re.IGNORECASE
+)
+
 # A "gap" is the vertical whitespace separating the figure from text above.
 # Lines in a paragraph are typically <2pt apart; a figure starts where the
 # spacing balloons. 18pt is a conservative threshold that handles most
@@ -139,10 +150,14 @@ def _find_caption_runs(
         # Only check runs that *look* like the start of a line — the first
         # token after any leading whitespace must be a caption keyword.
         m = CAPTION_PATTERN.match(run.text)
-        if not m:
+        if m:
+            label = _normalize_label(m.group("prefix"), m.group("kind"), m.group("num"))
+            out.append((run, label))
             continue
-        label = _normalize_label(m.group("prefix"), m.group("kind"), m.group("num"))
-        out.append((run, label))
+        um = UNNUMBERED_TABLE_PATTERN.match(run.text)
+        if um:
+            label = "Summary Table" if um.group("summary") else "Table"
+            out.append((run, label))
     return out
 
 
@@ -517,13 +532,52 @@ PANEL_LABEL_SEARCH_PAD_PT = 20.0
 # shipping a panel box that's confidently wrong.
 MIN_PANEL_AREA_RATIO = 0.05
 
+# How close a candidate corner-label must sit to some graphic's own top-left
+# corner to count as a real panel marker, rather than a stray single-character
+# text fragment that happens to match the same bare-letter pattern. PDFium
+# routinely extracts a ROTATED axis title (e.g. a vertical "Probability of
+# success (%)" y-axis label) as one text run PER GLYPH instead of one run for
+# the whole word, and any run whose text happens to be a single letter like
+# "a" or "b" then looks exactly like a genuine panel tag to _PANEL_LABEL_
+# PATTERN even though it's really just one character of an unrelated word (a
+# real, observed case: the "a" in "success rate" won a false "panel a" this
+# way, and the "a" in a photo credit line "...Alamy Stock Photo" won another,
+# on a page with an unrelated decorative image). A genuine label sits right
+# above (sometimes slightly overlapping) and roughly level with its own
+# panel's top-left edge; a stray glyph from body text does not. Horizontal
+# tolerance is looser than vertical since a label is often aligned with a
+# panel's axis-title margin rather than the drawn plot rectangle itself,
+# landing noticeably left of the content's own edge.
+PANEL_LABEL_CORNER_MAX_DX_PT = 40.0
+PANEL_LABEL_CORNER_MAX_DY_PT = 20.0
+# A label's own text can dip slightly below a panel's top edge without that
+# meaning anything is wrong -- it's still "at the corner".
+PANEL_LABEL_CORNER_MAX_OVERLAP_PT = 15.0
+
+
+def _near_a_graphic_corner(run: TextRun, graphics: tuple[BBox, ...]) -> bool:
+    """Whether `run` sits at (or just above) some graphic's top-left corner —
+    see PANEL_LABEL_CORNER_MAX_DX_PT/DY_PT above for why this matters."""
+    for g in graphics:
+        dx = abs(run.bbox.x0 - g.x0)
+        dy = g.y0 - run.bbox.y1
+        if (
+            dx <= PANEL_LABEL_CORNER_MAX_DX_PT
+            and -PANEL_LABEL_CORNER_MAX_OVERLAP_PT <= dy <= PANEL_LABEL_CORNER_MAX_DY_PT
+        ):
+            return True
+    return False
+
 
 def _find_panel_labels(
-    runs: tuple[TextRun, ...], region: BBox
+    runs: tuple[TextRun, ...], region: BBox, graphics: tuple[BBox, ...] = ()
 ) -> dict[str, TextRun]:
-    """Bare single-letter markers ("a", "(a)") within `region` — the corner
-    tag papers draw on each sub-panel. At most one run per letter (first
-    occurrence): a genuine panel grid never repeats a letter."""
+    """Bare single-letter markers ("a", "(a)") within `region` that also sit
+    at some graphic's own top-left corner (see `_near_a_graphic_corner`) —
+    the corner tag papers draw on each sub-panel. Skipped when `graphics` is
+    empty (nothing to validate corners against). At most one run per letter
+    (first occurrence that passes the corner check): a genuine panel grid
+    never repeats a letter."""
     found: dict[str, TextRun] = {}
     for r in runs:
         m = _PANEL_LABEL_PATTERN.match(r.text.strip())
@@ -533,6 +587,8 @@ def _find_panel_labels(
             region.x0 <= r.bbox.x0 <= region.x1
             and region.y0 <= r.bbox.y0 <= region.y1
         ):
+            continue
+        if graphics and not _near_a_graphic_corner(r, graphics):
             continue
         letter = m.group(1) or m.group(2)
         if letter not in found:
@@ -627,7 +683,7 @@ def _detect_sub_panels(
         x1=figure_bbox.x1 + PANEL_LABEL_SEARCH_PAD_PT,
         y1=figure_bbox.y1 + PANEL_LABEL_SEARCH_PAD_PT,
     )
-    labels = _contiguous_from_a(_find_panel_labels(runs, search_region))
+    labels = _contiguous_from_a(_find_panel_labels(runs, search_region, graphics))
     if len(labels) < 2:
         return {}
 
