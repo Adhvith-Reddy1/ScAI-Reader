@@ -9,11 +9,13 @@
  * and annotationEvents (a highlight was created/deleted anywhere in the
  * viewer for the currently-shown document).
  *
- * Each row hovers to reveal a "jump" button that scrolls the viewer to that
- * highlight. Clicking the row body elsewhere (explanation highlights only)
- * toggles an inline preview of its AI definition/explanation beneath the
- * row — the current box text only (Spec 06's `content`, which a follow-up
- * "Update explanation" overwrites), never the full chat thread.
+ * Each row hovers to reveal a "jump" rail on its right edge — a full-height
+ * zone (not just a small icon) so a click anywhere right of the divider line
+ * scrolls the viewer to that highlight. Clicking the main body elsewhere
+ * (explanation highlights only) toggles an inline preview of its AI
+ * definition/explanation beneath the row — the current box text only (Spec
+ * 06's `content`, which a follow-up "Update explanation" overwrites), never
+ * the full chat thread.
  */
 
 import { renderFormattedText } from "./aiText.ts";
@@ -110,10 +112,17 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
   row.dataset.annotationId = ann.id;
   item.appendChild(row);
 
+  // The clickable body (swatch + text) is its own element, separate from the
+  // jump rail below, so the two click targets never fight over the same
+  // click — no `stopPropagation` needed.
+  const main = document.createElement("div");
+  main.className = "highlights-row-main";
+  row.appendChild(main);
+
   const swatch = document.createElement("span");
   swatch.className = "highlights-swatch";
   swatch.style.background = SWATCH_COLOR[ann.color];
-  row.appendChild(swatch);
+  main.appendChild(swatch);
 
   const body = document.createElement("div");
   body.className = "highlights-body";
@@ -128,16 +137,18 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
   meta.textContent = `${ann.explain ? "Definition" : "Highlight"} · Page ${ann.page}`;
   body.appendChild(meta);
 
-  row.appendChild(body);
+  main.appendChild(body);
 
+  // Jump rail: a full-height zone on the row's right edge, divided from the
+  // body by a vertical line. Both fade in together on row hover, and the
+  // whole zone — not just the glyph — is the click target.
   const jumpBtn = document.createElement("button");
   jumpBtn.type = "button";
   jumpBtn.className = "highlights-jump";
   jumpBtn.title = "Jump to highlight";
   jumpBtn.setAttribute("aria-label", "Jump to highlight");
   jumpBtn.textContent = "⏎";
-  jumpBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  jumpBtn.addEventListener("click", () => {
     jumpToAnnotation(ann.page, ann.id);
   });
   row.appendChild(jumpBtn);
@@ -145,7 +156,7 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
   // Only explanation highlights have a definition/explanation to show —
   // plain highlights just jump.
   if (ann.explain) {
-    row.classList.add("highlights-row-clickable");
+    main.classList.add("highlights-row-main-clickable");
 
     const detail = document.createElement("div");
     detail.className = "highlights-detail";
@@ -153,7 +164,7 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
     item.appendChild(detail);
 
     let cleanup: (() => void) | null = null;
-    row.addEventListener("click", () => {
+    main.addEventListener("click", () => {
       if (!detail.hidden) {
         detail.hidden = true;
         cleanup?.();
