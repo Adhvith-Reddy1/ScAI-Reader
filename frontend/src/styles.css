@@ -224,6 +224,55 @@ body {
 }
 .outline-children[hidden] { display: none; }
 
+/* Highlights panel — flat list of highlighted terms/sentences for the active
+   document, in reading order. */
+.highlights-panel {
+  padding: 8px 4px;
+  font-size: 13px;
+}
+.highlights-empty {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  margin: 24px 12px;
+}
+.highlights-list {
+  display: flex;
+  flex-direction: column;
+}
+.highlights-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.highlights-swatch {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.highlights-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.highlights-text {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.highlights-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .empty { color: var(--muted); margin: 80px auto 0; font-size: 14px; text-align: center; }
 
 /* Width and height are set inline by PageView (per-page, derived from
