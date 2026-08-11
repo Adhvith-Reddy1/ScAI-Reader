@@ -162,3 +162,33 @@ def test_upload_populates_citations_via_background_task(app_client, citation_pdf
     for m in mentions:
         assert m["bbox"]["x1"] > m["bbox"]["x0"]
         assert m["bbox"]["y1"] > m["bbox"]["y0"]
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_upload_real_fda_report_finds_every_reference(app_client, fda_case_studies_pdf):
+    """End-to-end against a real, unmodified 44-page PDF (not a synthetic
+    fixture): "22 Case Studies Where Phase 2 and Phase 3 Trials Had
+    Divergent Results" (FDA, Jan 2017 -- a US government work, public
+    domain). Its reference list runs 1-129 in bracketed numeric style
+    ("[1]", "[5, 6]", ...), and its table of contents has its own
+    "References....36" entry ahead of the real section -- this is the exact
+    real-world document that exposed the TOC-heading and split-marker bugs
+    fixed in app.pdf.citations (see the regression tests in
+    test_citations.py). Every one of the 129 references must be found, and
+    every one must have at least one in-text mention -- this document has no
+    uncited entries."""
+    doc_id = _upload(app_client, fda_case_studies_pdf, name="fda_22_case_studies.pdf")
+
+    r = app_client.get(f"/documents/{doc_id}/citations")
+    assert r.status_code == 200
+    entries = r.json()["citations"]
+    keys = {c["key"] for c in entries}
+    assert keys == {str(n) for n in range(1, 130)}
+
+    mentioned_keys: set[str] = set()
+    for page in range(1, 45):
+        rp = app_client.get(f"/documents/{doc_id}/pages/{page}/citation-mentions")
+        assert rp.status_code == 200
+        mentioned_keys |= {m["key"] for m in rp.json()["mentions"]}
+    assert mentioned_keys == keys

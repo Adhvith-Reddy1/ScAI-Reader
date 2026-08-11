@@ -23,10 +23,14 @@ from app.pdf.citations import (
     _extract_year_numeric,
     _find_bibliography_start,
     _first_surname,
+    _keys_from_digit_list,
     _numeric_keys_in_match,
+    _page_body_font_size,
     _run_offsets,
     _split_author_year_entries,
     _split_numeric_entries,
+    _superscript_numeric_mentions_on_page,
+    _SUPERSCRIPT_MARKER_PATTERN,
     detect_citations,
 )
 from app.pdf.types import BBox, PageText, TextRun
@@ -34,9 +38,18 @@ from app.pdf.types import BBox, PageText, TextRun
 PAGE_W = 612.0
 PAGE_H = 792.0
 
+# A representative NEJM-style body font size, for tests of the superscript
+# (bracket-less) numeric mention scanner -- real superscript markers extract
+# at roughly 0.4-0.55x the surrounding body text's font size (confirmed
+# against a real NEJM PDF).
+BODY_FONT_SIZE = 9.3
+SUPERSCRIPT_FONT_SIZE = 3.9
 
-def _run(text: str, x0: float, y0: float, x1: float, y1: float) -> TextRun:
-    return TextRun(text=text, bbox=BBox(x0, y0, x1, y1), font_size=10.0)
+
+def _run(
+    text: str, x0: float, y0: float, x1: float, y1: float, font_size: float = 10.0
+) -> TextRun:
+    return TextRun(text=text, bbox=BBox(x0, y0, x1, y1), font_size=font_size)
 
 
 def _page(page_index: int, runs: tuple[TextRun, ...]) -> PageText:
@@ -413,3 +426,259 @@ def test_trailing_section_stops_bibliography_collection():
     citations, _ = detect_citations(pages)
     assert len(citations) == 1
     assert "appendix" not in citations[0].raw_text.lower()
+
+
+# --- regression: real-world layout quirks found against actual papers ------
+#
+# The four cases below each reproduce a specific extraction bug found by
+# running detect_citations against two real PDFs (an NEJM review article and
+# an FDA report), fixed after inspecting PDFium's actual run/font output.
+
+
+def test_split_numeric_entries_handles_marker_on_its_own_run():
+    # Hanging-indent numbered lists (confirmed against a real NEJM PDF)
+    # extract the "1." marker and the entry's text as two SEPARATE runs/
+    # lines, not one combined "1. Pocock SJ..." line.
+    lines = [
+        ("1.", 0),
+        ("Pocock SJ, Stone GW. The primary", 0),
+        ("outcome fails.", 0),
+        ("2.", 0),
+        ("Cardiac Arrhythmia Suppression Trial.", 0),
+    ]
+    entries = _split_numeric_entries(lines)
+    assert len(entries) == 2
+    assert entries[0]["num"] == "1"
+    assert entries[0]["parts"] == [
+        "1.",
+        "Pocock SJ, Stone GW. The primary",
+        "outcome fails.",
+    ]
+    assert entries[1]["num"] == "2"
+
+
+def test_split_numeric_entries_rejects_out_of_sequence_stray_numbers():
+    # A numbered reference list is always strictly sequential. A stray
+    # number that lands alone on its own run mid-entry (e.g. a page/volume
+    # number split across a line wrap, confirmed against a real FDA PDF
+    # where "...1542-50." broke after "50.") must NOT be mistaken for a new
+    # entry -- it should fold into the current entry as a continuation.
+    lines = [
+        ("1.", 0),
+        ("Smith J. Some title. J Clin Psychiatry, 2006.", 0),
+        ("67", 0),
+        ("50.", 0),  # stray page-range fragment, NOT entry 50
+        ("2.", 0),
+        ("Doe A. Another title.", 0),
+    ]
+    entries = _split_numeric_entries(lines)
+    assert len(entries) == 2
+    assert entries[0]["num"] == "1"
+    assert "50." in entries[0]["parts"]
+    assert entries[1]["num"] == "2"
+
+
+def test_split_numeric_entries_handles_bare_digit_marker_with_separate_period():
+    # An even more fragmented layout (confirmed against a real FDA PDF): the
+    # marker's digits and its trailing period land in two SEPARATE runs
+    # ("88" then "." as its own run), too split for the dotted-marker
+    # pattern alone to recognize.
+    lines = [
+        ("1.", 0),
+        ("Smith J. Some title.", 0),
+        ("88", 0),
+        (".", 0),
+        ("Eli Lilly and Company. Briefing Document.", 0),
+    ]
+    entries = _split_numeric_entries(lines)
+    # The sequence 1 -> 88 doesn't continue, so the bare "88" is correctly
+    # rejected as entry 2 here (no entry 2-87 precede it in this fixture);
+    # the point of this test is that it does NOT crash and entry 1 absorbs
+    # the stray fragments as continuations rather than losing them.
+    assert entries[0]["num"] == "1"
+    assert "88" in entries[0]["parts"]
+
+
+def test_split_numeric_entries_accepts_bare_digit_marker_when_sequential():
+    # Same fragmented-marker layout as above, but this time "88" DOES
+    # continue the sequence from a preceding entry 87, so it must be
+    # accepted as a real new entry rather than folded in as a continuation.
+    lines = [
+        ("87.", 0),
+        ("Valenstein M. Adherence review.", 0),
+        ("88", 0),
+        (".", 0),
+        ("Eli Lilly and Company. Briefing Document.", 0),
+    ]
+    entries = _split_numeric_entries(lines)
+    assert len(entries) == 2
+    assert entries[0]["num"] == "87"
+    assert entries[1]["num"] == "88"
+    assert entries[1]["parts"] == ["88", ".", "Eli Lilly and Company. Briefing Document."]
+
+
+def test_find_bibliography_start_prefers_last_heading_match_over_toc_entry():
+    # A table of contents' own "References....36" line frequently extracts
+    # as a bare "References" run (the dot-leader and page number land in
+    # separate runs) -- confirmed against a real FDA PDF, where this caused
+    # the ENTIRE document body to be swallowed as "bibliography lines" and
+    # in-text citation brackets like "[1]" to be mistaken for entry markers.
+    toc_page = _page(
+        0,
+        (
+            _run("Table of Contents", 40, 40, 200, 52),
+            _run("Overview", 40, 60, 150, 72),
+            _run("References", 40, 80, 150, 92),  # TOC entry, not the section
+        ),
+    )
+    body_page = _page(
+        1,
+        (
+            _run("Roughly 9 in 10 drugs are never approved.[1]", 40, 50, 400, 62),
+        ),
+    )
+    real_biblio_page = _page(
+        2,
+        (
+            _run("References", 40, 400, 150, 412),
+            _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+        ),
+    )
+    start = _find_bibliography_start([toc_page, body_page, real_biblio_page])
+    assert start == (2, 0)
+
+    citations, _ = detect_citations([toc_page, body_page, real_biblio_page])
+    assert len(citations) == 1
+    assert citations[0].key == "1"
+    assert "drugs are never approved" not in citations[0].raw_text
+
+
+# --- superscript numeric mentions (no brackets) -----------------------------
+
+
+def test_superscript_marker_pattern_matches_digit_lists_with_stray_prefix():
+    assert _SUPERSCRIPT_MARKER_PATTERN.match("1")
+    assert _SUPERSCRIPT_MARKER_PATTERN.match("21,22 ")
+    assert _SUPERSCRIPT_MARKER_PATTERN.match("y2")  # a merge-artifact prefix
+    assert _SUPERSCRIPT_MARKER_PATTERN.match("375;10") is None
+    assert _SUPERSCRIPT_MARKER_PATTERN.match("not a number") is None
+
+
+def test_keys_from_digit_list_handles_commas_and_ranges():
+    assert _keys_from_digit_list("21,22") == ["21", "22"]
+    assert _keys_from_digit_list("5-7") == ["5", "6", "7"]
+
+
+def test_page_body_font_size_returns_the_dominant_font():
+    page = _page(
+        0,
+        (
+            _run("A normal body sentence here.", 40, 50, 300, 62, font_size=BODY_FONT_SIZE),
+            _run("Another normal body sentence.", 40, 70, 300, 82, font_size=BODY_FONT_SIZE),
+            _run("1", 300, 70, 306, 78, font_size=SUPERSCRIPT_FONT_SIZE),
+        ),
+    )
+    assert _page_body_font_size(page) == BODY_FONT_SIZE
+
+
+def test_superscript_numeric_mention_detected_via_small_font():
+    page = _page(
+        0,
+        (
+            _run(
+                "as in our previous article,", 40, 50, 300, 62, font_size=BODY_FONT_SIZE
+            ),
+            _run("1", 300, 51, 305, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+            _run(" which focused on appraisal.", 305, 50, 450, 62, font_size=BODY_FONT_SIZE),
+        ),
+    )
+    mentions = _superscript_numeric_mentions_on_page(page, {"1"})
+    assert len(mentions) == 1
+    assert mentions[0].key == "1"
+    assert mentions[0].page_index == 0
+    assert mentions[0].bbox == BBox(300, 51, 305, 58)
+
+
+def test_superscript_compound_mention_detected():
+    page = _page(
+        0,
+        (
+            _run("the PLATO trial", 40, 50, 150, 62, font_size=BODY_FONT_SIZE),
+            _run("21,22 ", 150, 51, 168, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+            _run(" involving patients", 168, 50, 300, 62, font_size=BODY_FONT_SIZE),
+        ),
+    )
+    mentions = _superscript_numeric_mentions_on_page(page, {"21", "22"})
+    assert {m.key for m in mentions} == {"21", "22"}
+    assert all(m.bbox == BBox(150, 51, 168, 58) for m in mentions)
+
+
+def test_superscript_mention_not_emitted_for_unknown_key():
+    page = _page(
+        0,
+        (
+            _run("a footer page number", 40, 50, 300, 62, font_size=BODY_FONT_SIZE),
+            _run("972", 300, 51, 315, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+        ),
+    )
+    assert _superscript_numeric_mentions_on_page(page, {"1", "2"}) == []
+
+
+def test_superscript_mention_requires_meaningfully_smaller_font():
+    # A digit run at (nearly) body font size is ordinary text, not a
+    # superscript marker -- it must not be treated as a citation.
+    page = _page(
+        0,
+        (
+            _run("body text", 40, 50, 150, 62, font_size=BODY_FONT_SIZE),
+            _run("1", 150, 50, 158, 62, font_size=BODY_FONT_SIZE * 0.95),
+        ),
+    )
+    assert _superscript_numeric_mentions_on_page(page, {"1"}) == []
+
+
+def test_detect_citations_end_to_end_with_superscript_style():
+    # Full pipeline: numeric bibliography + bare superscript in-text markers
+    # (no brackets), the NEJM/JAMA/Lancet house style. Reference numbers must
+    # be contiguous (1, 2, 3, ...) since the entry splitter relies on that
+    # invariant to reject stray numbers -- see
+    # test_split_numeric_entries_rejects_out_of_sequence_stray_numbers.
+    body_page = _page(
+        0,
+        (
+            _run(
+                "as in our previous article,", 40, 50, 300, 62, font_size=BODY_FONT_SIZE
+            ),
+            _run("1", 300, 51, 305, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+            _run(
+                " and the PLATO trial", 305, 50, 420, 62, font_size=BODY_FONT_SIZE
+            ),
+            _run("2,3 ", 420, 51, 438, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+            _run(" involving patients.", 438, 50, 550, 62, font_size=BODY_FONT_SIZE),
+        ),
+    )
+    biblio_page = _page(
+        1,
+        (
+            _run("References", 40, 400, 150, 412, font_size=BODY_FONT_SIZE),
+            _run("1.", 40, 420, 60, 432, font_size=BODY_FONT_SIZE),
+            _run(
+                "Pocock SJ, Stone GW. The primary outcome fails. N Engl J Med 2016.",
+                40, 440, 550, 452, font_size=BODY_FONT_SIZE,
+            ),
+            _run("2.", 40, 460, 60, 472, font_size=BODY_FONT_SIZE),
+            _run(
+                "Wallentin L, et al. Ticagrelor versus clopidogrel. N Engl J Med 2009.",
+                40, 480, 550, 492, font_size=BODY_FONT_SIZE,
+            ),
+            _run("3.", 40, 500, 60, 512, font_size=BODY_FONT_SIZE),
+            _run(
+                "Carroll KJ, Fleming TR. Statistical evaluation. Stat Biopharm Res 2013.",
+                40, 520, 550, 532, font_size=BODY_FONT_SIZE,
+            ),
+        ),
+    )
+    citations, mentions = detect_citations([body_page, biblio_page])
+    assert {c.key for c in citations} == {"1", "2", "3"}
+    assert {m.key for m in mentions} == {"1", "2", "3"}
+    assert all(m.page_index == 0 for m in mentions)

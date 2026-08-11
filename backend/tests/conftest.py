@@ -73,6 +73,16 @@ def citation_pdf(fixture_pdfs: dict[str, Path]) -> Path:
     return fixture_pdfs["citation_doc.pdf"]
 
 
+@pytest.fixture(scope="session")
+def fda_case_studies_pdf() -> Path:
+    """A real, publicly available FDA report (US government work, public
+    domain) -- 129 numbered references in a bracket in-text style, with a
+    table-of-contents "References" entry appearing before the real section.
+    Used to validate detect_citations against an actual paper's PDF text
+    layer rather than only hand-built synthetic fixtures."""
+    return Path(__file__).resolve().parent / "fixtures" / "pdfs" / "fda_22_case_studies.pdf"
+
+
 # ---------------------------------------------------------------------------
 # Isolated app settings per integration test
 # ---------------------------------------------------------------------------

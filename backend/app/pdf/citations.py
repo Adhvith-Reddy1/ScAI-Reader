@@ -29,13 +29,15 @@ Approach, in three stages:
      rather than guessed.
   3. Scan every page's text, EXCLUDING the bibliography section itself, for
      mentions of the resulting citation keys — numeric bracket markers (with
-     range/list expansion) or author-year parenthetical/narrative citations
-     — and keep only the ones whose key matches a real bibliography entry,
-     so stray bracketed numbers or capitalized-word-then-parenthesis text
-     elsewhere on the page can't produce phantom mentions. Excluding the
-     bibliography region itself matters for numeric style in particular:
-     without it, each entry's own "[12]" marker would register as a mention
-     of itself.
+     range/list expansion), bare superscript numbers (some journals, e.g.
+     NEJM/JAMA/Lancet, render markers as a small-font number with no
+     brackets — see `_superscript_numeric_mentions_on_page`), or author-year
+     parenthetical/narrative citations — and keep only the ones whose key
+     matches a real bibliography entry, so stray bracketed/superscript
+     numbers or capitalized-word-then-parenthesis text elsewhere on the page
+     can't produce phantom mentions. Excluding the bibliography region
+     itself matters for numeric style in particular: without it, each
+     entry's own "[12]" marker would register as a mention of itself.
 
 Only one style is detected per document, and only the common in-text forms
 described in the module's own docstring are matched — see the "false
@@ -45,6 +47,7 @@ positives / not handled" notes near each pattern for the specific tradeoffs.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from .types import BBox, PageText, TextRun
@@ -97,13 +100,20 @@ _TRAILING_SECTION_PATTERN = re.compile(
 
 
 def _find_bibliography_start(pages: list[PageText]) -> tuple[int, int] | None:
-    """(page position in `pages`, run index) of the first heading match, or
-    None if no bibliography section is found."""
+    """(page position in `pages`, run index) of the LAST heading match, or
+    None if no bibliography section is found. Using the last match (not the
+    first) matters for papers with a table of contents: a TOC's own
+    "References....36" line frequently extracts as a bare "References" run
+    (the dot-leader and page number land in separate runs), which would
+    otherwise be mistaken for the section itself and swallow the entire
+    document body as "bibliography lines" — the real section is virtually
+    always the last such heading in the document, not the first."""
+    found: tuple[int, int] | None = None
     for page_pos, page in enumerate(pages):
         for run_idx, run in enumerate(page.runs):
             if _SECTION_HEADING_PATTERN.match(run.text.strip()):
-                return page_pos, run_idx
-    return None
+                found = (page_pos, run_idx)
+    return found
 
 
 def _collect_bibliography_lines(
@@ -153,14 +163,32 @@ def _pages_excluding_runs(
 
 # Two marker shapes cover the vast majority of numeric/IEEE-style lists:
 # bracketed ("[12] Smith, ...") and dotted ("12. Smith, ..."). The dotted
-# form requires a capital letter right after the marker (an author name
-# always starts capitalized) so an ordinary sentence that happens to open
-# with a number ("2020 was...") on a wrapped continuation line isn't
-# mistaken for a new entry — this doesn't fully eliminate that risk (a
-# continuation line starting "1990s span..." would still slip through) but
-# handles the common case.
+# form requires either a capital letter right after the marker on the same
+# line (an author name always starts capitalized) or nothing at all after
+# it. The latter covers a common hanging-indent PDF layout where the number
+# is its own text run/line and the entry's text starts on the next one
+# (confirmed against real NEJM/JAMA-style references, where "1." and
+# "Pocock SJ, ..." extract as two separate runs) — a marker-only run is
+# never a coincidental mid-sentence artifact, so relaxing the lookahead for
+# it doesn't reopen the false-positive risk the capital-letter check guards
+# against elsewhere: an ordinary sentence that happens to open with a number
+# ("2020 was...") on a wrapped continuation line isn't mistaken for a new
+# entry when text follows on the same run. This doesn't fully eliminate that
+# risk (a continuation line starting "1990s span..." would still slip
+# through) but handles the common case.
+#
+# The third alternative (bare digits, no period at all) covers an even more
+# fragmented layout, confirmed against a real document, where the marker's
+# own period lands in a THIRD separate run ("88" then "." as two more runs
+# after the number) -- too fragmented to fold into the dotted pattern above.
+# On its own this would be far too permissive (any isolated page/volume
+# number could match), but `_split_numeric_entries`'s sequential-numbering
+# check is what actually keeps it safe: a bare-digit "marker" is only ever
+# accepted if it's exactly one more than the last accepted entry number.
 _NUMERIC_ENTRY_START = re.compile(
-    r"^\[(?P<num1>\d{1,4})\]\s*|^(?P<num2>\d{1,4})\.\s+(?=[A-Z])"
+    r"^\[(?P<num1>\d{1,4})\]\s*"
+    r"|^(?P<num2>\d{1,4})\.(?:\s+(?=[A-Z])|\s*$)"
+    r"|^(?P<num3>\d{1,4})$"
 )
 
 
@@ -169,16 +197,32 @@ def _split_numeric_entries(
 ) -> list[dict]:
     """Group bibliography lines into entries, one per numeric marker. Lines
     without a marker are continuations of the previous entry (a wrapped
-    reference, e.g. a long title spilling onto a second line)."""
+    reference, e.g. a long title spilling onto a second line).
+
+    A numbered reference list is always strictly sequential (1, 2, 3, ...,
+    N) with no gaps or repeats, so once a first marker is accepted, any
+    later "marker" match is only treated as a real new entry if its number
+    is exactly one more than the last accepted one — otherwise it's folded
+    into the current entry as a continuation line instead. This matters
+    because the marker-only case in `_NUMERIC_ENTRY_START` (needed for
+    hanging-indent layouts) would otherwise also catch stray numbers that
+    happen to land alone on their own run mid-entry (a page/volume number
+    split across a line wrap, e.g. "...p. 1261-70." breaking after "1261.")
+    — those never continue the sequence, so the +1 check rejects them.
+    """
     entries: list[dict] = []
     current: dict | None = None
+    expected_next: int | None = None
     for text, page_index in lines:
         m = _NUMERIC_ENTRY_START.match(text)
-        if m:
+        num_int = (
+            int(m.group("num1") or m.group("num2") or m.group("num3")) if m else None
+        )
+        if m and (expected_next is None or num_int == expected_next):
             if current is not None:
                 entries.append(current)
-            num = m.group("num1") or m.group("num2")
-            current = {"num": num, "parts": [text], "page_index": page_index}
+            current = {"num": str(num_int), "parts": [text], "page_index": page_index}
+            expected_next = num_int + 1
         elif current is not None:
             current["parts"].append(text)
     if current is not None:
@@ -385,11 +429,12 @@ def _expand_range(a: str, b: str) -> list[str]:
     return [str(n) for n in range(lo, hi + 1)]
 
 
-def _numeric_keys_in_match(m: re.Match) -> list[str]:
-    if m.group("start") is not None:
-        return _expand_range(m.group("start"), m.group("end"))
+def _keys_from_digit_list(body: str) -> list[str]:
+    """Split a comma/semicolon-separated digit-group string into individual
+    keys, expanding any embedded ranges ("5-7") -- shared by the bracketed
+    and superscript numeric-mention scanners."""
     keys: list[str] = []
-    for token in re.split(r"[,;]", m.group("body")):
+    for token in re.split(r"[,;]", body):
         token = token.strip()
         if not token:
             continue
@@ -399,6 +444,12 @@ def _numeric_keys_in_match(m: re.Match) -> list[str]:
         else:
             keys.append(token)
     return keys
+
+
+def _numeric_keys_in_match(m: re.Match) -> list[str]:
+    if m.group("start") is not None:
+        return _expand_range(m.group("start"), m.group("end"))
+    return _keys_from_digit_list(m.group("body"))
 
 
 def _numeric_mentions_on_page(
@@ -418,6 +469,80 @@ def _numeric_mentions_on_page(
             for k in matched_keys
         )
     return out
+
+
+# Superscript numeric mentions: some numeric-style journals (NEJM, JAMA,
+# Lancet, ...) render in-text markers as bare superscript numbers with no
+# enclosing brackets -- "...our previous article,1 which focused..." or
+# "...the PLATO trial21,22 involving...". PDFium extracts a superscript as
+# its own TextRun, in a meaningfully smaller font-size than the body text
+# it's attached to (observed ~0.4-0.55x in practice), and occasionally
+# bleeds one stray trailing glyph from the previous run into it when the two
+# runs' rects overlap at the size-change boundary (e.g. "y2" for a marker
+# glued after "...mortality") -- hence allowing up to two leading letters in
+# the pattern below. Matching on (small relative font-size) + (digit-list-only
+# content) + (key exists in the parsed bibliography) keeps this from firing
+# on ordinary small-font text (page numbers, running headers): those either
+# fail the digit-list shape (e.g. "375;10") or fail to match a real
+# bibliography key, the same safety net `_numeric_mentions_on_page` relies
+# on. One accepted gap: a footer page number that is BOTH small-font AND
+# numerically equal to a real reference key (e.g. page "5" in a paper with a
+# reference 5) can still slip through as a false positive.
+_SUPERSCRIPT_MARKER_PATTERN = re.compile(
+    r"^[A-Za-z]{0,2}(?P<body>\d{1,4}(?:\s*,\s*\d{1,4})*)\s*$"
+)
+
+_SUPERSCRIPT_FONT_RATIO = 0.7
+
+# Runs shorter than this many characters are too often ligature/spacer
+# artifacts (single control characters, hyphenation glyphs) to anchor a
+# reliable "body font size" estimate for the page -- only longer runs count.
+_MIN_BODY_RUN_CHARS = 4
+
+
+def _page_body_font_size(page: PageText) -> float | None:
+    """The most common font-size among the page's substantial text runs --
+    an estimate of the prevailing body-text size, against which a
+    superscript marker's font is compared."""
+    sizes = [
+        round(r.font_size, 1) for r in page.runs if len(r.text.strip()) >= _MIN_BODY_RUN_CHARS
+    ]
+    if not sizes:
+        return None
+    return Counter(sizes).most_common(1)[0][0]
+
+
+def _superscript_numeric_mentions_on_page(
+    page: PageText, keys: set[str]
+) -> list[CitationMention]:
+    body_size = _page_body_font_size(page)
+    if body_size is None:
+        return []
+    threshold = body_size * _SUPERSCRIPT_FONT_RATIO
+    out: list[CitationMention] = []
+    for run in page.runs:
+        if run.font_size >= threshold:
+            continue
+        text = run.text.strip()
+        if not text:
+            continue
+        m = _SUPERSCRIPT_MARKER_PATTERN.match(text)
+        if not m:
+            continue
+        matched_keys = [k for k in _keys_from_digit_list(m.group("body")) if k in keys]
+        out.extend(
+            CitationMention(key=k, page_index=page.page_index, bbox=run.bbox)
+            for k in matched_keys
+        )
+    return out
+
+
+def _all_numeric_mentions_on_page(
+    page: PageText, keys: set[str]
+) -> list[CitationMention]:
+    return _numeric_mentions_on_page(page, keys) + _superscript_numeric_mentions_on_page(
+        page, keys
+    )
 
 
 # Author-year mentions: parenthetical ("(Smith, 2020)", "(Smith & Doe,
@@ -487,7 +612,7 @@ def detect_citations(
 
     if numeric_hits >= author_hits:
         citations = _build_numeric_citations(lines)
-        scan_page = _numeric_mentions_on_page
+        scan_page = _all_numeric_mentions_on_page
     else:
         citations = _build_author_year_citations(lines)
         scan_page = _author_year_mentions_on_page
