@@ -9,18 +9,18 @@
  * and annotationEvents (a highlight was created/deleted anywhere in the
  * viewer for the currently-shown document).
  *
- * Each row hovers to reveal a "jump" rail on its right edge — a full-height
- * zone (not just a small icon) so a click anywhere right of the divider line
- * scrolls the viewer to that highlight. Clicking the main body elsewhere
- * (explanation highlights only) toggles an inline preview of its AI
- * definition/explanation beneath the row — the current box text only (Spec
- * 06's `content`, which a follow-up "Update explanation" overwrites), never
- * the full chat thread.
+ * Each row hovers to reveal two rails on its right edge — full-height zones
+ * (not small icons) set off by vertical dividers: "jump" scrolls the viewer
+ * to that highlight, "delete" removes it (turning pale red on hover as a
+ * warning). Clicking the main body elsewhere (explanation highlights only)
+ * toggles an inline preview of its AI definition/explanation beneath the
+ * row — the current box text only (Spec 06's `content`, which a follow-up
+ * "Update explanation" overwrites), never the full chat thread.
  */
 
 import { renderFormattedText } from "./aiText.ts";
 import type { HighlightColor } from "./api.ts";
-import { subscribeAnnotationsChanged } from "./annotationEvents.ts";
+import { notifyAnnotationsChanged, subscribeAnnotationsChanged } from "./annotationEvents.ts";
 import {
   getExplanationState,
   hydrateExplanation,
@@ -28,7 +28,12 @@ import {
   type ExplanationState,
 } from "./explanationStore.ts";
 import { jumpToAnnotation, subscribePageInfo } from "./pageNav.ts";
-import { listAnnotations, type LocalAnnotation } from "./storage/localStore.ts";
+import {
+  deleteAnnotation,
+  listAnnotations,
+  type LocalAnnotation,
+} from "./storage/localStore.ts";
+import { dismissExplanationFor } from "./viewer/ExplanationTooltip.ts";
 
 const SWATCH_COLOR: Record<HighlightColor, string> = {
   yellow: "#ffeb3b",
@@ -139,6 +144,20 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
 
   main.appendChild(body);
 
+  // Delete rail: same full-height, fade-in-on-hover treatment as the jump
+  // rail below, but flags itself as destructive by turning pale red under
+  // the cursor.
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "highlights-delete";
+  deleteBtn.title = "Delete highlight";
+  deleteBtn.setAttribute("aria-label", "Delete highlight");
+  deleteBtn.textContent = "×";
+  deleteBtn.addEventListener("click", () => {
+    void deleteHighlight(ann);
+  });
+  row.appendChild(deleteBtn);
+
   // Jump rail: a full-height zone on the row's right edge, divided from the
   // body by a vertical line. Both fade in together on row hover, and the
   // whole zone — not just the glyph — is the click target.
@@ -177,6 +196,25 @@ function buildItem(ann: LocalAnnotation): HTMLElement {
   }
 
   return item;
+}
+
+/**
+ * Delete a highlight from local storage and let the rest of the app know.
+ * The panel's own `subscribeAnnotationsChanged` handler (in
+ * `buildHighlightsPanel`) reloads the list on this notification, so the row
+ * disappearing is a side effect of the normal refresh path rather than
+ * something this function does directly.
+ */
+async function deleteHighlight(ann: LocalAnnotation): Promise<void> {
+  try {
+    await deleteAnnotation(ann.docId, ann.id);
+  } catch {
+    return;
+  }
+  // Close any viewer-side explanation panel pinned to the highlight we just
+  // removed — same cleanup PageView's own delete path does.
+  dismissExplanationFor(ann.id);
+  notifyAnnotationsChanged(ann.docId);
 }
 
 /**

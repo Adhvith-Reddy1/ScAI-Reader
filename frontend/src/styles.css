@@ -285,10 +285,13 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
-/* "Jump to highlight" — a full-height rail on the row's right edge, set off
-   by a vertical divider. The whole rail is the click target (not just the
-   glyph), and it fades in with the row on hover/focus so it doesn't have to
-   be hunted for. Same return-key glyph readers recognize from text editors. */
+/* "Delete highlight" and "Jump to highlight" — full-height rails on the
+   row's right edge, each set off by a vertical divider. The whole rail is
+   the click target (not just the glyph), and both fade in with the row on
+   hover/focus so they don't have to be hunted for. Jump uses the return-key
+   glyph readers recognize from text editors; delete turns pale red under
+   the cursor specifically, as a warning the click deletes. */
+.highlights-delete,
 .highlights-jump {
   flex-shrink: 0;
   width: 30px;
@@ -304,9 +307,11 @@ body {
   cursor: pointer;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 100ms ease, background-color 100ms ease;
+  transition: opacity 100ms ease, background-color 100ms ease, color 100ms ease;
 }
+.highlights-row:hover .highlights-delete,
 .highlights-row:hover .highlights-jump,
+.highlights-delete:focus-visible,
 .highlights-jump:focus-visible {
   opacity: 1;
   visibility: visible;
@@ -314,6 +319,10 @@ body {
 .highlights-jump:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
+}
+.highlights-delete:hover {
+  color: #ffb4ab;
+  background: rgba(244, 67, 54, 0.16);
 }
 /* Inline definition/explanation preview — just the current box text (Spec 06
    `content`), never the follow-up chat thread. */

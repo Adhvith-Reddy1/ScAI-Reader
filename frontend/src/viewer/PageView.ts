@@ -15,7 +15,7 @@ import {
   putAnnotation,
   type LocalAnnotation,
 } from "../storage/localStore.ts";
-import { notifyAnnotationsChanged } from "../annotationEvents.ts";
+import { notifyAnnotationsChanged, subscribeAnnotationsChanged } from "../annotationEvents.ts";
 import { makeHighlight } from "./highlightModel.ts";
 import { seedFigure } from "../figureStore.ts";
 import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
@@ -244,6 +244,14 @@ export function buildPageView(
   const unsubRotation = subscribeRotation(() => {
     applyDisplay();
   });
+  // A highlight can be created or deleted from outside this page entirely —
+  // e.g. the Highlights sidebar tab's delete button. Re-pull this page's
+  // annotations whenever the doc's annotations change so the overlay stays
+  // in sync no matter where the edit came from.
+  const unsubAnnotations = subscribeAnnotationsChanged((docId) => {
+    if (docId !== meta.id) return;
+    void refreshAnnotations(meta, pageNumber, wrap, state);
+  });
 
   return {
     element: wrap,
@@ -252,6 +260,7 @@ export function buildPageView(
       unsubFit();
       unsubFind();
       unsubRotation();
+      unsubAnnotations();
       unregisterPage(pageNumber);
     },
   };
