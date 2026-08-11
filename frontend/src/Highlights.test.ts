@@ -200,18 +200,46 @@ describe("Highlights panel — inline definition toggle", () => {
     setActivePageList(fakePageList(), 10, "doc1");
     await new Promise((r) => setTimeout(r, 20));
 
-    const row = el.querySelector(".highlights-row") as HTMLElement;
-    expect(row.classList.contains("highlights-row-clickable")).toBe(true);
+    const main = el.querySelector(".highlights-row-main") as HTMLElement;
+    expect(main.classList.contains("highlights-row-main-clickable")).toBe(true);
     const detail = el.querySelector(".highlights-detail") as HTMLElement;
     expect(detail.hidden).toBe(true);
 
-    row.click();
+    main.click();
     expect(detail.hidden).toBe(false);
     expect(detail.querySelector(".highlights-detail-body")?.textContent).toContain(
       "A measure of disorder.",
     );
 
-    row.click();
+    main.click();
+    expect(detail.hidden).toBe(true);
+  });
+
+  it("clicking anywhere in the body (not just the exact swatch/text) toggles the detail", async () => {
+    await putAnnotation(makeAnnotation({ id: "a", explain: true }));
+    seedExplanation("a", "definition", "A measure of disorder.");
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const detail = el.querySelector(".highlights-detail") as HTMLElement;
+    (el.querySelector(".highlights-text") as HTMLElement).click();
+    expect(detail.hidden).toBe(false);
+  });
+
+  it("clicking the jump rail never toggles the detail, even though it sits in the same row", async () => {
+    await putAnnotation(makeAnnotation({ id: "a", explain: true }));
+    seedExplanation("a", "definition", "A measure of disorder.");
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const detail = el.querySelector(".highlights-detail") as HTMLElement;
+    (el.querySelector(".highlights-jump") as HTMLButtonElement).click();
     expect(detail.hidden).toBe(true);
   });
 
@@ -223,8 +251,8 @@ describe("Highlights panel — inline definition toggle", () => {
     setActivePageList(fakePageList(), 10, "doc1");
     await new Promise((r) => setTimeout(r, 20));
 
-    const row = el.querySelector(".highlights-row") as HTMLElement;
-    row.click();
+    const main = el.querySelector(".highlights-row-main") as HTMLElement;
+    main.click();
     await new Promise((r) => setTimeout(r, 20));
 
     expect(el.querySelector(".highlights-detail")?.textContent).toContain(
@@ -240,9 +268,9 @@ describe("Highlights panel — inline definition toggle", () => {
     setActivePageList(fakePageList(), 10, "doc1");
     await new Promise((r) => setTimeout(r, 20));
 
-    const row = el.querySelector(".highlights-row") as HTMLElement;
-    expect(row.classList.contains("highlights-row-clickable")).toBe(false);
-    row.click();
+    const main = el.querySelector(".highlights-row-main") as HTMLElement;
+    expect(main.classList.contains("highlights-row-main-clickable")).toBe(false);
+    main.click();
     expect(el.querySelector(".highlights-detail")).toBeNull();
   });
 
@@ -255,8 +283,8 @@ describe("Highlights panel — inline definition toggle", () => {
     setActivePageList(fakePageList(), 10, "doc1");
     await new Promise((r) => setTimeout(r, 20));
 
-    const row = el.querySelector(".highlights-row") as HTMLElement;
-    row.click();
+    const main = el.querySelector(".highlights-row-main") as HTMLElement;
+    main.click();
 
     const detail = el.querySelector(".highlights-detail") as HTMLElement;
     expect(detail.textContent).toContain("Original text.");
