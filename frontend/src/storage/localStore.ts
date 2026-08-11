@@ -213,6 +213,19 @@ export async function deleteExplanation(
   await db.delete("explanations", [docId, annotationId]);
 }
 
+/** Every explanation for a document — both highlight definitions/explanations
+ * and figure walkthroughs, which share this store (see figureStore.ts). Used
+ * to bundle a document's AI answers for download/export. */
+export async function listExplanationsForDoc(
+  docId: string,
+): Promise<LocalExplanation[]> {
+  const db = await getDB();
+  return db.getAll(
+    "explanations",
+    IDBKeyRange.bound([docId], [docId, []]),
+  );
+}
+
 // View state -------------------------------------------------------------
 
 export async function getViewState(docId: string): Promise<ViewState | null> {

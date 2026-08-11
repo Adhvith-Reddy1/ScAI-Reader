@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+import json
 from datetime import datetime, timezone
+from typing import Any
 
+import pypdf
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 
 from ..config import Settings
@@ -10,6 +14,33 @@ from ..pdf.pdfium_backend import PdfiumBackend
 from ..pdf.types import PageText
 from ..storage import db, files
 from .deps import get_settings
+from .export import BUNDLE_ATTACHMENT_NAME, BUNDLE_FORMAT
+
+
+def _extract_scai_bundle(data: bytes) -> dict[str, Any] | None:
+    """Look for the highlights/explanations attachment `export_document`
+    embeds (see `routes/export.py`). Cheap-checked first: the vast majority
+    of uploads are plain PDFs with no embedded files at all, and a full pypdf
+    parse on every upload would add latency to the doc-open hot path for no
+    reason.
+    """
+    if b"/EmbeddedFile" not in data:
+        return None
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        candidates = reader.attachments.get(BUNDLE_ATTACHMENT_NAME)
+        if not candidates:
+            return None
+        payload = json.loads(candidates[0].decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("format") != BUNDLE_FORMAT:
+        return None
+    annotations = payload.get("annotations")
+    explanations = payload.get("explanations")
+    if not isinstance(annotations, list) or not isinstance(explanations, list):
+        return None
+    return {"annotations": annotations, "explanations": explanations}
 
 
 def _flatten_page_text(page: PageText) -> str:
@@ -40,6 +71,7 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="file too large")
 
     doc_id = files.save_pdf(settings, data)
+    scai_bundle = _extract_scai_bundle(data)
 
     # The browser re-uploads a document's bytes on every open (Spec 02 — the
     # server is stateless/ephemeral), so this handler runs far more often for
@@ -76,6 +108,7 @@ async def upload_document(
             "page_count": existing["page_count"],
             "title": existing["title"],
             "author": existing["author"],
+            "scai_bundle": scai_bundle,
         }
 
     try:
@@ -141,6 +174,7 @@ async def upload_document(
         "page_count": meta.page_count,
         "title": meta.title,
         "author": meta.author,
+        "scai_bundle": scai_bundle,
     }
 
 

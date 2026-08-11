@@ -8,6 +8,7 @@
 - **Five-color highlight palette** with column-aware drag selection, zoom anchoring, and an erase mode.
 - **Outline sidebar** — closable tabbed shell driven by the PDF's own outline.
 - **Find-in-page** — Cmd-F bar with prev/next navigation across loaded pages (SQLite FTS5 on the backend).
+- **Download with highlights** — the Download button in the toolbar embeds your highlights and AI explanations into the PDF itself (a normal attachment, invisible to other viewers) and downloads it. Send that file to anyone; when they open it in ScAI-Reader ("Open PDF…"), the same highlights and pop-up explanations appear for them too, without ever touching your original document.
 - **AI hover explanations on blue highlights:**
   - Highlight a short term → Claude Sonnet 4.6 returns a tight definition (term first, then a clause of paper-specific context only if needed).
   - Highlight a sentence → Claude Opus 4.7 returns a two-sentence plain-language restatement.

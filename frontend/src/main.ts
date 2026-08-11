@@ -5,13 +5,16 @@ import {
   uploadDocumentBlob,
   type DocumentDimensions,
   type DocumentMeta,
+  type ScaiBundle,
 } from "./api.ts";
 import {
   deleteDocument,
   estimateUsage,
   getDocument,
   getViewState,
+  putAnnotation,
   putDocument,
+  putExplanation,
   putViewState,
 } from "./storage/localStore.ts";
 import {
@@ -20,6 +23,7 @@ import {
   setViewport,
 } from "./fit.ts";
 import { buildAiSetupButton, maybeShowAiNudge } from "./AiSetup.ts";
+import { buildDownloadButton } from "./Download.ts";
 import { buildEraseButton } from "./EraseButton.ts";
 import { subscribeEraseMode } from "./eraseMode.ts";
 import { buildExplainButton } from "./ExplainButton.ts";
@@ -92,6 +96,13 @@ zoomSlot.appendChild(buildZoomControls());
 const rotateSlot = document.getElementById("rotate-controls-slot");
 rotateSlot?.appendChild(buildRotateControls());
 pageIndicatorSlot.appendChild(buildPageIndicator());
+
+const downloadButtonSlot = document.getElementById(
+  "download-button-slot",
+) as HTMLElement;
+downloadButtonSlot.appendChild(
+  buildDownloadButton((message) => toast(`Download failed: ${message}`)),
+);
 
 const aiSetupSlot = document.getElementById("ai-setup-slot") as HTMLElement;
 aiSetupSlot.appendChild(buildAiSetupButton());
@@ -254,12 +265,38 @@ fileInput.addEventListener("change", async () => {
   try {
     const meta = await uploadDocument(file);
     await persistUpload(file, meta);
+    await importSharedBundle(meta.id, meta.scai_bundle);
     setRotation(0); // a freshly opened PDF starts upright
     await renderDocument(meta);
   } catch (err) {
     docInfo.textContent = `Error: ${(err as Error).message}`;
   }
 });
+
+/**
+ * A PDF downloaded via the Download button carries its highlights and AI
+ * explanations as an embedded attachment (see backend/app/routes/export.py).
+ * Opening one here — e.g. a friend receiving it — re-seeds the local stores
+ * under this browser's own id for the upload, so the same highlights and
+ * pop-up explanations show up for them too.
+ */
+async function importSharedBundle(
+  docId: string,
+  bundle: ScaiBundle | null | undefined,
+): Promise<void> {
+  if (!bundle || (bundle.annotations.length === 0 && bundle.explanations.length === 0)) {
+    return;
+  }
+  try {
+    await Promise.all([
+      ...bundle.annotations.map((a) => putAnnotation({ ...a, docId })),
+      ...bundle.explanations.map((e) => putExplanation({ ...e, docId })),
+    ]);
+    toast("Imported highlights and explanations from this PDF.");
+  } catch {
+    toast("Couldn't import the shared highlights from this PDF.");
+  }
+}
 
 /**
  * Save an uploaded PDF (bytes + metadata) to the browser-local library, so it

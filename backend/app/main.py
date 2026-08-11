@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import load_dotenv
 from .routes import (
     documents,
+    export,
     figures,
     outline,
     pages,
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(documents.router)
+    app.include_router(export.router)
     app.include_router(pages.router)
     app.include_router(text.router)
     app.include_router(figures.router)

@@ -1,12 +1,53 @@
 import { getClientId } from "./clientId.ts";
 import { getUserApiKey } from "./userApiKey.ts";
 
+/**
+ * A highlight/explanation, exactly as stored locally (see
+ * `storage/localStore.ts`'s `LocalAnnotation`/`LocalExplanation`), shaped for
+ * the wire. Defined here rather than imported from localStore to avoid a
+ * cycle (localStore imports `Rect`/`HighlightColor`/`ExplanationKind` from
+ * this module) — the shapes are kept in sync by hand.
+ */
+export interface ExportAnnotation {
+  id: string;
+  docId: string;
+  page: number;
+  kind: "highlight";
+  color: HighlightColor;
+  rects: Rect[];
+  text: string | null;
+  explain: boolean;
+  created_at: string;
+}
+
+export interface ExportExplanation {
+  docId: string;
+  annotationId: string;
+  kind: ExplanationKind;
+  text: string;
+  content: string;
+  status: "complete";
+  updated_at: string;
+}
+
+export interface ScaiBundle {
+  annotations: ExportAnnotation[];
+  explanations: ExportExplanation[];
+}
+
 export interface DocumentMeta {
   id: string;
   filename: string;
   page_count: number;
   title: string | null;
   author: string | null;
+  /**
+   * Highlights + explanations embedded in the uploaded PDF by a prior
+   * `exportDocument` call (see routes/export.py). Present only right after a
+   * fresh file upload that happened to carry one — `null`/absent for a plain
+   * PDF or a cheap re-open via `fetchDocumentIfKnown`.
+   */
+  scai_bundle?: ScaiBundle | null;
 }
 
 export async function uploadDocument(file: File): Promise<DocumentMeta> {
@@ -49,6 +90,30 @@ export async function uploadDocumentBlob(
     throw new Error(`upload failed (${r.status}): ${detail}`);
   }
   return r.json() as Promise<DocumentMeta>;
+}
+
+/**
+ * "Download PDF with highlights" — asks the server to embed this document's
+ * highlights + AI explanations into the PDF itself (as an attachment) and
+ * hand back the resulting file. The server already has the original PDF
+ * cached from upload; only the annotations/explanations (owned by the
+ * browser) travel in the request body.
+ */
+export async function exportDocument(
+  docId: string,
+  bundle: ScaiBundle,
+  filename?: string,
+): Promise<Blob> {
+  const r = await fetch(`/documents/${docId}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...bundle, filename }),
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`download failed (${r.status}): ${detail}`);
+  }
+  return r.blob();
 }
 
 export function pageImageUrl(docId: string, pageNumber: number, dpi = 150): string {

@@ -20,6 +20,7 @@ import {
   getViewState,
   listAnnotations,
   listDocuments,
+  listExplanationsForDoc,
   putAnnotation,
   putDocument,
   putExplanation,
@@ -189,6 +190,23 @@ describe("explanations", () => {
     expect((await getExplanation("doc-1", "ann-1"))!.content).toBe("x");
     expect((await getExplanation("doc-1", "ann-2"))!.content).toBe("y");
     expect((await getExplanation("doc-2", "ann-1"))!.content).toBe("z");
+  });
+
+  it("listExplanationsForDoc returns every explanation for a doc, scoped away from other docs", async () => {
+    await putExplanation(makeExplanation({ annotationId: "ann-1", content: "x" }));
+    // Figure explanations share this store, keyed by figure id in the same slot.
+    await putExplanation(
+      makeExplanation({ annotationId: "p0_Figure_1", kind: "explanation", content: "y" }),
+    );
+    await putExplanation(makeExplanation({ docId: "doc-2", annotationId: "ann-1", content: "z" }));
+
+    const forDoc1 = await listExplanationsForDoc("doc-1");
+    expect(forDoc1.map((e) => e.content).sort()).toEqual(["x", "y"]);
+    expect(forDoc1.every((e) => e.docId === "doc-1")).toBe(true);
+  });
+
+  it("listExplanationsForDoc returns [] for a doc with none", async () => {
+    expect(await listExplanationsForDoc("doc-1")).toEqual([]);
   });
 });
 
