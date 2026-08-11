@@ -1239,6 +1239,88 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   border-color: rgba(244, 67, 54, 0.6);
 }
 
+/* Citation card — same visual language as the definition/explanation box
+   (.explanation-tooltip) and the figure card: dark panel, blue accent
+   border, uppercase label. Static content (no chat, no streaming), so it's
+   simpler than either — just a header and a body. */
+.citation-card {
+  position: absolute;
+  z-index: 220;
+  background: #1f242c;
+  color: #e6e8eb;
+  border: 1px solid rgba(91, 157, 255, 0.5);
+  border-radius: 12px;
+  padding: 0;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: auto;
+  max-width: 320px;
+}
+.citation-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px;
+  gap: 8px;
+}
+.citation-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(140, 200, 255, 0.95);
+}
+.citation-card-close {
+  background: transparent;
+  border: none;
+  color: rgba(220, 220, 220, 0.6);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.citation-card-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.citation-card-body {
+  padding: 0 14px 12px;
+}
+.citation-card-entry + .citation-card-entry {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.citation-card-author {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.citation-card-paper-title {
+  color: rgba(230, 232, 235, 0.85);
+  margin-bottom: 6px;
+}
+.citation-card-link {
+  color: #8ebcff;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.citation-card-link:hover {
+  text-decoration: underline;
+}
+.citation-card-loading,
+.citation-card-entry-missing {
+  color: rgba(230, 232, 235, 0.6);
+}
+.citation-card.is-error .citation-card-error {
+  color: #ffb4ab;
+}
+.citation-card.is-error {
+  border-color: rgba(244, 67, 54, 0.6);
+}
+
 /* --- AI setup: nav button, status dot, first-run nudge, dialog ----------- */
 
 .ai-setup-button {
@@ -1552,6 +1634,46 @@ html[data-explain-active="true"] .text-column { cursor: cell; }
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-weight: 600;
   dominant-baseline: alphabetic;
+}
+
+/* --- Citation markers ------------------------------------------------------
+   Each in-text citation marker (a superscript number, a "[12]" bracket, ...)
+   rendered blue and clickable. Unlike the figure-outline layer above, this
+   one IS the click target — each marker gets its own pointer-events, painted
+   above the text layer (see PageView.ts / CitationLayer.ts) rather than
+   hit-tested separately. */
+.citation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.citation-marker {
+  cursor: pointer;
+  pointer-events: auto;
+}
+.citation-marker-hit {
+  fill: transparent;
+}
+.citation-marker-text {
+  fill: #5b9dff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 1px;
+  transition: fill 100ms ease;
+}
+.citation-marker:hover .citation-marker-text,
+.citation-marker:focus-visible .citation-marker-text {
+  fill: #8ebcff;
+}
+.citation-marker:focus-visible {
+  outline: none;
+}
+.citation-marker:focus-visible .citation-marker-hit {
+  stroke: rgba(91, 157, 255, 0.85);
+  stroke-width: 1.5;
+  fill: rgba(91, 157, 255, 0.08);
 }
 
 /* Reinforces clickability on hover — set from PageView.ts's figure hit-test

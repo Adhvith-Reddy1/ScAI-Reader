@@ -1,8 +1,10 @@
 import {
+  fetchPageCitationMentions,
   fetchPageFigures,
   fetchPageText,
   flattenPageText,
   pageImageUrl,
+  type CitationMention,
   type DocumentMeta,
   type PageDimension,
   type PageFigure,
@@ -20,6 +22,8 @@ import { seedFigure } from "../figureStore.ts";
 import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
 import { showFigureCard } from "./FigureCard.ts";
 import { buildFigureLayer } from "./FigureLayer.ts";
+import { showCitationCard } from "./CitationCard.ts";
+import { buildCitationLayer } from "./CitationLayer.ts";
 import { pageBBoxToViewport } from "./coords.ts";
 import {
   getQuery as getFindQuery,
@@ -63,9 +67,12 @@ interface PageState {
   text: PageText | null;
   annotationLayer: SVGSVGElement | null;
   figureLayer: SVGSVGElement | null;
+  citationLayer: SVGSVGElement | null;
   mouseupWired: boolean;
   figuresWired: boolean;
+  citationsLoaded: boolean;
   figures: PageFigure[];
+  citationMentions: CitationMention[];
   hoveredFigureId: string | null;
   currentDpi: number;
   findHits: HTMLElement[];
@@ -114,9 +121,12 @@ export function buildPageView(
     text: null,
     annotationLayer: null,
     figureLayer: null,
+    citationLayer: null,
     mouseupWired: false,
     figuresWired: false,
+    citationsLoaded: false,
     figures: [],
+    citationMentions: [],
     hoveredFigureId: null,
     currentDpi: 0,
     findHits: [],
@@ -181,6 +191,10 @@ export function buildPageView(
       state.figureLayer.remove();
       state.figureLayer = null;
     }
+    if (state.citationLayer) {
+      state.citationLayer.remove();
+      state.citationLayer = null;
+    }
 
     const liveSelectionLayer = buildLiveSelectionLayer();
     liveSelectionLayer.setAttribute("width", String(widthCss));
@@ -192,6 +206,11 @@ export function buildPageView(
     registerLiveSelection(state.content, liveSelectionLayer);
     void refreshAnnotations(meta, pageNumber, wrap, state);
     renderFigureLayer(wrap, state);
+    // Citation markers must paint (and receive clicks) above the text layer
+    // built just above — see CitationLayer's doc comment — so this runs
+    // after buildTextLayer was appended, not interleaved with the
+    // insertBefore(..., textLayer) calls the other overlays use.
+    renderCitationLayer(state, meta);
 
     if (!state.mouseupWired) {
       wireHighlightOnSelection(meta, pageNumber, wrap, state);
@@ -202,6 +221,11 @@ export function buildPageView(
       wireFigureInteractions(meta, wrap, state);
       state.figuresWired = true;
       void loadFigures(meta, pageNumber, wrap, state);
+    }
+
+    if (!state.citationsLoaded) {
+      state.citationsLoaded = true;
+      void loadCitationMentions(meta, pageNumber, state);
     }
 
     // Re-apply the current find query against the freshly-built text layer.
@@ -506,6 +530,36 @@ async function loadFigures(
     state.figures = [];
   }
   renderFigureLayer(wrap, state);
+}
+
+/** (Re)draw the citation-marker layer from whatever is in
+ * state.citationMentions right now. Appended LAST (after the text layer),
+ * not inserted before it like the other overlays — see CitationLayer's doc
+ * comment for why its clickable hit-targets need to sit on top. */
+function renderCitationLayer(state: PageState, meta: DocumentMeta): void {
+  if (state.citationLayer) {
+    state.citationLayer.remove();
+    state.citationLayer = null;
+  }
+  if (!state.geom || state.citationMentions.length === 0) return;
+  const svg = buildCitationLayer(state.citationMentions, state.geom, (keys, target) => {
+    void showCitationCard(meta.id, keys, target.getBoundingClientRect());
+  });
+  state.content.appendChild(svg);
+  state.citationLayer = svg;
+}
+
+async function loadCitationMentions(
+  meta: DocumentMeta,
+  pageNumber: number,
+  state: PageState,
+): Promise<void> {
+  try {
+    state.citationMentions = await fetchPageCitationMentions(meta.id, pageNumber);
+  } catch {
+    state.citationMentions = [];
+  }
+  renderCitationLayer(state, meta);
 }
 
 /** The detected figure (if any) whose display-space bbox contains the given

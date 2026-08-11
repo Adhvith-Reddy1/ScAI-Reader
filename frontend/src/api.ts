@@ -348,6 +348,65 @@ export function streamRefine(
   return streamChatLike(`/documents/${docId}/ai/refine`, body, callbacks);
 }
 
+export interface CitationBBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** One bibliography entry, keyed by the marker text it's cited by ("12",
+ * "Smith2020", ...) — see backend/app/pdf/citations.py. Fields the parser
+ * couldn't confidently extract (commonly title/venue/doi) are null rather
+ * than guessed. */
+export interface CitationEntry {
+  key: string;
+  raw_text: string;
+  page: number;
+  authors: string | null;
+  title: string | null;
+  year: string | null;
+  venue: string | null;
+  doi: string | null;
+}
+
+export interface DocumentCitationsResponse {
+  doc_id: string;
+  citations: CitationEntry[];
+}
+
+export async function fetchDocumentCitations(
+  docId: string,
+): Promise<CitationEntry[]> {
+  const r = await fetch(`/documents/${docId}/citations`);
+  if (!r.ok) throw new Error(`citations fetch failed (${r.status})`);
+  const body = (await r.json()) as DocumentCitationsResponse;
+  return body.citations;
+}
+
+/** One in-text occurrence of a citation marker on a page. */
+export interface CitationMention {
+  key: string;
+  page: number;
+  bbox: CitationBBox;
+}
+
+export interface PageCitationMentionsResponse {
+  doc_id: string;
+  page: number;
+  mentions: CitationMention[];
+}
+
+export async function fetchPageCitationMentions(
+  docId: string,
+  pageNumber: number,
+): Promise<CitationMention[]> {
+  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/citation-mentions`);
+  if (!r.ok) throw new Error(`citation mentions fetch failed (${r.status})`);
+  const body = (await r.json()) as PageCitationMentionsResponse;
+  return body.mentions;
+}
+
 export interface FigureBBox {
   x0: number;
   y0: number;
