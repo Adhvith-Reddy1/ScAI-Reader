@@ -1,9 +1,12 @@
 /**
  * Singleton card showing bibliography details for a clicked citation
- * marker — lead author, paper title, and a link to the paper. Same visual
- * language and dismiss behavior (outside click / Escape / close button) as
- * FigureCard and the definition/explanation tooltip, but with static
- * content: no AI generation, no chat — just the parsed reference.
+ * marker — lead author, a description of the paper, and a link to it. Same
+ * visual language and dismiss behavior (outside click / Escape / close
+ * button) as FigureCard and the definition/explanation tooltip, but with
+ * static content: no AI generation, no chat — just the parsed reference
+ * (see citations.ts's leadAuthor()/paperDescription() for how those are
+ * derived, including the raw_text fallback for the common case where the
+ * backend couldn't confidently parse a clean title).
  *
  * A single marker can carry more than one key (a compound citation like
  * "[3, 7]" produces two mentions at the same spot — see CitationLayer), so
@@ -11,7 +14,7 @@
  */
 
 import type { CitationEntry } from "../api.ts";
-import { citationLink, getDocumentCitations, leadAuthor } from "../citations.ts";
+import { citationLink, getDocumentCitations, leadAuthor, paperDescription } from "../citations.ts";
 
 const CARD_WIDTH_PX = 320;
 const MARGIN_PX = 12;
@@ -84,10 +87,10 @@ function renderEntry(container: HTMLElement, entry: CitationEntry): void {
   author.textContent = leadAuthor(entry) ?? "Lead author unavailable";
   block.appendChild(author);
 
-  const title = document.createElement("div");
-  title.className = "citation-card-paper-title";
-  title.textContent = entry.title ?? entry.raw_text;
-  block.appendChild(title);
+  const description = document.createElement("div");
+  description.className = "citation-card-description";
+  description.textContent = paperDescription(entry);
+  block.appendChild(description);
 
   const link = citationLink(entry);
   const a = document.createElement("a");

@@ -6,6 +6,7 @@ const getDocumentCitationsMock = vi.fn();
 vi.mock("../citations.ts", () => ({
   getDocumentCitations: (docId: string) => getDocumentCitationsMock(docId),
   leadAuthor: (entry: CitationEntry) => entry.authors ?? null,
+  paperDescription: (entry: CitationEntry) => entry.title ?? entry.raw_text,
   citationLink: (entry: CitationEntry) => ({
     label: entry.doi ? "View paper ↗" : "Search for paper ↗",
     url: entry.doi ? `https://doi.org/${entry.doi}` : `https://example.com/${entry.key}`,
@@ -48,7 +49,7 @@ describe("CitationCard", () => {
     const card = document.querySelector<HTMLElement>(".citation-card")!;
     expect(card.style.display).toBe("block");
     expect(card.querySelector(".citation-card-author")!.textContent).toBe("Smith, J.");
-    expect(card.querySelector(".citation-card-paper-title")!.textContent).toBe(
+    expect(card.querySelector(".citation-card-description")!.textContent).toBe(
       "A study of things",
     );
     const link = card.querySelector<HTMLAnchorElement>(".citation-card-link")!;
@@ -61,7 +62,7 @@ describe("CitationCard", () => {
     getDocumentCitationsMock.mockResolvedValue([entry({ title: null })]);
     await showCitationCard("doc", ["1"], RECT);
     const card = document.querySelector<HTMLElement>(".citation-card")!;
-    expect(card.querySelector(".citation-card-paper-title")!.textContent).toBe(
+    expect(card.querySelector(".citation-card-description")!.textContent).toBe(
       "Smith, J. A study of things. J Examples 2020.",
     );
   });

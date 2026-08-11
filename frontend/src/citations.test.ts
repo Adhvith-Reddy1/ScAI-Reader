@@ -12,6 +12,7 @@ import {
   citationLink,
   getDocumentCitations,
   leadAuthor,
+  paperDescription,
 } from "./citations.ts";
 
 function entry(overrides: Partial<CitationEntry> = {}): CitationEntry {
@@ -73,11 +74,150 @@ describe("leadAuthor", () => {
   });
 
   it("falls back to the surname encoded in an author-year key", () => {
-    expect(leadAuthor(entry({ key: "Smith2020", authors: null }))).toBe("Smith");
+    expect(
+      leadAuthor(entry({ key: "Smith2020", authors: null, raw_text: "1. No comma here." })),
+    ).toBe("Smith");
   });
 
-  it("returns null when neither is available", () => {
-    expect(leadAuthor(entry({ key: "1", authors: null }))).toBeNull();
+  it("returns null when nothing is available", () => {
+    expect(
+      leadAuthor(entry({ key: "1", authors: null, raw_text: "1. No comma at all here." })),
+    ).toBeNull();
+  });
+
+  // Real citation-list layouts confirmed against two real PDFs (an NEJM
+  // review article and an FDA report — see backend/tests for the fixture);
+  // the backend only fills `authors` when a title is quoted (rare in
+  // practice), so this raw_text-derived path is what actually fires for
+  // most real numeric-style citations.
+  describe("derived from raw_text (Vancouver/NEJM style: 'Surname AB, Surname2 CD. Title...')", () => {
+    it("takes the first author (surname + bare initials, no comma between them)", () => {
+      const e = entry({
+        authors: null,
+        raw_text: "1. Pocock SJ, Stone GW. The primary outcome fails — what next?",
+      });
+      expect(leadAuthor(e)).toBe("Pocock SJ");
+    });
+
+    it("strips a 'Jr'/'Sr' generational suffix off the initials", () => {
+      const e = entry({
+        authors: null,
+        raw_text: "17. Mentzer RM Jr, Bartels C, Bolli R, et al. Sodium-hydrogen exchange.",
+      });
+      expect(leadAuthor(e)).toBe("Mentzer RM Jr");
+    });
+
+    it("handles diacritics in the surname", () => {
+      const e = entry({
+        authors: null,
+        raw_text: "45. Fröbert O, Lagerqvist B, et al. Thrombus aspiration during STEMI.",
+      });
+      expect(leadAuthor(e)).toBe("Fröbert O");
+    });
+  });
+
+  describe("derived from raw_text (APA-ish style: 'Surname, Initials, Surname2, Initials2, Title...')", () => {
+    it("joins a surname-then-initials pair split across two comma segments", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "1. DiMasi, J.A., H.G. Grabowski, and R.W. Hansen, Briefing: Cost of Developing a New Drug.",
+      });
+      expect(leadAuthor(e)).toBe("DiMasi, J.A.");
+    });
+
+    it("treats a hyphenated surname (with stray OCR spacing) as one name", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "3. Heresco - Levy, U., et al., Efficacy of high-dose glycine in schizophrenia.",
+      });
+      expect(leadAuthor(e)).toBe("Heresco - Levy, U.");
+    });
+  });
+
+  describe("derived from raw_text (group/consortium authorship)", () => {
+    it("recognizes a trial-group name ending in a known suffix", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "31. The SPRINT Research Group. A randomized trial of intensive blood-pressure control.",
+      });
+      expect(leadAuthor(e)).toBe("The SPRINT Research Group");
+    });
+
+    it("recognizes '(ABBREV) Investigators/Collaborators' with parens and an apostrophe", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "19. Cholesterol Treatment Trialists’ (CTT) Collaborators. The effects of lowering LDL cholesterol.",
+      });
+      expect(leadAuthor(e)).toBe(
+        "Cholesterol Treatment Trialists’ (CTT) Collaborators",
+      );
+    });
+  });
+});
+
+describe("paperDescription", () => {
+  it("prefers the backend's confidently-parsed title", () => {
+    expect(paperDescription(entry({ title: "A Study of Things" }))).toBe(
+      "A Study of Things",
+    );
+  });
+
+  it("strips a leading single-author prefix, leaving title + venue, when there's no title", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text: "1. Fuster V, Unraveling the complexities of statistical presentation.",
+    });
+    expect(paperDescription(e)).toBe(
+      "Unraveling the complexities of statistical presentation.",
+    );
+  });
+
+  it("accepts a second author leaking in when it shares a segment with the title (no comma between them, Vancouver style) — an imprecise but honest result, never a fabricated title", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text: "1. Pocock SJ, Stone GW. The primary outcome fails. N Engl J Med 2016.",
+    });
+    expect(paperDescription(e)).toBe(
+      "Stone GW. The primary outcome fails. N Engl J Med 2016.",
+    );
+  });
+
+  it("strips a trailing 'et al.' that shares a segment with the title", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text:
+        "46. Jolly SS, Cairns JA, et al. Randomized trial of primary PCI with or without routine manual thrombectomy.",
+    });
+    expect(paperDescription(e)).toBe(
+      "Randomized trial of primary PCI with or without routine manual thrombectomy.",
+    );
+  });
+
+  it("strips the group-author prefix for consortium-authored entries", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text: "31. The SPRINT Research Group. A randomized trial of intensive control.",
+    });
+    expect(paperDescription(e)).toBe("A randomized trial of intensive control.");
+  });
+
+  it("falls back to the full stripped raw_text when nothing looks author-ish", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text: "1. Roche. Roche provides update on the first two of six studies.",
+    });
+    expect(paperDescription(e)).toBe(
+      "Roche. Roche provides update on the first two of six studies.",
+    );
   });
 });
 
@@ -96,8 +236,10 @@ describe("citationLink", () => {
     expect(link.label).toContain("Search for paper");
   });
 
-  it("falls back to raw_text when there is no title either", () => {
-    const link = citationLink(entry({ title: null, raw_text: "Doe A. Another one." }));
-    expect(link.url).toContain(encodeURIComponent("Doe A. Another one."));
+  it("falls back to the derived description when there is no title either", () => {
+    const link = citationLink(
+      entry({ title: null, authors: null, raw_text: "1. Doe A. Another one." }),
+    );
+    expect(link.url).toContain(encodeURIComponent("Another one."));
   });
 });

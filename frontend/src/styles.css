@@ -1297,7 +1297,7 @@ html[data-erase-active="true"] .annotation-layer .annotation:hover rect {
   font-weight: 600;
   margin-bottom: 2px;
 }
-.citation-card-paper-title {
+.citation-card-description {
   color: rgba(230, 232, 235, 0.85);
   margin-bottom: 6px;
 }
