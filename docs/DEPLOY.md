@@ -71,10 +71,32 @@ When it finishes, `fly open` launches your live app in the browser.
 
 ## Updating later
 
+Once auto-deploy is set up (below), pushing to `main` on GitHub deploys
+automatically — no manual step needed. To deploy by hand instead (e.g. from a
+branch, or before auto-deploy is configured):
+
 ```bash
 git pull          # get the latest code
 fly deploy        # build + ship; zero-downtime rolling deploy
 ```
+
+## Auto-deploy on push to `main` (GitHub Actions)
+
+`.github/workflows/fly-deploy.yml` runs `fly deploy` automatically on every
+push to `main`. One-time setup:
+
+```bash
+# Create a deploy-scoped token (narrower than your full `fly auth token`).
+fly tokens create deploy -a scai-reader
+```
+
+Then in the GitHub repo: **Settings → Secrets and variables → Actions → New
+repository secret**, name it `FLY_API_TOKEN`, and paste the token value.
+That's it — the next push to `main` (or a manual run from the Actions tab)
+deploys.
+
+Rotate the token (`fly tokens create deploy -a scai-reader` again, update the
+secret) if it's ever exposed; revoke old ones with `fly tokens revoke`.
 
 ## Everyday commands
 
