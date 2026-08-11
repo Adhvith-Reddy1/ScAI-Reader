@@ -27,6 +27,7 @@ import { subscribeExplainMode } from "./explainMode.ts";
 import { buildFindBar } from "./FindBar.ts";
 import { buildHighlightButton } from "./HighlightButton.ts";
 import { subscribeHighlightMode } from "./highlightMode.ts";
+import { buildHighlightsPanel } from "./Highlights.ts";
 import { buildLibrary, type LibraryItem } from "./Library.ts";
 import { buildOutlinePanel } from "./Outline.ts";
 import { buildPageIndicator } from "./PageIndicator.ts";
@@ -73,6 +74,7 @@ const sidebar = document.getElementById("sidebar") as HTMLElement;
 initViewerZoom(viewer);
 initSidebar(sidebar);
 mountSidebarPanel("outline", "Outline", buildOutlinePanel());
+mountSidebarPanel("highlights", "Highlights", buildHighlightsPanel());
 
 const sidebarToggleSlot = document.getElementById(
   "sidebar-toggle-slot",

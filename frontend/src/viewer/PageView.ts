@@ -15,6 +15,7 @@ import {
   putAnnotation,
   type LocalAnnotation,
 } from "../storage/localStore.ts";
+import { notifyAnnotationsChanged } from "../annotationEvents.ts";
 import { makeHighlight } from "./highlightModel.ts";
 import { seedFigure } from "../figureStore.ts";
 import { getExplanation as getCachedExplanation } from "../storage/localStore.ts";
@@ -296,6 +297,7 @@ function makeAnnotationDeleteHandler(
     }
     // Close any explanation panel pinned to the highlight we just removed.
     dismissExplanationFor(annotationId);
+    notifyAnnotationsChanged(meta.id);
     await refreshAnnotations(meta, pageNumber, wrap, state);
   };
 }
@@ -430,6 +432,7 @@ async function maybeAutoSaveHighlight(
     return;
   }
   sel.removeAllRanges();
+  notifyAnnotationsChanged(meta.id);
   await refreshAnnotations(meta, pageNumber, wrap, state);
 
   // Explanation highlights eagerly generate an AI definition/explanation, and
