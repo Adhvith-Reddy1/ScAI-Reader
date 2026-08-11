@@ -11,6 +11,7 @@ import { buildHighlightsPanel } from "./Highlights.ts";
 import { _resetForTest as resetPageNav, setActivePageList } from "./pageNav.ts";
 import {
   _resetDbPromiseForTest,
+  listAnnotations,
   putAnnotation,
   type LocalAnnotation,
 } from "./storage/localStore.ts";
@@ -290,5 +291,69 @@ describe("Highlights panel — inline definition toggle", () => {
     expect(detail.textContent).toContain("Original text.");
     expect(detail.querySelector(".explanation-chat-thread")).toBeNull();
     expect(detail.querySelectorAll(".highlights-detail-body").length).toBe(1);
+  });
+});
+
+describe("Highlights panel — delete button", () => {
+  it("every row gets a delete button", async () => {
+    await putAnnotation(makeAnnotation({ id: "a" }));
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(el.querySelector(".highlights-delete")).toBeTruthy();
+  });
+
+  it("clicking delete removes the highlight from storage and its row disappears", async () => {
+    await putAnnotation(makeAnnotation({ id: "a" }));
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(el.querySelectorAll(".highlights-row").length).toBe(1);
+
+    (el.querySelector(".highlights-delete") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(el.querySelectorAll(".highlights-row").length).toBe(0);
+    expect(await listAnnotations("doc1")).toEqual([]);
+  });
+
+  it("clicking delete never toggles the definition panel", async () => {
+    await putAnnotation(makeAnnotation({ id: "a", explain: true }));
+    seedExplanation("a", "definition", "A measure of disorder.");
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const detail = el.querySelector(".highlights-detail") as HTMLElement;
+    (el.querySelector(".highlights-delete") as HTMLButtonElement).click();
+    expect(detail.hidden).toBe(true);
+  });
+
+  it("deleting one highlight leaves the others in place", async () => {
+    await putAnnotation(makeAnnotation({ id: "a", page: 1, text: "keep me" }));
+    await putAnnotation(makeAnnotation({ id: "b", page: 2, text: "delete me" }));
+
+    const el = buildHighlightsPanel();
+    document.body.appendChild(el);
+    setActivePageList(fakePageList(), 10, "doc1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const rows = Array.from(el.querySelectorAll(".highlights-row"));
+    const target = rows.find(
+      (r) => r.querySelector(".highlights-text")?.textContent === "delete me",
+    )!;
+    (target.querySelector(".highlights-delete") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    const remaining = el.querySelectorAll(".highlights-row");
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].querySelector(".highlights-text")?.textContent).toBe("keep me");
   });
 });
