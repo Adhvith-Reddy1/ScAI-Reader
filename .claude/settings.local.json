@@ -17,7 +17,11 @@
       "Bash(gh --version)",
       "Bash(ls /Applications/ 2>/dev/null | grep -i \"github\" ; echo \"---\" ; du -sh /Users/areddy/Downloads/Custom_PDF_Reader 2>/dev/null ; echo \"--- large items ---\" ; du -sh /Users/areddy/Downloads/Custom_PDF_Reader/* /Users/areddy/Downloads/Custom_PDF_Reader/.[^.]* 2>/dev/null | sort -h | tail -10)",
       "Bash(mkdir -p /tmp/claude-0/-home-user-ScAI-Reader/eb4f6ef3-10b0-53e7-9724-b80b05a90734/scratchpad)",
-      "Bash(cp \"/root/.claude/uploads/eb4f6ef3-10b0-53e7-9724-b80b05a90734/897409e5-Virtual_Lab.pdf\" /tmp/claude-0/-home-user-ScAI-Reader/eb4f6ef3-10b0-53e7-9724-b80b05a90734/scratchpad/Virtual_Lab.pdf)"
+      "Bash(cp \"/root/.claude/uploads/eb4f6ef3-10b0-53e7-9724-b80b05a90734/897409e5-Virtual_Lab.pdf\" /tmp/claude-0/-home-user-ScAI-Reader/eb4f6ef3-10b0-53e7-9724-b80b05a90734/scratchpad/Virtual_Lab.pdf)",
+      "Bash(mkdir -p /tmp/claude-0/-home-user-ScAI-Reader/726bbdb9-6d7b-5714-8d8c-22423ac31401/scratchpad/citation_pdfs2)",
+      "Bash(cp \"/root/.claude/uploads/726bbdb9-6d7b-5714-8d8c-22423ac31401/f6c1193e-s41586023068169_1.pdf\" /tmp/claude-0/-home-user-ScAI-Reader/726bbdb9-6d7b-5714-8d8c-22423ac31401/scratchpad/citation_pdfs2/nature_s41586.pdf)",
+      "Bash(cp \"/root/.claude/uploads/726bbdb9-6d7b-5714-8d8c-22423ac31401/2e35d376-s41590024017922.pdf\" /tmp/claude-0/-home-user-ScAI-Reader/726bbdb9-6d7b-5714-8d8c-22423ac31401/scratchpad/citation_pdfs2/natimm_s41590.pdf)",
+      "Bash(cp \"/root/.claude/uploads/726bbdb9-6d7b-5714-8d8c-22423ac31401/b9ce2ad0-Virtual_Lab.pdf\" /tmp/claude-0/-home-user-ScAI-Reader/726bbdb9-6d7b-5714-8d8c-22423ac31401/scratchpad/citation_pdfs2/virtual_lab.pdf)"
     ]
   }
 }
