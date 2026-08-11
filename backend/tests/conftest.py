@@ -83,6 +83,29 @@ def fda_case_studies_pdf() -> Path:
     return Path(__file__).resolve().parent / "fixtures" / "pdfs" / "fda_22_case_studies.pdf"
 
 
+@pytest.fixture(scope="session")
+def nature_cytokine_atlas_pdf() -> Path:
+    """A real Nature article -- Cui et al., "Dictionary of immune responses
+    to cytokines at single-cell resolution," Nature 625, 377-384 (2024),
+    https://doi.org/10.1038/s41586-023-06816-9 -- licensed CC BY 4.0 (the
+    article's own "Open Access" statement confirms redistribution is
+    permitted with attribution). Trimmed to its first 9 pages (main text +
+    the 39-entry reference list + the start of Methods, whose heading
+    provides the reference list's trailing stop boundary); the omitted
+    pages are large Extended Data figure images not needed for citation
+    detection. Its reference list has NO "References" heading at all --
+    the numbering starts right after a fixed "Online content..." lead-in
+    paragraph, confirmed to be standard Nature-family house style -- so
+    this exercises detect_citations's heading-less fallback specifically,
+    which the FDA/citation_doc fixtures don't."""
+    return (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "pdfs"
+        / "nature_cytokine_atlas_cc_by.pdf"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Isolated app settings per integration test
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ from app.pdf.citations import (
     Citation,
     CitationMention,
     MAX_RANGE_EXPANSION,
+    MIN_HEADINGLESS_ENTRIES,
+    MIN_HEADINGLESS_YEAR_FRACTION,
     _AUTHOR_YEAR_ENTRY_START,
     _NUMERIC_ENTRY_START,
     _NUMERIC_MENTION_PATTERN,
@@ -21,7 +23,8 @@ from app.pdf.citations import (
     _extract_numeric_authors_title,
     _extract_year_author,
     _extract_year_numeric,
-    _find_bibliography_start,
+    _find_headingless_numeric_run,
+    _find_heading_positions,
     _first_surname,
     _keys_from_digit_list,
     _numeric_keys_in_match,
@@ -72,9 +75,9 @@ def test_section_heading_pattern_rejects_inline_mentions():
         assert _SECTION_HEADING_PATTERN.match(s) is None, s
 
 
-def test_find_bibliography_start_returns_none_without_heading():
+def test_find_heading_positions_returns_empty_without_heading():
     pages = [_page(0, (_run("Just some body text.", 40, 50, 300, 62),))]
-    assert _find_bibliography_start(pages) is None
+    assert _find_heading_positions(pages) == []
 
 
 def test_no_bibliography_section_returns_empty_without_crashing():
@@ -517,12 +520,40 @@ def test_split_numeric_entries_accepts_bare_digit_marker_when_sequential():
     assert entries[1]["parts"] == ["88", ".", "Eli Lilly and Company. Briefing Document."]
 
 
-def test_find_bibliography_start_prefers_last_heading_match_over_toc_entry():
+def test_find_heading_positions_finds_toc_entry_and_real_heading_both():
     # A table of contents' own "References....36" line frequently extracts
     # as a bare "References" run (the dot-leader and page number land in
-    # separate runs) -- confirmed against a real FDA PDF, where this caused
-    # the ENTIRE document body to be swallowed as "bibliography lines" and
-    # in-text citation brackets like "[1]" to be mistaken for entry markers.
+    # separate runs) -- confirmed against a real FDA PDF. _find_heading_positions
+    # itself doesn't try to disambiguate them (both are real heading-shaped
+    # matches) -- that's detect_citations's job, via MIN_REGION_ENTRIES (see
+    # the end-to-end test below).
+    toc_page = _page(
+        0,
+        (
+            _run("Table of Contents", 40, 40, 200, 52),
+            _run("Overview", 40, 60, 150, 72),
+            _run("References", 40, 80, 150, 92),  # TOC entry, not the section
+        ),
+    )
+    real_biblio_page = _page(
+        1,
+        (
+            _run("References", 40, 400, 150, 412),
+            _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+        ),
+    )
+    positions = _find_heading_positions([toc_page, real_biblio_page])
+    assert positions == [(0, 2), (1, 0)]
+
+
+def test_detect_citations_ignores_toc_entry_and_keeps_the_real_region():
+    # End-to-end: the TOC's false "References" match produces a "region"
+    # spanning the whole document body between it and the real heading --
+    # confirmed against a real FDA PDF, where this caused the ENTIRE document
+    # body to be swallowed as "bibliography lines" and in-text citation
+    # brackets like "[1]" to be mistaken for entry markers. MIN_REGION_ENTRIES
+    # is what discards that degenerate region (it has at most one match, "[1]",
+    # short of the bar) while keeping the real region (three real entries).
     toc_page = _page(
         0,
         (
@@ -542,14 +573,12 @@ def test_find_bibliography_start_prefers_last_heading_match_over_toc_entry():
         (
             _run("References", 40, 400, 150, 412),
             _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+            _run('[2] K. Doe, "Another Study," 2020.', 40, 440, 550, 452),
+            _run('[3] A. Lee, "A Third Study," 2021.', 40, 460, 550, 472),
         ),
     )
-    start = _find_bibliography_start([toc_page, body_page, real_biblio_page])
-    assert start == (2, 0)
-
     citations, _ = detect_citations([toc_page, body_page, real_biblio_page])
-    assert len(citations) == 1
-    assert citations[0].key == "1"
+    assert {c.key for c in citations} == {"1", "2", "3"}
     assert "drugs are never approved" not in citations[0].raw_text
 
 
@@ -637,6 +666,48 @@ def test_superscript_mention_requires_meaningfully_smaller_font():
     assert _superscript_numeric_mentions_on_page(page, {"1"}) == []
 
 
+def test_superscript_mentions_drop_dense_rows_like_affiliation_bylines():
+    # Regression test for a real false-positive class found against a real
+    # Nature article: an author-affiliation byline ("Ang Cui1,2,12, Teddy
+    # Huang3, Shuqiang Li2,3, ...") is glyph-for-glyph indistinguishable
+    # from a citation superscript (small font, digit-only), and the numbers
+    # routinely fall within a real bibliography's key range by coincidence.
+    # What sets it apart is density: real in-text citations scatter one or
+    # two to a line, while a byline (or, separately confirmed, a chart's
+    # numbered axis ticks) crams many small numbers onto the SAME baseline.
+    # Five-plus matches sharing a y0 -- more than any real prose line in
+    # either real document that surfaced this -- are dropped as a row.
+    row_y = 50
+    dense_row = tuple(
+        _run(str(i), 40 + i * 20, row_y, 45 + i * 20, row_y + 7, font_size=SUPERSCRIPT_FONT_SIZE)
+        for i in range(1, 6)  # 5 matches on one row -- over the limit
+    )
+    page = _page(
+        0,
+        (_run("Author One", 40, 30, 150, 42, font_size=BODY_FONT_SIZE),) + dense_row,
+    )
+    keys = {str(i) for i in range(1, 6)}
+    assert _superscript_numeric_mentions_on_page(page, keys) == []
+
+
+def test_superscript_mentions_keep_sparse_rows_below_the_density_bar():
+    # A handful of legitimate citations sharing a line (a dense sentence
+    # citing several sources in a row) must not be swept up by the same
+    # filter -- only rows past MAX_SUPERSCRIPT_MATCHES_PER_ROW are dropped.
+    row_y = 50
+    sparse_row = tuple(
+        _run(str(i), 40 + i * 20, row_y, 45 + i * 20, row_y + 7, font_size=SUPERSCRIPT_FONT_SIZE)
+        for i in range(1, 4)  # 3 matches -- under the limit
+    )
+    page = _page(
+        0,
+        (_run("as shown in prior work", 40, 30, 150, 42, font_size=BODY_FONT_SIZE),) + sparse_row,
+    )
+    keys = {str(i) for i in range(1, 4)}
+    mentions = _superscript_numeric_mentions_on_page(page, keys)
+    assert {m.key for m in mentions} == {"1", "2", "3"}
+
+
 def test_detect_citations_end_to_end_with_superscript_style():
     # Full pipeline: numeric bibliography + bare superscript in-text markers
     # (no brackets), the NEJM/JAMA/Lancet house style. Reference numbers must
@@ -682,3 +753,186 @@ def test_detect_citations_end_to_end_with_superscript_style():
     assert {c.key for c in citations} == {"1", "2", "3"}
     assert {m.key for m in mentions} == {"1", "2", "3"}
     assert all(m.page_index == 0 for m in mentions)
+
+
+# --- multi-region merging (split reference lists) ---------------------------
+
+
+def test_find_heading_positions_finds_multiple_headings():
+    pages = [
+        _page(
+            0,
+            (
+                _run("References", 40, 400, 150, 412),
+                _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+            ),
+        ),
+        _page(
+            1,
+            (
+                _run("References", 40, 400, 150, 412),
+                _run('[2] K. Doe, "Another Study," 2020.', 40, 420, 550, 432),
+            ),
+        ),
+    ]
+    assert _find_heading_positions(pages) == [(0, 0), (1, 0)]
+
+
+def test_detect_citations_merges_main_and_methods_reference_lists():
+    # Nature-family journals commonly print a "References" list for the
+    # main text and a SEPARATE "References" list for the Methods section,
+    # continuing the SAME citation numbering across both -- confirmed
+    # against a real Nature Immunology article (entries 1-73 under one
+    # heading, 74-87 under a second heading several pages later).
+    main_page = _page(
+        0,
+        (
+            _run("References", 40, 400, 150, 412),
+            _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+            _run('[2] K. Doe, "Another Study," 2020.', 40, 440, 550, 452),
+            _run('[3] A. Lee, "A Third Study," 2021.', 40, 460, 550, 472),
+        ),
+    )
+    methods_page = _page(
+        1,
+        (
+            _run("References", 40, 400, 150, 412),
+            _run('[4] B. Fox, "A Fourth Study," 2022.', 40, 420, 550, 432),
+            _run('[5] C. Gray, "A Fifth Study," 2023.', 40, 440, 550, 452),
+            _run('[6] D. Park, "A Sixth Study," 2024.', 40, 460, 550, 472),
+        ),
+    )
+    citations, _ = detect_citations([main_page, methods_page])
+    assert {c.key for c in citations} == {"1", "2", "3", "4", "5", "6"}
+    by_key = {c.key: c for c in citations}
+    assert by_key["4"].authors == "B. Fox"
+
+
+def test_single_heading_region_trusted_regardless_of_entry_count():
+    # With only one heading match there's nothing to disambiguate against
+    # (no competing region a low entry count would need to lose to), so a
+    # short reference list -- a real short communication/letter can have
+    # very few -- is still trusted. MIN_REGION_ENTRIES only kicks in with
+    # more than one heading match (see the multi-heading tests above and
+    # test_detect_citations_ignores_toc_entry_and_keeps_the_real_region).
+    page = _page(
+        0,
+        (
+            _run("References", 40, 400, 150, 412),
+            _run('[1] J. Smith, "A Study of Things," 2019.', 40, 420, 550, 432),
+        ),
+    )
+    citations, _ = detect_citations([page])
+    assert {c.key for c in citations} == {"1"}
+
+
+# --- heading-less numeric fallback -------------------------------------------
+
+
+def _yearful_numeric_run(num: int, y: float) -> TextRun:
+    return _run(f"{num}. Author {num}. A real paper title. Journal {2000 + num}.", 40, y, 500, y + 12)
+
+
+def test_find_headingless_numeric_run_finds_list_with_no_heading():
+    # Confirmed against a real Nature article: the numbered reference list
+    # has NO heading at all -- it just starts right after a lead-in
+    # paragraph. Simulated here as a numbered list with no "References" run
+    # anywhere in the page.
+    runs = tuple(
+        _yearful_numeric_run(i, 50 + i * 15) for i in range(1, MIN_HEADINGLESS_ENTRIES + 2)
+    )
+    result = _find_headingless_numeric_run([_page(0, runs)])
+    assert result is not None
+    lines, _ = result
+    assert lines[0][0].startswith("1.")
+
+
+def test_find_headingless_numeric_run_requires_minimum_entries():
+    # Too short to trust without a heading's prior -- could be an ordinary
+    # numbered list (e.g. Methods steps) rather than a bibliography.
+    runs = tuple(_yearful_numeric_run(i, 50 + i * 15) for i in range(1, 4))
+    assert _find_headingless_numeric_run([_page(0, runs)]) is None
+
+
+def test_find_headingless_numeric_run_requires_year_fraction():
+    # Long enough, but nothing looks like a real citation (no year-shaped
+    # tokens anywhere) -- an ordinary numbered list, not a bibliography.
+    runs = tuple(
+        _run(f"{i}. Step number {i} in the procedure.", 40, 50 + i * 15, 500, 62 + i * 15)
+        for i in range(1, MIN_HEADINGLESS_ENTRIES + 2)
+    )
+    assert _find_headingless_numeric_run([_page(0, runs)]) is None
+
+
+def test_find_headingless_numeric_run_prefers_real_bibliography_over_affiliation_splice():
+    # Regression test for a real bug found against a real Nature article: a
+    # numbered author-affiliation list (institutions numbered 1, 2, 3...
+    # matching author superscripts on the byline) is itself a plausible-
+    # looking heading-less candidate. Once its own numbering runs out, the
+    # sequential-numbering rule in _split_numeric_entries happily keeps
+    # absorbing unrelated body text as "continuation" until it happens to
+    # reach a run matching whatever number comes next -- which, since the
+    # REAL bibliography contains a marker for every number 1..N, it always
+    # eventually does. That splices "K affiliations + the real bibliography
+    # from K+1 to N" into one candidate that ties the genuine,
+    # uncontaminated candidate on final entry count AND year fraction (both
+    # can land at/near 100% if the contaminating content happens to contain
+    # year-shaped tokens too, as it did in the real document). The fix:
+    # among candidates tied for the max count, prefer the LATEST start --
+    # the genuine candidate is necessarily the latest one that still
+    # reaches that count (starting any later would instead miss real
+    # entries and produce a LOWER count).
+    n = MIN_HEADINGLESS_ENTRIES + 3
+    affiliation_runs: list[TextRun] = []
+    for i in range(1, 4):
+        affiliation_runs.append(_run(str(i), 40, 50 + i * 12, 60, 60 + i * 12))
+        affiliation_runs.append(
+            _run(f"Institution {i}, City, Country. Est. {1950 + i}.", 65, 50 + i * 12, 400, 60 + i * 12)
+        )
+    affiliation_page = _page(0, tuple(affiliation_runs))
+    real_biblio_page = _page(
+        1, tuple(_yearful_numeric_run(i, 50 + i * 15) for i in range(1, n + 1))
+    )
+
+    result = _find_headingless_numeric_run([affiliation_page, real_biblio_page])
+    assert result is not None
+    lines, _ = result
+    assert lines[0][0] == "1. Author 1. A real paper title. Journal 2001."
+
+
+def test_detect_citations_end_to_end_with_headingless_reference_list():
+    n = MIN_HEADINGLESS_ENTRIES + 2
+    body_page = _page(
+        0,
+        (
+            _run(
+                "as in our previous article,", 40, 50, 300, 62, font_size=BODY_FONT_SIZE
+            ),
+            _run("1", 300, 51, 305, 58, font_size=SUPERSCRIPT_FONT_SIZE),
+            _run(" which focused on prior work.", 305, 50, 500, 62, font_size=BODY_FONT_SIZE),
+        ),
+    )
+    biblio_page = _page(1, tuple(_yearful_numeric_run(i, 50 + i * 15) for i in range(1, n + 1)))
+    citations, mentions = detect_citations([body_page, biblio_page])
+    assert {c.key for c in citations} == {str(i) for i in range(1, n + 1)}
+    assert any(m.key == "1" and m.page_index == 0 for m in mentions)
+
+
+# --- superscript font ratio (journal-dependent) ------------------------------
+
+
+def test_superscript_mention_detected_at_nature_family_font_ratio():
+    # Confirmed against two real Nature-family articles: superscript
+    # markers there sit at ~0.74-0.76x body size -- noticeably smaller, but
+    # not as small as NEJM/Vancouver-style markers (~0.4-0.55x). The ratio
+    # threshold must be wide enough to catch both clusters.
+    page = _page(
+        0,
+        (
+            _run("as in our previous article,", 40, 50, 300, 62, font_size=BODY_FONT_SIZE),
+            _run("1", 300, 51, 305, 58, font_size=BODY_FONT_SIZE * 0.75),
+        ),
+    )
+    mentions = _superscript_numeric_mentions_on_page(page, {"1"})
+    assert len(mentions) == 1
+    assert mentions[0].key == "1"

@@ -192,3 +192,42 @@ def test_upload_real_fda_report_finds_every_reference(app_client, fda_case_studi
         assert rp.status_code == 200
         mentioned_keys |= {m["key"] for m in rp.json()["mentions"]}
     assert mentioned_keys == keys
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_upload_real_nature_article_finds_every_reference(
+    app_client, nature_cytokine_atlas_pdf
+):
+    """End-to-end against a real, CC-BY-licensed Nature article (see
+    conftest.py's nature_cytokine_atlas_pdf fixture for the citation and
+    license statement). Its 39-entry reference list has NO "References"
+    heading at all -- the numbering starts right after a fixed "Online
+    content..." paragraph, confirmed to be standard Nature-family house
+    style -- so unlike the FDA/citation_doc fixtures, this specifically
+    exercises detect_citations's heading-less fallback
+    (_find_headingless_numeric_run) end to end through the real upload
+    pipeline, not just the unit-level regression tests in
+    test_citations.py.
+
+    One entry (28) has no in-text mention: its superscript marker sits on
+    a page whose dominant font is itself unusually small (a dense figure
+    of cytokine/gene labels skews the page-local "body font size" estimate
+    _page_body_font_size relies on), a known, narrow limitation -- not
+    something this test should mask by only checking a subset of keys."""
+    doc_id = _upload(app_client, nature_cytokine_atlas_pdf, name="nature_cytokine_atlas.pdf")
+
+    r = app_client.get(f"/documents/{doc_id}/citations")
+    assert r.status_code == 200
+    entries = r.json()["citations"]
+    keys = {c["key"] for c in entries}
+    assert keys == {str(n) for n in range(1, 40)}
+    first = next(c for c in entries if c["key"] == "1")
+    assert "Arai" in first["raw_text"]
+
+    mentioned_keys: set[str] = set()
+    for page in range(1, 10):
+        rp = app_client.get(f"/documents/{doc_id}/pages/{page}/citation-mentions")
+        assert rp.status_code == 200
+        mentioned_keys |= {m["key"] for m in rp.json()["mentions"]}
+    assert keys - mentioned_keys == {"28"}

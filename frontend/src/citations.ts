@@ -116,6 +116,17 @@ function isAuthorish(seg: string): boolean {
   );
 }
 
+// Nature/Cell-Press style: a single named author's initials glued directly
+// to "et al." with no comma between them and the title right after --
+// "Arai, K. I. et al. Cytokines: coordinators..." (confirmed against a real
+// CC-BY Nature article) has only ONE comma total, unlike the "Surname,
+// Initials, Surname2, Initials2, ..." APA/FDA-report style where every
+// name gets its own comma-delimited segment (already handled by the
+// surname+initials merge above). Matched as a PREFIX, not a whole-segment
+// shape like AUTHOR_INITIALS_ONLY, since the title runs on in the same
+// segment right after "et al.".
+const INITIALS_ET_AL_PREFIX = /^((?:[A-Z]\.\s*){1,3})et\s+al\.?\s*/i;
+
 interface AuthorSplit {
   lead: string | null;
   /** Whatever's left after the leading author-ish segments — a
@@ -153,6 +164,22 @@ function splitAuthorsFromRawText(strippedText: string): AuthorSplit {
 
   let i = 0;
   while (i < segs.length && i < MAX_AUTHOR_SEGMENTS && isAuthorish(segs[i])) i++;
+
+  // "Surname, K. I. et al. Title..." (see INITIALS_ET_AL_PREFIX) — the loop
+  // above stops one segment early here, since that segment isn't JUST "et
+  // al." (AUTHOR_ET_AL requires a whole-segment match). If the first
+  // un-consumed segment starts with this shape, complete `lead` with the
+  // initials and advance the description past "et al." within that segment.
+  if (i < segs.length) {
+    const m = INITIALS_ET_AL_PREFIX.exec(segs[i]);
+    if (m) {
+      if (lead === segs[0]) lead = `${segs[0]}, ${m[1].trim()}`;
+      const tailSegs = [segs[i].slice(m[0].length), ...rawSegs.slice(i + 1)];
+      const rest = tailSegs.join(",").trim();
+      return { lead, rest: rest || trimmedWhole };
+    }
+  }
+
   // "et al." commonly sits in the SAME segment as the title with no comma
   // between them ("..., et al. Title starts here.", Vancouver style) — the
   // loop above only recognizes "et al." as its own whole segment, so strip

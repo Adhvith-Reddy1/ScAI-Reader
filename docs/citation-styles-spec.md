@@ -172,26 +172,71 @@ absorbing an unrelated *Methods* section's own numbered list as
 
 ## 6. Suggested next steps, in priority order
 
-1. **Multi-region backend fix** (§1): support 2+ heading matches, each
-   bounded to the next heading (not "first" or "last"), filtered by a
-   minimum entry count before being trusted, and merged. This directly
-   fixes the Nature Immunology case (73 + 14 entries → 87) and keeps the
-   FDA table-of-contents case working (its degenerate "region" won't clear
-   the entry-count bar). *(This was mid-implementation when this research
-   was requested; the in-progress diff was reverted to keep the tree clean
-   — see git history around this point.)*
-2. **Heading-less numeric fallback** (§1): when zero regions from (1)
-   qualify, scan the whole document for the longest strictly-sequential
-   run of numeric markers starting at 1, requiring a stricter entry-count
-   bar plus most entries containing a year-shaped token, since there's no
-   heading's prior to lean on. Fixes the Nature (s41586) case.
-   Requires extending the trailing-stop patterns per §4 so an unbounded
-   heading-less region can't run into an unrelated Methods numbered list.
-3. **Nature/Cell-Press "Surname, A. B." shape** in `citations.ts`'s
-   frontend heuristics (§3) — small, high-value, given this app's
-   biomedical-leaning test corpus so far.
+1. ✅ **Done.** **Multi-region backend fix** (§1): support 2+ heading
+   matches, each bounded to the next heading (not "first" or "last"),
+   filtered by a minimum entry count before being trusted (only when
+   there's more than one region to disambiguate against — a lone heading
+   is trusted regardless of count), and merged. Fixes the Nature
+   Immunology case (73 + 14 entries → 87 merged) and keeps the FDA
+   table-of-contents case working. See `_find_heading_positions`,
+   `_citations_from_regions`, `MIN_REGION_ENTRIES` in citations.py.
+2. ✅ **Done.** **Heading-less numeric fallback** (§1): when zero regions
+   from (1) qualify, scan the whole document for candidate numbered lists
+   starting at 1, requiring a stricter entry-count bar plus most entries
+   containing a year-shaped token. Fixes the Nature (s41586) case (0 → 39
+   citations found). Also extended the trailing-stop patterns per §4
+   (`_TRAILING_SECTION_EXACT_PATTERN`) so an unbounded heading-less region
+   can't run into an unrelated Methods numbered list. See
+   `_find_headingless_numeric_run`, `MIN_HEADINGLESS_ENTRIES`,
+   `MIN_HEADINGLESS_YEAR_FRACTION` in citations.py.
+
+   **A second real bug surfaced and was fixed while validating (1)/(2)
+   against real Nature PDFs, not predicted by the research above**: a
+   numbered author-affiliation list (institutions numbered 1, 2, 3...
+   matching author superscripts on the byline) is itself a plausible
+   heading-less candidate. Once its own numbering runs out, the
+   sequential-numbering rule keeps absorbing unrelated body text as
+   "continuation" until it happens to reach a run matching whatever number
+   comes next — which it always eventually does, since the real
+   bibliography contains a marker for every number 1..N. That splices "K
+   affiliations + the real bibliography from K+1 to N" into a candidate
+   that ties the genuine one on final entry count and even year fraction.
+   Fix: among candidates tied for the max entry count, prefer the LATEST
+   start — provably never the contaminated one (see
+   `_find_headingless_numeric_run`'s docstring for the full argument, and
+   `test_find_headingless_numeric_run_prefers_real_bibliography_over_affiliation_splice`
+   in test_citations.py for the regression test). Also widened
+   `_SUPERSCRIPT_FONT_RATIO` from 0.7 to 0.8: Nature-family superscript
+   markers were confirmed at ~0.74-0.76x body font size, a real cluster
+   this app hadn't seen before NEJM's tighter ~0.4-0.55x.
+3. ✅ **Done.** **Nature/Cell-Press "Surname, A. B." shape** in
+   `citations.ts`'s frontend heuristics (§3) — confirmed empirically
+   against real Nature citation text that the base surname+initials merge
+   already worked, but the common "Surname, K. I. et al. Title..."
+   single-lead-author shape (initials glued directly to "et al." with no
+   comma between them) did not — added `INITIALS_ET_AL_PREFIX` to handle
+   it. A related, more complex shape ("Surname, Initials, Surname2 &
+   Surname3, Initials3. Title...", the last two authors joined by "&"
+   with no "et al." at all) was found but NOT fixed — same
+   already-imperfect-but-honest fallback as before, not a regression, and
+   scoped out for now as a further variant of the same open-ended
+   author-list-punctuation problem.
 4. Everything in §5, opportunistically, when a real document surfaces the
    need — not speculatively.
+
+Validated end-to-end (backend `detect_citations` + the full upload
+pipeline) against five real PDFs before/after: NEJM (50/50 refs, 89/89
+mentioned — unchanged, no regression), the FDA report (129/129, 129/129 —
+unchanged), a real CC-BY Nature article (0 → 39/39 refs found, 38/39
+mentioned — the one gap is a separate, narrower known limit where a
+figure-dense page skews the local font-size baseline
+`_page_body_font_size` relies on), a Nature Immunology article (14 → 87/87
+refs found, 75/87 mentioned), and the "Virtual Lab" Nature paper (0 →
+51/51 refs found, 48/51 mentioned). The Nature article is committed as a
+test fixture (`backend/tests/fixtures/pdfs/nature_cytokine_atlas_cc_by.pdf`,
+trimmed to 9 pages — CC BY 4.0, safe to redistribute with attribution, see
+`conftest.py`'s `nature_cytokine_atlas_pdf` fixture for the citation); the
+other two aren't committed (license unconfirmed), validated locally only.
 
 ## Appendix: per-journal quick reference
 

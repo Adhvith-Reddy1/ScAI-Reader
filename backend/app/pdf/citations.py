@@ -11,37 +11,60 @@ Detection needs the whole document's page text (the reference list is a
 distinct section, usually at the end, and mentions are scattered across
 every page), unlike figure detection which only needs one page at a time.
 
-Approach, in three stages:
+Approach, in four stages:
 
-  1. Find the "References"/"Bibliography"/"Works Cited" heading (own line,
-     case-insensitive — see `_SECTION_HEADING_PATTERN`) and collect every
-     run of text after it, across all remaining pages, as the bibliography
-     region.
-  2. Decide which of the two dominant reference-list styles the document
-     uses by counting how many bibliography lines look like each style's
-     entry-start marker (`_NUMERIC_ENTRY_START` vs `_AUTHOR_YEAR_ENTRY_START`)
-     and picking the more common one — real papers don't mix styles within
-     one reference list, so the majority vote is reliable, and it lets a
-     single simple splitter run over the whole section instead of guessing
-     per-entry. `authors`/`title`/`year` are extracted best-effort from each
-     entry's text; fields we can't confidently pull out (venue, doi, or
-     anything when the expected delimiter is simply absent) are left None
-     rather than guessed.
-  3. Scan every page's text, EXCLUDING the bibliography section itself, for
-     mentions of the resulting citation keys — numeric bracket markers (with
-     range/list expansion), bare superscript numbers (some journals, e.g.
-     NEJM/JAMA/Lancet, render markers as a small-font number with no
-     brackets — see `_superscript_numeric_mentions_on_page`), or author-year
-     parenthetical/narrative citations — and keep only the ones whose key
-     matches a real bibliography entry, so stray bracketed/superscript
-     numbers or capitalized-word-then-parenthesis text elsewhere on the page
-     can't produce phantom mentions. Excluding the bibliography region
-     itself matters for numeric style in particular: without it, each
-     entry's own "[12]" marker would register as a mention of itself.
+  1. Find every "References"/"Bibliography"/"Works Cited" heading (own line,
+     case-insensitive — see `_SECTION_HEADING_PATTERN`) in the document, not
+     just one — a paper can legitimately have more than one (confirmed
+     against a real Nature Immunology article: a "References" section for
+     the main text, entries 1-73, then a SEPARATE "References" section
+     after the Methods section, entries 74-87, continuing the same number
+     sequence — this is documented Nature-family house style, not a one-off).
+     Each heading bounds a candidate region running to the next heading (or
+     a trailing back-matter section, or the document end). A region is only
+     trusted once it's shown to contain a real, sequential run of entries
+     (see `MIN_REGION_ENTRIES`) — this is what keeps a table of contents'
+     own "References....36" line (which frequently extracts as a bare
+     "References" run, the dot-leader and page number landing in separate
+     runs) from being mistaken for the section itself.
+  2. If no heading yields a trustworthy region, fall back to scanning the
+     whole document for a heading-less numbered list: some journals
+     (confirmed against a real Nature article) print the reference list
+     with NO heading at all — the numbering just starts right after a
+     fixed lead-in paragraph ("Online content ... are available at
+     https://doi.org/..."). See `_find_headingless_numeric_run`.
+  3. Decide which of the two dominant reference-list styles the document
+     uses by counting how many bibliography lines (across all trusted
+     regions combined) look like each style's entry-start marker
+     (`_NUMERIC_ENTRY_START` vs `_AUTHOR_YEAR_ENTRY_START`) and picking the
+     more common one — real papers don't mix styles within one reference
+     list, so the majority vote is reliable, and it lets a single simple
+     splitter run over each region instead of guessing per-entry.
+     `authors`/`title`/`year` are extracted best-effort from each entry's
+     text; fields we can't confidently pull out (venue, doi, or anything
+     when the expected delimiter is simply absent) are left None rather
+     than guessed. Citations from every trusted region are merged into one
+     list (deduped by key, first region wins on a collision).
+  4. Scan every page's text, EXCLUDING every trusted bibliography region,
+     for mentions of the resulting citation keys — numeric bracket markers
+     (with range/list expansion), bare superscript numbers (some journals,
+     e.g. NEJM/JAMA/Lancet/Nature, render markers as a small-font number
+     with no brackets — see `_superscript_numeric_mentions_on_page`), or
+     author-year parenthetical/narrative citations — and keep only the
+     ones whose key matches a real bibliography entry, so stray bracketed/
+     superscript numbers or capitalized-word-then-parenthesis text
+     elsewhere on the page can't produce phantom mentions. Excluding the
+     bibliography region(s) matters for numeric style in particular:
+     without it, each entry's own "[12]" marker would register as a
+     mention of itself.
 
 Only one style is detected per document, and only the common in-text forms
 described in the module's own docstring are matched — see the "false
 positives / not handled" notes near each pattern for the specific tradeoffs.
+See docs/citation-styles-spec.md (repo root) for the underlying research
+this module's heuristics are based on, and for patterns deliberately left
+unhandled (e.g. a supplementary reference list with its own independent,
+restarting numbering, or PNAS-style bare parenthetical "(12)" mentions).
 """
 
 from __future__ import annotations
@@ -91,51 +114,103 @@ _SECTION_HEADING_PATTERN = re.compile(
 # (Appendix, Acknowledgments, ...) on the same or later pages. Once we've
 # already collected at least one bibliography line, treating one of these as
 # a hard stop keeps that back matter out of the last reference entry instead
-# of silently appending it as a very long "continuation".
+# of silently appending it as a very long "continuation". This pattern
+# tolerates the heading sharing a run with following prose (a prefix match) —
+# fine for words that essentially never start an ordinary sentence or
+# citation title. `_TRAILING_SECTION_EXACT_PATTERN` below is for words common
+# enough as ordinary sentence-openers (e.g. "Methods...") that a prefix match
+# would risk cutting a bibliography off mid-list.
 _TRAILING_SECTION_PATTERN = re.compile(
     r"^\s*(Appendix|Supplementary\s+Material|Author\s+Contributions?|"
     r"Acknowledge?ments?|Conflicts?\s+of\s+Interest)\b",
     re.IGNORECASE,
 )
+# Nature-family back-matter headings that follow a reference list (confirmed
+# against a real Nature article's PDF text) — anchored as a full line, unlike
+# `_TRAILING_SECTION_PATTERN` above, since e.g. "Methods" is common enough to
+# open an ordinary reference title that a bare prefix match is too risky.
+# This matters most for the heading-less fallback (`_find_headingless_numeric_run`):
+# without a heading to mark where the reference list started, nothing else
+# stops it from absorbing an unrelated Methods section's own numbered list as
+# "continuation text" of the last real entry.
+_TRAILING_SECTION_EXACT_PATTERN = re.compile(
+    r"^\s*((Online\s+)?Methods|Data\s+Availability|Code\s+Availability|"
+    r"Reporting\s+Summary|Competing\s+Interests?|Publisher.s\s+Note|Open\s+Access)"
+    r"\s*[:.]?\s*$",
+    re.IGNORECASE,
+)
 
 
-def _find_bibliography_start(pages: list[PageText]) -> tuple[int, int] | None:
-    """(page position in `pages`, run index) of the LAST heading match, or
-    None if no bibliography section is found. Using the last match (not the
-    first) matters for papers with a table of contents: a TOC's own
-    "References....36" line frequently extracts as a bare "References" run
-    (the dot-leader and page number land in separate runs), which would
-    otherwise be mistaken for the section itself and swallow the entire
-    document body as "bibliography lines" — the real section is virtually
-    always the last such heading in the document, not the first."""
-    found: tuple[int, int] | None = None
+def _find_heading_positions(pages: list[PageText]) -> list[tuple[int, int]]:
+    """(page position, run index) of every References/Bibliography/Works
+    Cited heading in the document, in document order. A paper can
+    legitimately have more than one: Nature-family journals commonly print
+    a "References" list for the main text and a SEPARATE, later
+    "References" list for the Methods section, continuing the SAME citation
+    numbering across both (confirmed against a real Nature Immunology
+    article: entries 1-73 under a heading on one page, 74-87 under another
+    "References" heading several pages later — and documented Nature-family
+    house style, not a one-off). `detect_citations` processes each heading's
+    region independently and merges the results — picking only "the first"
+    heading would miss the second list; picking only "the last" (this
+    function's prior behavior) would miss the first. A table of contents'
+    own "References....36" line, which frequently extracts as a bare
+    "References" run with the dot-leader and page number in separate runs,
+    also shows up here — it's filtered out downstream by requiring a region
+    to actually contain a real, sequential run of entries (see
+    MIN_REGION_ENTRIES) rather than by position."""
+    found: list[tuple[int, int]] = []
     for page_pos, page in enumerate(pages):
         for run_idx, run in enumerate(page.runs):
             if _SECTION_HEADING_PATTERN.match(run.text.strip()):
-                found = (page_pos, run_idx)
+                found.append((page_pos, run_idx))
     return found
 
 
 def _collect_bibliography_lines(
-    pages: list[PageText], start_page_pos: int, start_run_idx: int
+    pages: list[PageText],
+    start_page_pos: int,
+    start_run_idx: int,
+    stop_before: tuple[int, int] | None = None,
 ) -> tuple[list[tuple[str, int]], set[int]]:
-    """(text, page_index) for every non-blank run from just after the
-    heading through the end of the document, stopping early if a trailing
-    back-matter section heading shows up after we've already collected some
-    bibliography content (see `_TRAILING_SECTION_PATTERN`). Also returns the
+    """(text, page_index) for every non-blank run starting at
+    (start_page_pos, start_run_idx + 1) up to (but not including)
+    `stop_before` if given, else through the end of the document — stopping
+    early either way if a trailing back-matter section heading shows up
+    after we've already collected some bibliography content (see
+    `_TRAILING_SECTION_PATTERN`/`_TRAILING_SECTION_EXACT_PATTERN`).
+    `stop_before` bounds one region to end where the NEXT heading starts,
+    for documents with more than one reference list (see
+    `_find_heading_positions`) — pass `start_run_idx - 1` to start
+    INCLUDING a given run instead of after it (used by the heading-less
+    fallback, which has no heading run to exclude). Also returns the
     `id()` of every run consumed this way, so the caller can exclude the
     reference list's own entry markers from in-text mention scanning — left
     in, a numeric entry's own "[12]" would otherwise show up as a "mention"
     of itself."""
     lines: list[tuple[str, int]] = []
     excluded: set[int] = set()
+    stop_page_pos, stop_run_idx = stop_before if stop_before else (None, None)
     for offset, page in enumerate(pages[start_page_pos:]):
-        runs = page.runs[start_run_idx + 1 :] if offset == 0 else page.runs
-        for run in runs:
+        page_pos = start_page_pos + offset
+        if stop_page_pos is not None and page_pos > stop_page_pos:
+            break
+        run_base_idx = start_run_idx + 1 if offset == 0 else 0
+        for local_idx, run in enumerate(page.runs[run_base_idx:]):
+            run_idx = run_base_idx + local_idx
+            if (
+                stop_page_pos is not None
+                and page_pos == stop_page_pos
+                and run_idx >= stop_run_idx
+            ):
+                return lines, excluded
             text = run.text.strip()
             if not text:
                 continue
-            if lines and _TRAILING_SECTION_PATTERN.match(text):
+            if lines and (
+                _TRAILING_SECTION_PATTERN.match(text)
+                or _TRAILING_SECTION_EXACT_PATTERN.match(text)
+            ):
                 return lines, excluded
             lines.append((text, page.page_index))
             excluded.add(id(run))
@@ -472,27 +547,33 @@ def _numeric_mentions_on_page(
 
 
 # Superscript numeric mentions: some numeric-style journals (NEJM, JAMA,
-# Lancet, ...) render in-text markers as bare superscript numbers with no
-# enclosing brackets -- "...our previous article,1 which focused..." or
-# "...the PLATO trial21,22 involving...". PDFium extracts a superscript as
-# its own TextRun, in a meaningfully smaller font-size than the body text
-# it's attached to (observed ~0.4-0.55x in practice), and occasionally
-# bleeds one stray trailing glyph from the previous run into it when the two
-# runs' rects overlap at the size-change boundary (e.g. "y2" for a marker
-# glued after "...mortality") -- hence allowing up to two leading letters in
-# the pattern below. Matching on (small relative font-size) + (digit-list-only
-# content) + (key exists in the parsed bibliography) keeps this from firing
-# on ordinary small-font text (page numbers, running headers): those either
-# fail the digit-list shape (e.g. "375;10") or fail to match a real
-# bibliography key, the same safety net `_numeric_mentions_on_page` relies
-# on. One accepted gap: a footer page number that is BOTH small-font AND
-# numerically equal to a real reference key (e.g. page "5" in a paper with a
-# reference 5) can still slip through as a false positive.
+# Lancet, Nature-family, ...) render in-text markers as bare superscript
+# numbers with no enclosing brackets -- "...our previous article,1 which
+# focused..." or "...the PLATO trial21,22 involving...". PDFium extracts a
+# superscript as its own TextRun, in a meaningfully smaller font-size than
+# the body text it's attached to, and occasionally bleeds one stray trailing
+# glyph from the previous run into it when the two runs' rects overlap at
+# the size-change boundary (e.g. "y2" for a marker glued after "...mortality")
+# -- hence allowing up to two leading letters in the pattern below. Matching
+# on (small relative font-size) + (digit-list-only content) + (key exists in
+# the parsed bibliography) keeps this from firing on ordinary small-font
+# text (page numbers, running headers): those either fail the digit-list
+# shape (e.g. "375;10") or fail to match a real bibliography key, the same
+# safety net `_numeric_mentions_on_page` relies on. One accepted gap: a
+# footer page number that is BOTH small-font AND numerically equal to a real
+# reference key (e.g. page "5" in a paper with a reference 5) can still slip
+# through as a false positive.
 _SUPERSCRIPT_MARKER_PATTERN = re.compile(
     r"^[A-Za-z]{0,2}(?P<body>\d{1,4}(?:\s*,\s*\d{1,4})*)\s*$"
 )
 
-_SUPERSCRIPT_FONT_RATIO = 0.7
+# The superscript-to-body font ratio varies more by journal than a single
+# tight number suggests: NEJM/Vancouver-style markers observed at ~0.4-0.55x
+# body size, but Nature-family markers confirmed (against two real Nature
+# articles) at ~0.74-0.76x -- comfortably smaller than body text, but not by
+# as much. Set wide enough to catch both clusters with margin, while staying
+# meaningfully below 1.0 so it doesn't start matching ordinary same-size text.
+_SUPERSCRIPT_FONT_RATIO = 0.8
 
 # Runs shorter than this many characters are too often ligature/spacer
 # artifacts (single control characters, hyphenation glyphs) to anchor a
@@ -512,6 +593,22 @@ def _page_body_font_size(page: PageText) -> float | None:
     return Counter(sizes).most_common(1)[0][0]
 
 
+# A byline listing several authors' institutional affiliations ("Ang
+# Cui1,2,12, Teddy Huang3, Shuqiang Li2,3, ...", confirmed against a real
+# Nature article's page 1) is, glyph-for-glyph, indistinguishable from a
+# citation superscript: small font, digit-only, and the numbers routinely
+# fall within a real bibliography's 1..N key range by sheer coincidence (a
+# paper with 39 references and a large author list is likely to have SOME
+# affiliation number in 1-39). What sets a byline apart structurally is
+# density: real in-text citations are scattered one or two to a line across
+# a whole page of prose, while an affiliation list crams many small numbers
+# onto the SAME baseline in a row (confirmed: 13 and 11 respectively on the
+# two byline lines of that real article, vs. at most 2 anywhere else on the
+# same page). Rows past this bar are treated as a non-prose numbered list
+# and dropped entirely rather than risk resolving to the wrong reference.
+_MAX_SUPERSCRIPT_MATCHES_PER_ROW = 4
+
+
 def _superscript_numeric_mentions_on_page(
     page: PageText, keys: set[str]
 ) -> list[CitationMention]:
@@ -519,7 +616,7 @@ def _superscript_numeric_mentions_on_page(
     if body_size is None:
         return []
     threshold = body_size * _SUPERSCRIPT_FONT_RATIO
-    out: list[CitationMention] = []
+    candidates: list[tuple[str, BBox]] = []
     for run in page.runs:
         if run.font_size >= threshold:
             continue
@@ -529,12 +626,20 @@ def _superscript_numeric_mentions_on_page(
         m = _SUPERSCRIPT_MARKER_PATTERN.match(text)
         if not m:
             continue
-        matched_keys = [k for k in _keys_from_digit_list(m.group("body")) if k in keys]
-        out.extend(
-            CitationMention(key=k, page_index=page.page_index, bbox=run.bbox)
-            for k in matched_keys
-        )
-    return out
+        for k in _keys_from_digit_list(m.group("body")):
+            if k in keys:
+                candidates.append((k, run.bbox))
+
+    rows: dict[int, int] = {}
+    for _, bbox in candidates:
+        row = round(bbox.y0)
+        rows[row] = rows.get(row, 0) + 1
+
+    return [
+        CitationMention(key=k, page_index=page.page_index, bbox=bbox)
+        for k, bbox in candidates
+        if rows[round(bbox.y0)] <= _MAX_SUPERSCRIPT_MATCHES_PER_ROW
+    ]
 
 
 def _all_numeric_mentions_on_page(
@@ -585,37 +690,193 @@ def _author_year_mentions_on_page(
     return out
 
 
+# --- multi-region merging ---------------------------------------------------
+#
+# A document can have more than one physical reference list that together
+# make up its bibliography (see `_find_heading_positions`). Each heading's
+# region is collected and built independently, then merged — this is what
+# lets a region that turns out to be junk (a table of contents' own
+# "References" line) be silently dropped instead of poisoning the whole
+# result, while a region that's a real second reference list (Methods)
+# still contributes its entries.
+
+# When there's more than one heading candidate, a region's entry count must
+# clear this bar to be trusted as a real bibliography rather than e.g. a
+# table-of-contents line's own "References" entry (whose "region" — explored
+# the same way, bounded by the next heading — is just ordinary body text
+# between it and that next heading; real prose essentially never contains
+# this many coincidentally-sequential numeric or author-year entry-start-
+# shaped lines in a row). Only applied when there's something to disambiguate
+# BETWEEN, though: a document with exactly one heading match is trusted with
+# however many entries it has (down to the existing "at least one" floor) —
+# real short papers/letters can have very few references, and there's no
+# competing candidate here for a count threshold to be discriminating against.
+MIN_REGION_ENTRIES = 3
+
+
+def _citations_from_regions(
+    region_lines: list[tuple[list[tuple[str, int]], set[int]]],
+):
+    """Vote for ONE style across all heading-bounded regions combined (a
+    document uses one reference-list style throughout, even split across
+    more than one physical list), build each region separately with that
+    style's splitter, and keep + merge only the regions with enough entries
+    to trust as a real bibliography (see MIN_REGION_ENTRIES). Returns
+    (citations, excluded_run_ids, scan_page_fn)."""
+    all_lines = [line for lines, _ in region_lines for line in lines]
+    numeric_hits = sum(1 for text, _ in all_lines if _NUMERIC_ENTRY_START.match(text))
+    author_hits = sum(1 for text, _ in all_lines if _AUTHOR_YEAR_ENTRY_START.match(text))
+    if numeric_hits == 0 and author_hits == 0:
+        return [], set(), _all_numeric_mentions_on_page
+
+    if numeric_hits >= author_hits:
+        build = _build_numeric_citations
+        scan_page = _all_numeric_mentions_on_page
+    else:
+        build = _build_author_year_citations
+        scan_page = _author_year_mentions_on_page
+
+    min_entries = MIN_REGION_ENTRIES if len(region_lines) > 1 else 1
+    merged: dict[str, Citation] = {}
+    excluded_ids: set[int] = set()
+    for lines, excluded in region_lines:
+        region_citations = build(lines)
+        if len(region_citations) < min_entries:
+            continue
+        excluded_ids |= excluded
+        for c in region_citations:
+            merged.setdefault(c.key, c)
+    return list(merged.values()), excluded_ids, scan_page
+
+
+# --- heading-less fallback ---------------------------------------------------
+
+# Higher than MIN_REGION_ENTRIES: a heading-less candidate has no heading to
+# vouch for it, so it needs more evidence before being trusted — an ordinary
+# numbered list elsewhere in the document (Methods steps, a numbered figure
+# list) can also start at 1 and run for a few entries.
+MIN_HEADINGLESS_ENTRIES = 8
+# Most of a real bibliography's entries contain a publication-year-shaped
+# token; an ordinary numbered list generally doesn't. Set high (not just
+# "more than half"): confirmed against a real Nature article that a numbered
+# author-affiliation list (institutions numbered 1, 2, 3... matching author
+# superscripts on the byline) is itself a plausible-looking candidate, and
+# once its own numbering runs out, the sequential-numbering rule in
+# `_split_numeric_entries` will happily keep absorbing unrelated body text as
+# "continuation" until it happens to reach a run matching whatever number
+# comes next — which, if that number is anywhere in 1..N, it always
+# eventually will, because the REAL bibliography contains a marker for every
+# number 1..N by construction. That's not a rare coincidence to defend
+# against occasionally, it's close to guaranteed: a false candidate that
+# stops incrementing at K will always eventually resync with the real list's
+# own entry K once collection reaches it, silently splicing "K affiliations
+# + a real bibliography from K+1 to N" into one candidate that LOOKS
+# complete (no gaps, plausible entry count) but has garbage content for its
+# first K entries. A high year-fraction bar is what actually catches this:
+# the spliced candidate's early (affiliation) entries never have a year, so
+# its overall fraction comes in well below a genuine bibliography's — in the
+# real case that surfaced this, 66.7% (26 real entries out of a spliced 39)
+# vs. a clean candidate's ~100%.
+MIN_HEADINGLESS_YEAR_FRACTION = 0.85
+
+
+def _find_headingless_numeric_run(
+    pages: list[PageText],
+) -> tuple[list[tuple[str, int]], set[int]] | None:
+    """Fallback when no References/Bibliography heading yields a trustworthy
+    region at all — confirmed against a real Nature article, whose numbered
+    reference list has no heading whatsoever; the numbering just starts
+    right after a lead-in paragraph ("Online content ... are available at
+    https://doi.org/..."). Scans the whole document for every position a
+    numbered list could start at 1, builds a candidate region from each
+    (bounded the same way a heading-based region is, via the trailing-
+    section patterns — this is what stops a candidate from absorbing an
+    unrelated Methods section's own numbered list), and — since there's no
+    heading's prior to lean on — only trusts a candidate that clears both
+    MIN_HEADINGLESS_ENTRIES and MIN_HEADINGLESS_YEAR_FRACTION.
+
+    Among qualifying candidates, picks by (entry_count, start_position) —
+    the MOST entries, and among ties for that, the LATEST start. This isn't
+    just a tiebreak convenience: confirmed against the real Nature article
+    that surfaced the affiliation-splice problem, MULTIPLE contaminated
+    candidates (an author-affiliation list, several figure-legend numbered
+    label sequences) all independently spliced onto the SAME real
+    bibliography tail and landed on the exact same final entry count with a
+    perfect 100% year fraction — tying with the genuine candidate (which
+    starts exactly at the bibliography's own "1.") on both count and
+    fraction. What breaks the tie correctly is position: every contaminated
+    candidate, by construction, starts BEFORE the genuine one (it has to,
+    to include the unrelated "prefix" it splices from) and can never start
+    after it while still reaching the same final count — starting later
+    than the true beginning would instead miss real entries and produce a
+    LOWER count. So among candidates tied for the max count, the latest
+    start is never the contaminated one; it's the exact place where the
+    real list begins, and any well-formed bibliography converging to a
+    lower count is naturally excluded by preferring the max count first."""
+    candidates: list[tuple[int, int]] = []
+    for page_pos, page in enumerate(pages):
+        for run_idx, run in enumerate(page.runs):
+            m = _NUMERIC_ENTRY_START.match(run.text.strip())
+            if not m:
+                continue
+            num = m.group("num1") or m.group("num2") or m.group("num3")
+            if num == "1":
+                candidates.append((page_pos, run_idx))
+
+    best: tuple[list[tuple[str, int]], set[int]] | None = None
+    best_entry_count = 0
+    for page_pos, run_idx in candidates:
+        # `run_idx - 1` so _collect_bibliography_lines's `+ 1` offset lands
+        # exactly on this candidate run, including it (there's no heading
+        # run before it to exclude, unlike the heading-based path).
+        lines, excluded = _collect_bibliography_lines(pages, page_pos, run_idx - 1)
+        if not lines:
+            continue
+        entries = _split_numeric_entries(lines)
+        if len(entries) < MIN_HEADINGLESS_ENTRIES:
+            continue
+        with_year = sum(
+            1 for e in entries if _YEAR_TOKEN_PATTERN.search(" ".join(e["parts"]))
+        )
+        if with_year / len(entries) < MIN_HEADINGLESS_YEAR_FRACTION:
+            continue
+        # >=, not >: candidates are visited in document order, so an equal
+        # count keeps overwriting `best` with the latest-starting one — see
+        # the docstring for why that's the correct tiebreak, not an
+        # arbitrary one.
+        if len(entries) >= best_entry_count:
+            best = (lines, excluded)
+            best_entry_count = len(entries)
+    return best
+
+
 # --- entry point ------------------------------------------------------------
 
 
 def detect_citations(
     pages: list[PageText],
 ) -> tuple[list[Citation], list[CitationMention]]:
-    """Parse a document's reference list and locate in-text mentions of each
-    entry. `pages` must be every page of the document, in order (page_index
-    0-based, matching `PageText.page_index`)."""
-    start = _find_bibliography_start(pages)
-    if start is None:
-        return [], []
-    start_page_pos, start_run_idx = start
-    lines, excluded_ids = _collect_bibliography_lines(
-        pages, start_page_pos, start_run_idx
-    )
-    if not lines:
-        return [], []
-    excluded_ids.add(id(pages[start_page_pos].runs[start_run_idx]))
+    """Parse a document's reference list(s) and locate in-text mentions of
+    each entry. `pages` must be every page of the document, in order
+    (page_index 0-based, matching `PageText.page_index`)."""
+    heading_positions = _find_heading_positions(pages)
 
-    numeric_hits = sum(1 for text, _ in lines if _NUMERIC_ENTRY_START.match(text))
-    author_hits = sum(1 for text, _ in lines if _AUTHOR_YEAR_ENTRY_START.match(text))
-    if numeric_hits == 0 and author_hits == 0:
-        return [], []
+    region_lines: list[tuple[list[tuple[str, int]], set[int]]] = []
+    for i, (page_pos, run_idx) in enumerate(heading_positions):
+        stop = heading_positions[i + 1] if i + 1 < len(heading_positions) else None
+        lines, excluded = _collect_bibliography_lines(pages, page_pos, run_idx, stop)
+        excluded.add(id(pages[page_pos].runs[run_idx]))
+        region_lines.append((lines, excluded))
 
-    if numeric_hits >= author_hits:
+    citations, excluded_ids, scan_page = _citations_from_regions(region_lines)
+
+    if not citations:
+        headingless = _find_headingless_numeric_run(pages)
+        if headingless is None:
+            return [], []
+        lines, excluded_ids = headingless
         citations = _build_numeric_citations(lines)
         scan_page = _all_numeric_mentions_on_page
-    else:
-        citations = _build_author_year_citations(lines)
-        scan_page = _author_year_mentions_on_page
 
     if not citations:
         return [], []

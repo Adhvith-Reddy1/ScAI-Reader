@@ -116,6 +116,30 @@ describe("leadAuthor", () => {
     });
   });
 
+  describe("derived from raw_text (Nature/Cell-Press style: 'Surname, A. B. et al. Title...')", () => {
+    // Confirmed against a real CC-BY Nature article: only ONE comma total
+    // for a lead author followed by "et al." (initials glued directly to
+    // "et al." with no comma between them), unlike the APA/FDA-report style
+    // below where every author gets its own comma-delimited segment.
+    it("completes the lead author with initials glued to 'et al.' in the same segment", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "1. Arai, K. I. et al. Cytokines: coordinators of immune and inflammatory responses. Annu. Rev. Biochem. 59, 783-836 (1990).",
+      });
+      expect(leadAuthor(e)).toBe("Arai, K. I.");
+    });
+
+    it("handles a single initial before 'et al.'", () => {
+      const e = entry({
+        authors: null,
+        raw_text:
+          "2. Briukhovetska, D. et al. Interleukins in cancer: from biology to therapy. Nat. Rev. Cancer 21, 481-499 (2021).",
+      });
+      expect(leadAuthor(e)).toBe("Briukhovetska, D.");
+    });
+  });
+
   describe("derived from raw_text (APA-ish style: 'Surname, Initials, Surname2, Initials2, Title...')", () => {
     it("joins a surname-then-initials pair split across two comma segments", () => {
       const e = entry({
@@ -185,6 +209,18 @@ describe("paperDescription", () => {
     });
     expect(paperDescription(e)).toBe(
       "Stone GW. The primary outcome fails. N Engl J Med 2016.",
+    );
+  });
+
+  it("strips 'Initials et al.' glued to the title (Nature/Cell-Press style)", () => {
+    const e = entry({
+      title: null,
+      authors: null,
+      raw_text:
+        "1. Arai, K. I. et al. Cytokines: coordinators of immune and inflammatory responses. Annu. Rev. Biochem. 59, 783-836 (1990).",
+    });
+    expect(paperDescription(e)).toBe(
+      "Cytokines: coordinators of immune and inflammatory responses. Annu. Rev. Biochem. 59, 783-836 (1990).",
     );
   });
 
