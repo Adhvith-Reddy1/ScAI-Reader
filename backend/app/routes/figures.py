@@ -18,16 +18,17 @@ import json
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from .. import ai, llm
+from .. import ai, llm, quota
 from ..config import Settings
 from ..pdf.backend import PdfError
 from ..pdf.figures import AdjacentPage, FigureRegion, detect_figures
 from ..pdf.pdfium_backend import PdfiumBackend, sniff_image_mime
 from ..storage import files
+from . import figure_verify
 from .deps import get_settings
 from .explanations import ChatMessage
 
@@ -93,22 +94,50 @@ def _doc_exists(settings: Settings, doc_id: str) -> bool:
 
 
 @router.get("/pages/{page_number}/figures")
-def list_page_figures(
+async def list_page_figures(
     doc_id: str,
     page_number: int,
+    request: Request,
     settings: Settings = Depends(get_settings),
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+    x_user_api_key: str | None = Header(default=None, alias="X-User-Api-Key"),
 ) -> dict:
     """Detect figure regions on a single page.
 
-    Cheap and stateless — text-layer regex + bbox math. Returns coordinates
-    in page-space points (top-left origin), the same convention as
-    `/pages/{n}/text` so the frontend can scale them with the same
-    transform it already uses for the text layer.
+    The base pass is cheap and stateless — text-layer regex + bbox math (see
+    `app.pdf.figures.detect_figures`), free and always on. When the reader
+    has a vision-capable AI provider configured (their own key, or a
+    server-side one under today's quota), a second pass sends the rendered
+    page and the heuristic's own guesses to that model to confirm, correct,
+    or add regions it missed — see `figure_verify.verify_figures`. That pass
+    is skipped silently (falling back to the heuristic result) when no
+    provider is configured, the daily shared quota is used up, or the call
+    fails for any reason; the endpoint never errors because of it.
+
+    Returns coordinates in page-space points (top-left origin), the same
+    convention as `/pages/{n}/text` so the frontend can scale them with the
+    same transform it already uses for the text layer.
     """
     if not _doc_exists(settings, doc_id):
         raise HTTPException(status_code=404, detail="document not found")
     if page_number < 1:
         raise HTTPException(status_code=400, detail="page must be >= 1")
+
+    # Resolve whether a verification pass can run, and under whose budget,
+    # before touching the PDF -- a reader's own key always gets to verify
+    # (they're spending their own budget); otherwise it draws on the same
+    # daily shared quota as every other AI feature. Skipped entirely (no
+    # quota consumed) when no provider is configured at all, since the call
+    # would have nothing to do.
+    verify_config: ai.ProviderConfig | None = None
+    shared_config = ai.get_provider_config(settings)
+    user_key = (x_user_api_key or "").strip()
+    if user_key:
+        verify_config = ai.with_override_key(shared_config, user_key)
+    elif shared_config is not None:
+        client_key = quota.resolve_client_key(request, x_client_id)
+        if quota.try_consume(settings, client_key, settings.ai_daily_limit):
+            verify_config = shared_config
 
     try:
         with PdfiumBackend.open(files.pdf_path(settings, doc_id)) as backend:
@@ -123,16 +152,29 @@ def list_page_figures(
                     text=backend.get_page_text(prev_index),
                     graphics=backend.get_page_graphics(prev_index),
                 )
+
+            # The previous page lets a figure whose caption and image were
+            # placed on different pages resolve correctly -- a layout
+            # Nature-family journals use for full-page data figures (see
+            # app.pdf.figures.AdjacentPage).
+            regions = detect_figures(
+                page, dims.width_pt, dims.height_pt, graphics, prev_page=prev_page
+            )
+
+            page_png = (
+                backend.render_page(
+                    page_number - 1, dpi=figure_verify.VERIFY_RENDER_DPI
+                )
+                if verify_config is not None
+                else None
+            )
     except PdfError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    # The previous page lets a figure whose caption and image were placed
-    # on different pages resolve correctly -- a layout Nature-family
-    # journals use for full-page data figures (see
-    # app.pdf.figures.AdjacentPage).
-    regions = detect_figures(
-        page, dims.width_pt, dims.height_pt, graphics, prev_page=prev_page
-    )
+    if page_png is not None:
+        regions = await figure_verify.verify_figures(
+            verify_config, regions, page_png, page_number - 1, dims.width_pt, dims.height_pt
+        )
 
     return {
         "doc_id": doc_id,

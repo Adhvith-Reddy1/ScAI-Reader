@@ -375,7 +375,14 @@ export async function fetchPageFigures(
   docId: string,
   pageNumber: number,
 ): Promise<PageFiguresResponse> {
-  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/figures`);
+  // Same headers as every other AI call: the per-browser id the shared
+  // daily quota is keyed on, and the reader's own key when they've set one
+  // — the backend's optional vision-verification pass over the heuristic's
+  // detected regions (see backend/app/routes/figure_verify.py) needs both
+  // to know whose budget to draw on.
+  const r = await fetch(`/documents/${docId}/pages/${pageNumber}/figures`, {
+    headers: aiHeaders(),
+  });
   if (!r.ok) throw new Error(`figures fetch failed (${r.status})`);
   return r.json() as Promise<PageFiguresResponse>;
 }

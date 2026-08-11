@@ -10,12 +10,40 @@ from __future__ import annotations
 
 import pytest
 
+from app import ai, llm
+
 
 def _upload(client, pdf_path):
     with pdf_path.open("rb") as f:
         return client.post(
             "/documents", files={"file": ("s.pdf", f, "application/pdf")}
         ).json()["id"]
+
+
+def _fake_stream(*frames):
+    """Stand-in for llm.stream_completion that yields canned frames and
+    accepts the same call signature the verification pass uses."""
+
+    async def _gen(config, *, system, messages, max_tokens, tier="good"):
+        for frame in frames:
+            yield frame
+
+    return _gen
+
+
+@pytest.fixture(autouse=True)
+def _no_env_keys(monkeypatch):
+    # Force the deterministic "stored/none" branch so tests don't read
+    # ambient provider keys from the environment (mirrors test_stateless_ai.py).
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "OPENROUTER_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.mark.integration
@@ -131,3 +159,121 @@ def test_figure_resolves_across_a_page_break(app_client, tmp_path):
     assert len(figures) == 1
     assert figures[0]["label"] == "Figure 1"
     assert figures[0]["page"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Vision-LLM verification pass — confirms/corrects the heuristic when a
+# provider is configured; must never regress the free path when it isn't.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_no_provider_configured_skips_verification_entirely(
+    app_client, figure_pdf, monkeypatch
+):
+    """The free heuristic path must not even attempt an LLM call when no
+    provider is set up -- asserted here by making stream_completion blow up
+    if it's ever reached."""
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("verification should not run without a provider")
+        yield  # pragma: no cover - never reached, keeps this an async gen
+
+    monkeypatch.setattr(llm, "stream_completion", _boom)
+    doc_id = _upload(app_client, figure_pdf)
+
+    r = app_client.get(f"/documents/{doc_id}/pages/1/figures")
+
+    assert r.status_code == 200
+    assert r.json()["figures"][0]["label"] == "Figure 1"
+
+
+@pytest.mark.integration
+def test_verification_corrects_bbox_and_adds_missed_figure(
+    app_client, tmp_settings, figure_pdf, monkeypatch
+):
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    reply = (
+        '[{"label": "Figure 1", "x0": 0.2, "y0": 0.15, "x1": 0.85, "y1": 0.35}, '
+        '{"label": "Table 1", "x0": 0.1, "y0": 0.5, "x1": 0.9, "y1": 0.6}]'
+    )
+    monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
+    doc_id = _upload(app_client, figure_pdf)
+
+    r = app_client.get(f"/documents/{doc_id}/pages/1/figures")
+
+    assert r.status_code == 200
+    body = r.json()
+    by_label = {f["label"]: f for f in body["figures"]}
+    assert set(by_label) == {"Figure 1", "Table 1"}
+
+    corrected = by_label["Figure 1"]["bbox"]
+    assert corrected["x0"] == pytest.approx(0.2 * body["page_width_pt"], abs=1)
+    assert corrected["x1"] == pytest.approx(0.85 * body["page_width_pt"], abs=1)
+
+    added = by_label["Table 1"]["bbox"]
+    assert added["x0"] == pytest.approx(0.1 * body["page_width_pt"], abs=1)
+    assert added["y1"] == pytest.approx(0.6 * body["page_height_pt"], abs=1)
+
+
+@pytest.mark.integration
+def test_verification_call_failure_falls_back_to_heuristic(
+    app_client, tmp_settings, figure_pdf, monkeypatch
+):
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    monkeypatch.setattr(llm, "stream_completion", _fake_stream(("error", "boom")))
+    doc_id = _upload(app_client, figure_pdf)
+
+    r = app_client.get(f"/documents/{doc_id}/pages/1/figures")
+
+    assert r.status_code == 200
+    figures = r.json()["figures"]
+    assert len(figures) == 1
+    assert figures[0]["label"] == "Figure 1"
+
+
+@pytest.mark.integration
+def test_verification_skipped_once_daily_quota_is_used_up(
+    app_client, tmp_settings, figure_pdf, monkeypatch
+):
+    """A shared/stored provider draws on the same daily quota as every other
+    AI feature; once it's exhausted, figure listing must keep working on the
+    free heuristic path instead of erroring."""
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    reply = '[{"label": "Table 1", "x0": 0.1, "y0": 0.5, "x1": 0.9, "y1": 0.6}]'
+    monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
+    doc_id = _upload(app_client, figure_pdf)
+    headers = {"X-Client-Id": "quota-test-client-3333333333333333"}
+
+    for _ in range(tmp_settings.ai_daily_limit):
+        r = app_client.get(
+            f"/documents/{doc_id}/pages/1/figures", headers=headers
+        )
+        assert r.status_code == 200
+        assert "Table 1" in {f["label"] for f in r.json()["figures"]}
+
+    r = app_client.get(f"/documents/{doc_id}/pages/1/figures", headers=headers)
+    assert r.status_code == 200
+    labels = {f["label"] for f in r.json()["figures"]}
+    assert labels == {"Figure 1"}  # heuristic only -- quota used up
+
+
+@pytest.mark.integration
+def test_readers_own_api_key_bypasses_exhausted_quota(
+    app_client, tmp_settings, figure_pdf, monkeypatch
+):
+    ai.set_provider_config(tmp_settings, "anthropic", "sk-ant-test")
+    reply = '[{"label": "Table 1", "x0": 0.1, "y0": 0.5, "x1": 0.9, "y1": 0.6}]'
+    monkeypatch.setattr(llm, "stream_completion", _fake_stream(("done", reply)))
+    doc_id = _upload(app_client, figure_pdf)
+    headers = {"X-Client-Id": "quota-test-client-4444444444444444"}
+
+    for _ in range(tmp_settings.ai_daily_limit):
+        app_client.get(f"/documents/{doc_id}/pages/1/figures", headers=headers)
+
+    r = app_client.get(
+        f"/documents/{doc_id}/pages/1/figures",
+        headers={**headers, "X-User-Api-Key": "sk-ant-reader-own-key"},
+    )
+    assert r.status_code == 200
+    assert "Table 1" in {f["label"] for f in r.json()["figures"]}
